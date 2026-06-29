@@ -19,6 +19,7 @@ from physical_agent.gui import run_gui
 from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
 from physical_agent.quickstart import setup_project
 from physical_agent.state import open_state_store
+from physical_agent.state.sqlite import migrate_markdown_workspace_to_sqlite
 from physical_agent.watch.runtime import WatchRuntime
 
 
@@ -257,6 +258,49 @@ def inspect(
             typer.echo(f"- {action.id}: {action.robot}.{action.capability}")
     else:
         typer.echo("- none")
+
+
+@app.command("migrate-md-to-sqlite")
+def migrate_md_to_sqlite(
+    config: Path = typer.Option(Path(DEFAULT_CONFIG_NAME), "--config", "-c", help="Config path."),
+    overwrite: bool = typer.Option(
+        False,
+        "--overwrite",
+        help="Replace an existing workspace/state.db file.",
+    ),
+) -> None:
+    cfg = load_config(config)
+    workspace_path = cfg.workspace_path(config.resolve().parent)
+    try:
+        result = migrate_markdown_workspace_to_sqlite(
+            workspace_path,
+            overwrite=overwrite,
+        )
+    except FileExistsError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1) from exc
+    except FileNotFoundError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    typer.echo("Migrated Markdown workspace to SQLite.")
+    typer.echo(f"Workspace: {result['workspace_path']}")
+    typer.echo(f"SQLite DB: {result['db_path']}")
+    typer.echo(
+        "Actions: "
+        f"{result['actions']['pending']} pending, "
+        f"{result['actions']['completed']} completed, "
+        f"{result['actions']['cancelled']} cancelled"
+    )
+    typer.echo(
+        f"Chat messages: {result['chat_messages']}; "
+        f"memory notes: {result['memory_notes']}; "
+        f"log entries: {result['log_entries']}"
+    )
+    typer.echo(
+        "Config was not changed. To opt in, set `workspace.backend: sqlite` "
+        "in physical-agent.yaml."
+    )
 
 
 @skill_app.command("list")

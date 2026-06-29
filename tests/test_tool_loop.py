@@ -6,6 +6,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+import yaml
 
 from physical_agent.agent.chat_runtime import ChatRuntime
 from physical_agent.agent.tool_loop import OpenAIToolLoop, ToolLoopError
@@ -15,6 +16,7 @@ from physical_agent.llm import OpenAICompatibleSettings
 from physical_agent.protocol.schemas import Action
 from physical_agent.protocol.workspace import Workspace
 from physical_agent.quickstart import setup_project
+from physical_agent.state import open_state_store
 
 
 class _SequenceHandler(BaseHTTPRequestHandler):
@@ -111,6 +113,73 @@ def test_tool_loop_chat_completions_proposes_action_only(tmp_path):
         second_request = _SequenceHandler.requests[1]
         assert second_request["messages"][-1]["role"] == "tool"
         assert second_request["messages"][-1]["tool_call_id"] == "call_1"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_tool_loop_chat_completions_proposes_action_only_sqlite(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data["workspace"]["backend"] = "sqlite"
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    store = open_state_store(config_path=config_path)
+    store.initialize()
+    server = _server(
+        [
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "physical_agent_propose_action",
+                                        "arguments": json.dumps(
+                                            {
+                                                "id": "act_sqlite_001",
+                                                "robot": "arm_1",
+                                                "capability": "observe",
+                                                "params": {},
+                                                "reason": "Inspect current state.",
+                                            }
+                                        ),
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+            {"choices": [{"message": {"role": "assistant", "content": "Proposed safely."}}]},
+        ]
+    )
+    try:
+        settings = OpenAICompatibleSettings(
+            api_key="test-key",
+            base_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
+            model="test-model",
+        )
+        result = asyncio.run(
+            OpenAIToolLoop(config_path, settings=settings).run(
+                [
+                    {"role": "system", "content": "Use tools for Physical Agent proposals."},
+                    {"role": "user", "content": "look around"},
+                ],
+                metadata={"physical_agent_surface": "tool_loop_sqlite_test"},
+            )
+        )
+
+        assert result.content == "Proposed safely."
+        assert [step.name for step in result.steps] == ["physical_agent_propose_action"]
+        actions = store.read_actions()
+        assert [action.id for action in actions["pending"]] == ["act_sqlite_001"]
+        assert actions["completed"] == []
+        assert actions["cancelled"] == []
     finally:
         server.shutdown()
         server.server_close()

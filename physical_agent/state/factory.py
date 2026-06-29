@@ -5,6 +5,7 @@ from pathlib import Path
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config
 from physical_agent.state.base import StateStore
 from physical_agent.state.markdown import MarkdownStateStore
+from physical_agent.state.sqlite import SqliteStateStore
 
 
 def open_state_store(
@@ -28,7 +29,9 @@ def open_state_store(
     backend = (config.workspace.backend or "markdown").strip().lower()
     if backend == "markdown":
         return MarkdownStateStore(config.workspace_path(root))
+    if backend == "sqlite":
+        return SqliteStateStore(config.workspace_path(root))
     raise ValueError(
         f"Unsupported workspace backend `{config.workspace.backend}`. "
-        "Only `markdown` is supported in B1; sqlite is not implemented yet."
+        "Supported backends: markdown, sqlite."
     )

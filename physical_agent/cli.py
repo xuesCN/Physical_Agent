@@ -260,6 +260,35 @@ def inspect(
         typer.echo("- none")
 
 
+@app.command("export-audit")
+def export_audit(
+    config: Path = typer.Option(Path(DEFAULT_CONFIG_NAME), "--config", "-c", help="Config path."),
+    out: Optional[Path] = typer.Option(
+        None,
+        "--out",
+        "-o",
+        help="Audit output directory. Defaults to workspace/audit.",
+    ),
+) -> None:
+    config_root = config.resolve().parent
+    cfg = load_config(config)
+    workspace = open_state_store(cfg, base_dir=config_root)
+    if not workspace.exists():
+        typer.echo("Workspace is not initialized. Run `physical-agent init` first.")
+        raise typer.Exit(code=1)
+
+    out_dir = None
+    if out is not None:
+        out_dir = out if out.is_absolute() else config_root / out
+    result = workspace.export_human_view(out_dir)
+
+    typer.echo("Exported audit view.")
+    typer.echo(f"Backend: {result['backend']}")
+    typer.echo(f"Workspace: {result['workspace_path']}")
+    typer.echo(f"Audit: {result['out_dir']}")
+    typer.echo(f"Manifest: {result['manifest']}")
+
+
 @app.command("migrate-md-to-sqlite")
 def migrate_md_to_sqlite(
     config: Path = typer.Option(Path(DEFAULT_CONFIG_NAME), "--config", "-c", help="Config path."),

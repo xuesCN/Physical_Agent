@@ -4,14 +4,13 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 import json
 from pathlib import Path
-import re
 import sqlite3
 from typing import Any, Iterator
 
 from physical_agent.protocol.chat_summary import compact_chat_messages
-from physical_agent.protocol.markdown import parse_front_matter
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, Observation
 from physical_agent.protocol.workspace import Workspace
+from physical_agent.state.audit import export_audit_documents, read_markdown_log_entries
 
 
 DOC_SCHEMAS = {
@@ -425,6 +424,26 @@ class SqliteStateStore:
             )
         self._file_workspace.append_log(message, actor=actor)
 
+    def export_human_view(self, out_dir: Path | None = None) -> dict[str, Any]:
+        documents = {
+            "task": self.read_task(),
+            "capabilities": self.read_capabilities(),
+            "world": self.read_world(),
+            "actions": self.read_actions(),
+            "feedback": self.read_feedback(),
+            "chat": self.read_chat(),
+            "plan": self.read_plan(),
+            "memory": self.read_memory(),
+            "log": self._read_log_document(),
+        }
+        return export_audit_documents(
+            backend="sqlite",
+            workspace_path=self.path,
+            documents=documents,
+            safety_source=self.file("safety"),
+            out_dir=out_dir,
+        )
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path, timeout=30)
@@ -723,6 +742,33 @@ class SqliteStateStore:
                 revision,
             )
 
+    def _read_log_document(self) -> dict[str, Any]:
+        with self._connect() as conn:
+            metadata = self._read_metadata_conn(conn, "log")
+            rows = conn.execute(
+                """
+                SELECT id, ts, actor, message
+                FROM log_entries
+                ORDER BY id
+                """
+            ).fetchall()
+        return {
+            "metadata": metadata,
+            "entries": [
+                {
+                    key: value
+                    for key, value in {
+                        "sequence": int(row["id"]),
+                        "ts": row["ts"],
+                        "actor": row["actor"],
+                        "message": row["message"],
+                    }.items()
+                    if value is not None
+                }
+                for row in rows
+            ],
+        }
+
     def _read_actions_by_status(
         self,
         conn: sqlite3.Connection,
@@ -863,7 +909,7 @@ def migrate_markdown_workspace_to_sqlite(
     chat = source.read_chat()
     plan = source.read_plan()
     memory = source.read_memory()
-    log_entries, log_revision = _read_markdown_log_entries(source.file("log"))
+    log_entries, log_metadata = read_markdown_log_entries(source.file("log"))
 
     target = SqliteStateStore(source.path)
     if target._database_files_exist():
@@ -891,7 +937,7 @@ def migrate_markdown_workspace_to_sqlite(
     )
     target._replace_document("plan", plan, revision=_payload_revision(plan))
     target._replace_memory_with_revision(memory["notes"], revision=_payload_revision(memory))
-    target._replace_log_entries(log_entries, revision=log_revision)
+    target._replace_log_entries(log_entries, revision=_metadata_revision(log_metadata))
 
     return {
         "workspace_path": str(source.path),
@@ -933,30 +979,11 @@ def _payload_revision(payload: dict[str, Any]) -> int:
         return 1
 
 
-def _read_markdown_log_entries(path: Path) -> tuple[list[dict[str, Any]], int]:
-    if not path.exists():
-        return [], 1
-    text = path.read_text(encoding="utf-8")
+def _metadata_revision(metadata: dict[str, Any]) -> int:
     try:
-        doc = parse_front_matter(text)
-        body = doc.body
-        revision = doc.revision or 1
-    except Exception:
-        body = text
-        revision = 1
-    headings = list(re.finditer(r"^##\s+(.+?)\s*$", body, re.MULTILINE))
-    entries: list[dict[str, Any]] = []
-    for index, match in enumerate(headings):
-        start = match.end()
-        end = headings[index + 1].start() if index + 1 < len(headings) else len(body)
-        message = body[start:end].strip()
-        actor = None
-        actor_match = re.match(r"^\*\*(.+?)\*\*:\s*(.*)$", message, re.DOTALL)
-        if actor_match:
-            actor = actor_match.group(1)
-            message = actor_match.group(2).strip()
-        entries.append({"ts": match.group(1).strip(), "actor": actor, "message": message})
-    return entries, revision
+        return int(metadata.get("revision") or 1)
+    except (TypeError, ValueError):
+        return 1
 
 
 def _as_plain(value: Any) -> Any:

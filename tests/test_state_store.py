@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 
 import pytest
@@ -17,6 +18,10 @@ from physical_agent.protocol.workspace import Workspace
 from physical_agent.state import MarkdownStateStore, SqliteStateStore, open_state_store
 from physical_agent.state import factory as state_factory
 from physical_agent.watch.runtime import WatchRuntime
+
+
+def _read_json(path):
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 class _NoSkills:
@@ -146,6 +151,62 @@ def test_sqlite_state_store_chat_rolling_summary(tmp_path):
     assert "message 12" in chat["running_summary"]
 
 
+def test_markdown_state_store_export_human_view(tmp_path):
+    store = MarkdownStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.write_task("Export the markdown state", ["keep markdown backend"])
+    store.write_actions([Action(id="act_md", robot="arm_1", capability="observe")])
+    store.write_chat(
+        [{"role": "user", "content": "audit please"}],
+        running_summary="markdown summary",
+        compact=False,
+    )
+    store.append_memory_note("markdown memory", source="test")
+    store.append_log("markdown log", actor="test")
+
+    result = store.export_human_view()
+    audit_dir = store.path / "audit"
+
+    assert result["backend"] == "markdown"
+    assert result["out_dir"] == str(audit_dir.resolve())
+    assert _read_json(audit_dir / "task.json")["task"] == "Export the markdown state"
+    assert _read_json(audit_dir / "actions.json")["pending"][0]["id"] == "act_md"
+    assert _read_json(audit_dir / "chat.json")["running_summary"] == "markdown summary"
+    assert _read_json(audit_dir / "memory.json")["notes"][0]["content"] == "markdown memory"
+    assert _read_json(audit_dir / "log.json")["entries"][0]["message"] == "markdown log"
+    assert (audit_dir / "SAFETY.md").read_text(encoding="utf-8") == store.file(
+        "safety"
+    ).read_text(encoding="utf-8")
+
+
+def test_sqlite_state_store_export_human_view_reads_sqlite_state(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.write_task("Export the sqlite state", ["read from state.db"])
+    store.write_actions([Action(id="act_db", robot="arm_1", capability="observe")])
+    store.write_chat(
+        [{"role": "user", "content": "db chat"}],
+        running_summary="sqlite summary",
+        compact=False,
+    )
+    store.write_memory([{"content": "db memory", "source": "test"}])
+    store.append_log("db log", actor="test")
+    store.file("actions").write_text("tampered markdown action board", encoding="utf-8")
+    store.file("log").write_text("tampered markdown log", encoding="utf-8")
+
+    result = store.export_human_view()
+    audit_dir = store.path / "audit"
+
+    assert result["backend"] == "sqlite"
+    assert _read_json(audit_dir / "task.json")["task"] == "Export the sqlite state"
+    assert _read_json(audit_dir / "actions.json")["pending"][0]["id"] == "act_db"
+    assert _read_json(audit_dir / "chat.json")["running_summary"] == "sqlite summary"
+    assert _read_json(audit_dir / "memory.json")["notes"][0]["content"] == "db memory"
+    log_entries = _read_json(audit_dir / "log.json")["entries"]
+    assert log_entries[0]["message"] == "db log"
+    assert "tampered markdown log" not in (audit_dir / "log.json").read_text(encoding="utf-8")
+
+
 def test_migrate_markdown_to_sqlite_cli_does_not_switch_backend(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     workspace = Workspace(tmp_path / "workspace")
@@ -186,6 +247,84 @@ def test_migrate_markdown_to_sqlite_cli_does_not_switch_backend(tmp_path):
     with sqlite3.connect(store.db_path) as conn:
         log_count = conn.execute("SELECT count(*) FROM log_entries").fetchone()[0]
     assert log_count == 1
+
+
+def test_migrated_sqlite_export_contains_action_board_chat_memory_and_log(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    workspace = Workspace(tmp_path / "workspace")
+    workspace.initialize()
+    workspace.write_actions(
+        [Action(id="act_pending", robot="arm_1", capability="observe")],
+        [Action(id="act_completed", robot="arm_1", capability="pick")],
+        [Action(id="act_cancelled", robot="arm_1", capability="place")],
+    )
+    workspace.write_chat(
+        [{"role": "user", "content": "hello"}],
+        running_summary="migrated summary",
+        compact=False,
+    )
+    workspace.append_memory_note("migrated memory", source="test")
+    workspace.append_log("migrated log", actor="test")
+
+    migrate_result = CliRunner().invoke(
+        app,
+        ["migrate-md-to-sqlite", "--config", str(config_path)],
+    )
+    assert migrate_result.exit_code == 0, migrate_result.output
+
+    config_data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config_data["workspace"]["backend"] = "sqlite"
+    config_path.write_text(yaml.safe_dump(config_data, sort_keys=False), encoding="utf-8")
+
+    audit_dir = tmp_path / "audit"
+    export_result = CliRunner().invoke(
+        app,
+        ["export-audit", "--config", str(config_path), "--out", str(audit_dir)],
+    )
+
+    assert export_result.exit_code == 0, export_result.output
+    actions = _read_json(audit_dir / "actions.json")
+    assert [action["id"] for action in actions["pending"]] == ["act_pending"]
+    assert [action["id"] for action in actions["completed"]] == ["act_completed"]
+    assert [action["id"] for action in actions["cancelled"]] == ["act_cancelled"]
+    assert _read_json(audit_dir / "chat.json")["running_summary"] == "migrated summary"
+    assert _read_json(audit_dir / "memory.json")["notes"][0]["content"] == "migrated memory"
+    assert _read_json(audit_dir / "log.json")["entries"][0]["message"] == "migrated log"
+
+
+def test_export_audit_cli_does_not_change_backend_or_action_board(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    workspace = Workspace(tmp_path / "workspace")
+    workspace.initialize()
+    workspace.write_actions([Action(id="act_cli", robot="arm_1", capability="observe")])
+    before_config = config_path.read_text(encoding="utf-8")
+    before_actions = workspace.file("actions").read_text(encoding="utf-8")
+
+    class ExplodingWatchRuntime:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("export-audit must not instantiate WatchRuntime")
+
+    monkeypatch.setattr("physical_agent.cli.WatchRuntime", ExplodingWatchRuntime)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "export-audit",
+            "--config",
+            str(config_path),
+            "--out",
+            str(tmp_path / "audit"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert config_path.read_text(encoding="utf-8") == before_config
+    assert workspace.file("actions").read_text(encoding="utf-8") == before_actions
+    assert yaml.safe_load(before_config)["workspace"]["backend"] == "markdown"
+    assert _read_json(tmp_path / "audit" / "actions.json")["pending"][0]["id"] == "act_cli"
 
 
 def test_core_runtimes_use_state_store_factory(tmp_path, monkeypatch):

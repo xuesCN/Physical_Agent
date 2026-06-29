@@ -5,6 +5,7 @@ from typing import Any
 
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, Observation
 from physical_agent.protocol.workspace import Workspace
+from physical_agent.state.audit import export_audit_documents, read_markdown_log_document
 
 
 class MarkdownStateStore:
@@ -120,3 +121,23 @@ class MarkdownStateStore:
 
     def append_log(self, message: str, *, actor: str | None = None) -> None:
         self.workspace.append_log(message, actor=actor)
+
+    def export_human_view(self, out_dir: Path | None = None) -> dict[str, Any]:
+        documents = {
+            "task": self.read_task(),
+            "capabilities": self.read_capabilities(),
+            "world": self.read_world(),
+            "actions": self.read_actions(),
+            "feedback": self.read_feedback(),
+            "chat": self.read_chat(),
+            "plan": self.read_plan(),
+            "memory": self.read_memory(),
+            "log": read_markdown_log_document(self.file("log")),
+        }
+        return export_audit_documents(
+            backend="markdown",
+            workspace_path=self.path,
+            documents=documents,
+            safety_source=self.file("safety"),
+            out_dir=out_dir,
+        )

@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, Observation
+from physical_agent.protocol.workspace import Workspace
+
+
+class MarkdownStateStore:
+    filenames = Workspace.filenames
+
+    def __init__(self, path: str | Path):
+        self.workspace = Workspace(path)
+
+    @property
+    def path(self) -> Path:
+        return self.workspace.path
+
+    @property
+    def artifacts_path(self) -> Path:
+        return self.workspace.artifacts_path
+
+    def file(self, name: str) -> Path:
+        return self.workspace.file(name)
+
+    def initialize(self, *, overwrite: bool = False) -> None:
+        self.workspace.initialize(overwrite=overwrite)
+
+    def exists(self) -> bool:
+        return self.workspace.exists()
+
+    def write_task(
+        self,
+        task: str,
+        constraints: list[str] | None = None,
+        *,
+        owner: str = "human",
+        status: str = "active",
+    ) -> None:
+        self.workspace.write_task(task, constraints, owner=owner, status=status)
+
+    def read_task(self) -> dict[str, Any]:
+        return self.workspace.read_task()
+
+    def write_capabilities(self, robots: dict[str, Any]) -> None:
+        self.workspace.write_capabilities(robots)
+
+    def read_capabilities(self) -> dict[str, Any]:
+        return self.workspace.read_capabilities()
+
+    def write_world(self, observation: Observation | dict[str, Any]) -> None:
+        self.workspace.write_world(observation)
+
+    def read_world(self) -> dict[str, Any]:
+        return self.workspace.read_world()
+
+    def write_actions(
+        self,
+        pending: list[Action | dict[str, Any]] | None = None,
+        completed: list[Action | dict[str, Any]] | None = None,
+        cancelled: list[Action | dict[str, Any]] | None = None,
+    ) -> None:
+        self.workspace.write_actions(pending, completed, cancelled)
+
+    def read_actions(self) -> dict[str, Any]:
+        return self.workspace.read_actions()
+
+    def write_feedback(
+        self,
+        latest: dict[str, Any] | None = None,
+        history: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.workspace.write_feedback(latest, history)
+
+    def read_feedback(self) -> dict[str, Any]:
+        return self.workspace.read_feedback()
+
+    def write_safety(self, rules: dict[str, Any] | None = None) -> None:
+        self.workspace.write_safety(rules)
+
+    def read_safety(self) -> dict[str, Any]:
+        return self.workspace.read_safety()
+
+    def write_chat(
+        self,
+        messages: list[ChatMessage | dict[str, Any]],
+        *,
+        running_summary: str | None = None,
+        compact: bool = True,
+    ) -> None:
+        self.workspace.write_chat(messages, running_summary=running_summary, compact=compact)
+
+    def read_chat(self) -> dict[str, Any]:
+        return self.workspace.read_chat()
+
+    def append_chat_message(
+        self,
+        role: str,
+        content: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> ChatMessage:
+        return self.workspace.append_chat_message(role, content, metadata=metadata)
+
+    def write_plan(self, plan: ChatPlan | dict[str, Any]) -> None:
+        self.workspace.write_plan(plan)
+
+    def read_plan(self) -> dict[str, Any]:
+        return self.workspace.read_plan()
+
+    def write_memory(self, notes: list[dict[str, Any]]) -> None:
+        self.workspace.write_memory(notes)
+
+    def read_memory(self) -> dict[str, Any]:
+        return self.workspace.read_memory()
+
+    def append_memory_note(self, content: str, *, source: str = "chat") -> dict[str, Any]:
+        return self.workspace.append_memory_note(content, source=source)
+
+    def append_log(self, message: str, *, actor: str | None = None) -> None:
+        self.workspace.append_log(message, actor=actor)

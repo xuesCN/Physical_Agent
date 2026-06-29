@@ -17,8 +17,8 @@ from physical_agent.doctor import doctor_ok, run_doctor
 from physical_agent.drivers.templates import create_driver_template
 from physical_agent.gui import run_gui
 from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
-from physical_agent.protocol.workspace import Workspace
 from physical_agent.quickstart import setup_project
+from physical_agent.state import open_state_store
 from physical_agent.watch.runtime import WatchRuntime
 
 
@@ -36,7 +36,7 @@ def init(
 ) -> None:
     config_path = write_default_config(config, overwrite=force)
     cfg = load_config(config_path)
-    workspace = Workspace(cfg.workspace_path(config_path.parent))
+    workspace = open_state_store(cfg, base_dir=config_path.parent)
     workspace.initialize(overwrite=force)
     typer.echo(f"Initialized Physical Agent project at {config_path.parent}")
     typer.echo(f"Config: {config_path}")
@@ -229,7 +229,7 @@ def inspect(
     config: Path = typer.Option(Path(DEFAULT_CONFIG_NAME), "--config", "-c", help="Config path."),
 ) -> None:
     cfg = load_config(config)
-    workspace = Workspace(cfg.workspace_path(config.resolve().parent))
+    workspace = open_state_store(cfg, base_dir=config.resolve().parent)
     if not workspace.exists():
         typer.echo("Workspace is not initialized. Run `physical-agent init` first.")
         raise typer.Exit(code=1)

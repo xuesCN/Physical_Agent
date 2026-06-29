@@ -7,7 +7,7 @@ from typing import Any
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config
 from physical_agent.drivers.loader import LoadedDriver, load_driver
 from physical_agent.protocol.schemas import Action, ActionResult, Observation, RobotRuntimeProfile
-from physical_agent.protocol.workspace import Workspace
+from physical_agent.state import StateStore, open_state_store
 from physical_agent.watch.safety import SafetyGate
 
 
@@ -16,7 +16,7 @@ class WatchRuntime:
         self.config_path = Path(config_path).resolve()
         self.base_dir = self.config_path.parent
         self.config: PhysicalAgentConfig | None = None
-        self.workspace: Workspace | None = None
+        self.workspace: StateStore | None = None
         self.loaded_drivers: dict[str, LoadedDriver] = {}
         self.profiles: dict[str, RobotRuntimeProfile] = {}
         self.started = False
@@ -25,8 +25,7 @@ class WatchRuntime:
         if self.started:
             return
         self.config = load_config(self.config_path)
-        workspace_path = self.config.workspace_path(self.base_dir)
-        self.workspace = Workspace(workspace_path)
+        self.workspace = open_state_store(self.config, base_dir=self.base_dir)
         self.workspace.initialize()
         self.workspace.append_log("`physical-agent watch` started.", actor="watch")
 
@@ -172,7 +171,7 @@ class WatchRuntime:
             actor="watch",
         )
 
-    def _workspace(self) -> Workspace:
+    def _workspace(self) -> StateStore:
         if self.workspace is None:
             raise RuntimeError("WatchRuntime has not been set up.")
         return self.workspace

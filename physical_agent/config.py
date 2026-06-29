@@ -16,6 +16,7 @@ class ProjectConfig(BaseModel):
 
 class WorkspaceConfig(BaseModel):
     path: str = "./workspace"
+    backend: str = "markdown"
 
 
 class WatchConfig(BaseModel):
@@ -52,7 +53,7 @@ class PhysicalAgentConfig(BaseModel):
 def default_config_dict() -> dict[str, Any]:
     return {
         "project": {"name": "quickstart"},
-        "workspace": {"path": "./workspace"},
+        "workspace": {"path": "./workspace", "backend": "markdown"},
         "watch": {"tick_ms": 500, "require_human_approval": False},
         "agent": {
             "planner": "rule_based",

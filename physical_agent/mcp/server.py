@@ -4,9 +4,9 @@ from pathlib import Path
 from typing import Any
 
 from physical_agent.agent.runtime import AgentRuntime
-from physical_agent.config import DEFAULT_CONFIG_NAME, load_config
+from physical_agent.config import DEFAULT_CONFIG_NAME
 from physical_agent.protocol.schemas import Action
-from physical_agent.protocol.workspace import Workspace
+from physical_agent.state import StateStore, open_state_store
 
 
 class PhysicalAgentMCP:
@@ -162,7 +162,6 @@ class PhysicalAgentMCP:
             },
         ]
 
-    def _workspace(self) -> Workspace:
-        cfg = load_config(self.config_path)
-        return Workspace(cfg.workspace_path(self.config_path.parent))
+    def _workspace(self) -> StateStore:
+        return open_state_store(config_path=self.config_path)
 

@@ -9,7 +9,7 @@ from physical_agent.agent.planner import Planner
 from physical_agent.agent.rule_based import RuleBasedPlanner
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config
 from physical_agent.protocol.schemas import Action
-from physical_agent.protocol.workspace import Workspace
+from physical_agent.state import StateStore, open_state_store
 
 
 class AgentRuntime:
@@ -24,14 +24,14 @@ class AgentRuntime:
         self.config_path = Path(config_path).resolve()
         self.base_dir = self.config_path.parent
         self.config: PhysicalAgentConfig | None = None
-        self.workspace: Workspace | None = None
+        self.workspace: StateStore | None = None
         self.planner = planner
         self.planner_name = planner_name
         self.model = model
 
     async def setup(self) -> None:
         self.config = load_config(self.config_path)
-        self.workspace = Workspace(self.config.workspace_path(self.base_dir))
+        self.workspace = open_state_store(self.config, base_dir=self.base_dir)
         if not self.workspace.exists():
             self.workspace.initialize()
 
@@ -101,7 +101,7 @@ class AgentRuntime:
             result = await self.run_task(task)
             print(result["message"])
 
-    def _workspace(self) -> Workspace:
+    def _workspace(self) -> StateStore:
         if self.workspace is None:
             raise RuntimeError("AgentRuntime has not been set up.")
         return self.workspace
@@ -127,7 +127,7 @@ class AgentRuntime:
             return self.planner
         raise ValueError(f"Unsupported planner: {planner_name}")
 
-    def _renumber_actions(self, actions: list[Action], workspace: Workspace) -> list[Action]:
+    def _renumber_actions(self, actions: list[Action], workspace: StateStore) -> list[Action]:
         used_ids: set[str] = set()
         for item in workspace.read_feedback().get("history", []):
             action_id = item.get("action_id")

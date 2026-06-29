@@ -17,7 +17,7 @@ from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load
 from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
 from physical_agent.protocol.chat_summary import recent_chat_messages
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, CodeTaskResult
-from physical_agent.protocol.workspace import Workspace
+from physical_agent.state import StateStore, open_state_store
 from physical_agent.watch.runtime import WatchRuntime
 
 
@@ -65,7 +65,7 @@ class ChatRuntime:
         self.planner_name = planner_name
         self.model = model
         self.config: PhysicalAgentConfig | None = None
-        self.workspace: Workspace | None = None
+        self.workspace: StateStore | None = None
         self.rule_planner = RuleBasedPlanner()
         self.llm_client: OpenAICompatibleClient | None = None
         self.code_runtime: CodeSkillRuntime | None = None
@@ -75,7 +75,7 @@ class ChatRuntime:
         if not self.config_path.exists():
             write_default_config(self.config_path)
         self.config = load_config(self.config_path)
-        self.workspace = Workspace(self.config.workspace_path(self.base_dir))
+        self.workspace = open_state_store(self.config, base_dir=self.base_dir)
         self.workspace.initialize()
 
     def respond(self, message: str, *, auto_step: bool = False) -> dict[str, Any]:
@@ -788,7 +788,7 @@ class ChatRuntime:
             self.llm_client = OpenAICompatibleClient(settings)
         return self.llm_client
 
-    def _workspace(self) -> Workspace:
+    def _workspace(self) -> StateStore:
         if self.workspace is None:
             raise RuntimeError("ChatRuntime has not been set up.")
         return self.workspace

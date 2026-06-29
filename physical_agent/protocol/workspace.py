@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,7 @@ class Workspace:
     def __init__(self, path: str | Path):
         self.path = Path(path).resolve()
         self.artifacts_path = self.path / "artifacts"
+        self.uploads_path = self.path / "uploads"
 
     def file(self, name: str) -> Path:
         return self.path / self.filenames[name]
@@ -57,6 +59,7 @@ class Workspace:
     def initialize(self, *, overwrite: bool = False) -> None:
         self.path.mkdir(parents=True, exist_ok=True)
         self.artifacts_path.mkdir(parents=True, exist_ok=True)
+        self.uploads_path.mkdir(parents=True, exist_ok=True)
         defaults = {
             "task": render_task("No active task."),
             "capabilities": render_capabilities({}),
@@ -285,6 +288,66 @@ class Workspace:
         notes.append(note)
         self.write_memory(notes)
         return note
+
+    def read_uploads(self) -> dict[str, Any]:
+        manifest = self.uploads_path / "manifest.json"
+        default = {
+            "metadata": {
+                "schema": "physical-agent/uploads/v1",
+                "owner": "human",
+                "revision": 1,
+            },
+            "uploads": [],
+        }
+        if not manifest.exists():
+            return default
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return default
+        if not isinstance(payload, dict):
+            return default
+        metadata = dict(payload.get("metadata") or {})
+        metadata.setdefault("schema", "physical-agent/uploads/v1")
+        metadata.setdefault("owner", "human")
+        try:
+            metadata["revision"] = int(metadata.get("revision") or 1)
+        except (TypeError, ValueError):
+            metadata["revision"] = 1
+        uploads = payload.get("uploads")
+        if not isinstance(uploads, list):
+            uploads = []
+        return {"metadata": metadata, "uploads": [item for item in uploads if isinstance(item, dict)]}
+
+    def append_upload_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        self.uploads_path.mkdir(parents=True, exist_ok=True)
+        current = self.read_uploads()
+        upload = dict(metadata)
+        uploads = list(current.get("uploads", []))
+        uploads.append(upload)
+        doc_metadata = dict(current.get("metadata") or {})
+        try:
+            revision = int(doc_metadata.get("revision") or 1) + 1
+        except (TypeError, ValueError):
+            revision = 2
+        doc_metadata.update(
+            {
+                "schema": "physical-agent/uploads/v1",
+                "owner": "human",
+                "revision": revision,
+            }
+        )
+        manifest = self.uploads_path / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {"metadata": doc_metadata, "uploads": uploads},
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return upload
 
     def append_log(self, message: str, *, actor: str | None = None) -> None:
         target = self.file("log")

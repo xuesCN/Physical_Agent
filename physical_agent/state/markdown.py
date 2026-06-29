@@ -22,6 +22,10 @@ class MarkdownStateStore:
     def artifacts_path(self) -> Path:
         return self.workspace.artifacts_path
 
+    @property
+    def uploads_path(self) -> Path:
+        return self.workspace.uploads_path
+
     def file(self, name: str) -> Path:
         return self.workspace.file(name)
 
@@ -178,6 +182,12 @@ class MarkdownStateStore:
             importance=importance,
         )
 
+    def read_uploads(self) -> dict[str, Any]:
+        return self.workspace.read_uploads()
+
+    def append_upload_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        return self.workspace.append_upload_metadata(metadata)
+
     def append_log(self, message: str, *, actor: str | None = None) -> None:
         self.workspace.append_log(message, actor=actor)
 
@@ -191,6 +201,7 @@ class MarkdownStateStore:
             "chat": self.read_chat(),
             "plan": self.read_plan(),
             "memory": self.read_memory(),
+            "uploads": self.read_uploads(),
             "log": read_markdown_log_document(self.file("log")),
         }
         return export_audit_documents(

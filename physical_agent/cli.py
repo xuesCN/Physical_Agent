@@ -16,6 +16,7 @@ from physical_agent.config import DEFAULT_CONFIG_NAME, load_config, write_defaul
 from physical_agent.doctor import doctor_ok, run_doctor
 from physical_agent.drivers.templates import create_driver_template
 from physical_agent.gui import run_gui
+from physical_agent.ingest.files import FileIngestionError, ingest_file as ingest_local_file
 from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
 from physical_agent.quickstart import setup_project
 from physical_agent.state import open_state_store
@@ -106,6 +107,7 @@ def state_check(
             result["sqlite_missing_tables"]
             + result["sqlite_missing_action_columns"]
             + result["sqlite_missing_memory_columns"]
+            + result["sqlite_missing_upload_columns"]
         )
         if missing:
             typer.echo(f"SQLite missing: {', '.join(missing)}")
@@ -231,6 +233,43 @@ def chat(
                 typer.echo(f"  - {action['id']}: {action['robot']}.{action['capability']}")
         if result["executed"]:
             typer.echo(f"agent> Watch step executed {result['executed']} action(s).")
+
+
+@app.command("ingest-file")
+def ingest_file_command(
+    path: Path = typer.Argument(..., help="Text file to ingest into workspace/uploads."),
+    config: Path = typer.Option(Path(DEFAULT_CONFIG_NAME), "--config", "-c", help="Config path."),
+    tag: Optional[list[str]] = typer.Option(
+        None,
+        "--tag",
+        help="Optional tag to attach to the upload memory note. May be repeated.",
+    ),
+    importance: int = typer.Option(0, "--importance", help="Structured memory importance."),
+) -> None:
+    config_root = config.resolve().parent
+    cfg = load_config(config)
+    workspace = open_state_store(cfg, base_dir=config_root)
+    workspace.initialize()
+    try:
+        result = ingest_local_file(
+            path,
+            workspace,
+            tags=tag,
+            importance=importance,
+        )
+    except FileIngestionError as exc:
+        if exc.metadata:
+            typer.echo(f"Upload status: {exc.metadata.get('status')}")
+            typer.echo(f"SHA256: {exc.metadata.get('sha256')}")
+        typer.echo(f"File ingestion failed: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    metadata = result["metadata"]
+    typer.echo("File ingested.")
+    typer.echo(f"Stored path: {metadata['stored_path']}")
+    typer.echo(f"SHA256: {metadata['sha256']}")
+    typer.echo(f"Memory written: {'yes' if result['memory_written'] else 'no'}")
+    typer.echo(f"Truncated: {'yes' if result['truncated'] else 'no'}")
 
 
 def _echo_code_result(code_result: dict[str, Any], *, prefix: str = "") -> None:
@@ -363,6 +402,7 @@ def migrate_md_to_sqlite(
     typer.echo(
         f"Chat messages: {result['chat_messages']}; "
         f"memory notes: {result['memory_notes']}; "
+        f"uploads: {result['uploads']}; "
         f"log entries: {result['log_entries']}"
     )
     typer.echo(

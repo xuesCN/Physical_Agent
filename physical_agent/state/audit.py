@@ -18,6 +18,7 @@ AUDIT_DOCUMENTS = (
     "chat",
     "plan",
     "memory",
+    "uploads",
     "log",
 )
 

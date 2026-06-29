@@ -10,8 +10,9 @@ from physical_agent.state.factory import open_state_store
 from physical_agent.state.sqlite import (
     ACTION_CLAIM_COLUMNS,
     MEMORY_NOTE_COLUMNS,
-    REQUIRED_TABLES,
+    SQLITE_SCHEMA_TABLES,
     SqliteStateStore,
+    UPLOAD_METADATA_COLUMNS,
 )
 
 
@@ -38,6 +39,7 @@ def run_state_check(
         "sqlite_missing_tables": [],
         "sqlite_missing_action_columns": [],
         "sqlite_missing_memory_columns": [],
+        "sqlite_missing_upload_columns": [],
     }
     if isinstance(workspace, SqliteStateStore):
         result.update(_sqlite_schema_status(workspace.db_path))
@@ -59,9 +61,10 @@ def _sqlite_schema_status(db_path: Path) -> dict[str, Any]:
     if not db_path.exists():
         return {
             "sqlite_schema_complete": False,
-            "sqlite_missing_tables": sorted(REQUIRED_TABLES),
+            "sqlite_missing_tables": sorted(SQLITE_SCHEMA_TABLES),
             "sqlite_missing_action_columns": sorted(ACTION_CLAIM_COLUMNS),
             "sqlite_missing_memory_columns": sorted(MEMORY_NOTE_COLUMNS),
+            "sqlite_missing_upload_columns": sorted(UPLOAD_METADATA_COLUMNS),
         }
     try:
         with sqlite3.connect(db_path) as conn:
@@ -81,24 +84,34 @@ def _sqlite_schema_status(db_path: Path) -> dict[str, Any]:
                     str(row[1])
                     for row in conn.execute("PRAGMA table_info(memory_notes)").fetchall()
                 }
+            upload_columns: set[str] = set()
+            if "upload_metadata" in tables:
+                upload_columns = {
+                    str(row[1])
+                    for row in conn.execute("PRAGMA table_info(upload_metadata)").fetchall()
+                }
     except sqlite3.Error:
         return {
             "sqlite_schema_complete": False,
-            "sqlite_missing_tables": sorted(REQUIRED_TABLES),
+            "sqlite_missing_tables": sorted(SQLITE_SCHEMA_TABLES),
             "sqlite_missing_action_columns": sorted(ACTION_CLAIM_COLUMNS),
             "sqlite_missing_memory_columns": sorted(MEMORY_NOTE_COLUMNS),
+            "sqlite_missing_upload_columns": sorted(UPLOAD_METADATA_COLUMNS),
         }
 
-    missing_tables = sorted(REQUIRED_TABLES - tables)
+    missing_tables = sorted(SQLITE_SCHEMA_TABLES - tables)
     missing_action_columns = sorted(set(ACTION_CLAIM_COLUMNS) - action_columns)
     missing_memory_columns = sorted(set(MEMORY_NOTE_COLUMNS) - memory_columns)
+    missing_upload_columns = sorted(set(UPLOAD_METADATA_COLUMNS) - upload_columns)
     return {
         "sqlite_schema_complete": not missing_tables
         and not missing_action_columns
-        and not missing_memory_columns,
+        and not missing_memory_columns
+        and not missing_upload_columns,
         "sqlite_missing_tables": missing_tables,
         "sqlite_missing_action_columns": missing_action_columns,
         "sqlite_missing_memory_columns": missing_memory_columns,
+        "sqlite_missing_upload_columns": missing_upload_columns,
     }
 
 

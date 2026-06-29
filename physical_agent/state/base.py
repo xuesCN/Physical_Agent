@@ -11,6 +11,7 @@ class StateStore(Protocol):
     filenames: ClassVar[dict[str, str]]
     path: Path
     artifacts_path: Path
+    uploads_path: Path
 
     def file(self, name: str) -> Path: ...
 
@@ -115,6 +116,10 @@ class StateStore(Protocol):
         tags: list[str] | str | None = None,
         importance: int = 0,
     ) -> dict[str, Any]: ...
+
+    def read_uploads(self) -> dict[str, Any]: ...
+
+    def append_upload_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]: ...
 
     def append_log(self, message: str, *, actor: str | None = None) -> None: ...
 

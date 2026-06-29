@@ -27,6 +27,7 @@ DOC_SCHEMAS = {
     "chat": "physical-agent/chat/v1",
     "plan": "physical-agent/plan/v1",
     "memory": "physical-agent/memory/v1",
+    "uploads": "physical-agent/uploads/v1",
     "log": "physical-agent/log/v1",
 }
 
@@ -39,6 +40,7 @@ DOC_OWNERS = {
     "chat": "agent",
     "plan": "agent",
     "memory": "agent",
+    "uploads": "human",
     "log": "system",
 }
 
@@ -49,6 +51,8 @@ REQUIRED_TABLES = {
     "chat_messages",
     "memory_notes",
 }
+
+SQLITE_SCHEMA_TABLES = REQUIRED_TABLES | {"upload_metadata"}
 
 DEFAULT_ACTION_LEASE_SECONDS = 300
 DEFAULT_CLAIM_OWNER = "watch"
@@ -68,6 +72,25 @@ MEMORY_NOTE_COLUMNS = {
     "created_at": "TEXT",
 }
 
+UPLOAD_METADATA_COLUMNS = {
+    "original_path": "TEXT",
+    "original_name": "TEXT",
+    "stored_path": "TEXT",
+    "stored_name": "TEXT",
+    "sha256": "TEXT",
+    "size_bytes": "INTEGER DEFAULT 0",
+    "content_type": "TEXT",
+    "suffix": "TEXT",
+    "created_at": "TEXT",
+    "status": "TEXT",
+    "preview": "TEXT",
+    "truncated": "INTEGER DEFAULT 0",
+    "memory_note_created": "INTEGER DEFAULT 0",
+    "tags": "TEXT DEFAULT '[]'",
+    "importance": "INTEGER DEFAULT 0",
+    "error": "TEXT",
+}
+
 
 class SqliteStateStore:
     filenames = Workspace.filenames
@@ -75,6 +98,7 @@ class SqliteStateStore:
     def __init__(self, path: str | Path):
         self.path = Path(path).resolve()
         self.artifacts_path = self.path / "artifacts"
+        self.uploads_path = self.path / "uploads"
         self.db_path = self.path / "state.db"
         self._file_workspace = Workspace(self.path)
 
@@ -84,6 +108,7 @@ class SqliteStateStore:
     def initialize(self, *, overwrite: bool = False) -> None:
         self.path.mkdir(parents=True, exist_ok=True)
         self.artifacts_path.mkdir(parents=True, exist_ok=True)
+        self.uploads_path.mkdir(parents=True, exist_ok=True)
         if overwrite:
             self._unlink_database_files()
 
@@ -536,6 +561,38 @@ class SqliteStateStore:
             )
         return note
 
+    def read_uploads(self) -> dict[str, Any]:
+        with self._connect() as conn:
+            metadata = self._read_metadata_conn(conn, "uploads")
+            rows = conn.execute(
+                """
+                SELECT
+                    original_path, original_name, stored_path, stored_name,
+                    sha256, size_bytes, content_type, suffix, created_at,
+                    status, preview, truncated, memory_note_created,
+                    tags, importance, error
+                FROM upload_metadata
+                ORDER BY id
+                """
+            ).fetchall()
+        return {
+            "metadata": metadata,
+            "uploads": [_upload_metadata_from_row(row) for row in rows],
+        }
+
+    def append_upload_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
+        upload = _normalize_upload_metadata(metadata)
+        with self._connect() as conn:
+            revision = self._next_revision_conn(conn, "uploads")
+            self._insert_upload_metadata_conn(conn, upload)
+            self._upsert_document_conn(
+                conn,
+                "uploads",
+                {"metadata": self._metadata("uploads", revision)},
+                revision,
+            )
+        return upload
+
     def append_log(self, message: str, *, actor: str | None = None) -> None:
         timestamp = _now()
         with self._connect() as conn:
@@ -565,6 +622,7 @@ class SqliteStateStore:
             "chat": self.read_chat(),
             "plan": self.read_plan(),
             "memory": self.read_memory(),
+            "uploads": self.read_uploads(),
             "log": self._read_log_document(),
         }
         return export_audit_documents(
@@ -665,6 +723,33 @@ class SqliteStateStore:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_memory_notes_kind_source ON memory_notes(kind, source, id)"
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS upload_metadata (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                original_path TEXT,
+                original_name TEXT,
+                stored_path TEXT,
+                stored_name TEXT,
+                sha256 TEXT,
+                size_bytes INTEGER DEFAULT 0,
+                content_type TEXT,
+                suffix TEXT,
+                created_at TEXT,
+                status TEXT,
+                preview TEXT,
+                truncated INTEGER DEFAULT 0,
+                memory_note_created INTEGER DEFAULT 0,
+                tags TEXT DEFAULT '[]',
+                importance INTEGER DEFAULT 0,
+                error TEXT
+            )
+            """
+        )
+        self._ensure_upload_metadata_columns(conn)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_upload_metadata_sha256 ON upload_metadata(sha256)"
+        )
 
     def _unlink_database_files(self) -> None:
         for path in (
@@ -730,6 +815,7 @@ class SqliteStateStore:
                 "plan": ChatPlan().model_dump(mode="json"),
             },
             "memory": {"metadata": self._metadata("memory", 1)},
+            "uploads": {"metadata": self._metadata("uploads", 1)},
             "log": {"metadata": self._metadata("log", 1)},
         }
         for name, payload in defaults.items():
@@ -892,6 +978,30 @@ class SqliteStateStore:
         conn.execute("UPDATE memory_notes SET tags = '[]' WHERE tags IS NULL OR tags = ''")
         conn.execute("UPDATE memory_notes SET importance = 0 WHERE importance IS NULL")
 
+    def _ensure_upload_metadata_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(upload_metadata)").fetchall()
+        }
+        for name, definition in UPLOAD_METADATA_COLUMNS.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE upload_metadata ADD COLUMN {name} {definition}")
+        conn.execute(
+            "UPDATE upload_metadata SET size_bytes = 0 WHERE size_bytes IS NULL"
+        )
+        conn.execute(
+            "UPDATE upload_metadata SET truncated = 0 WHERE truncated IS NULL"
+        )
+        conn.execute(
+            "UPDATE upload_metadata SET memory_note_created = 0 WHERE memory_note_created IS NULL"
+        )
+        conn.execute(
+            "UPDATE upload_metadata SET tags = '[]' WHERE tags IS NULL OR tags = ''"
+        )
+        conn.execute(
+            "UPDATE upload_metadata SET importance = 0 WHERE importance IS NULL"
+        )
+
     def _insert_memory_note_conn(
         self,
         conn: sqlite3.Connection,
@@ -910,6 +1020,42 @@ class SqliteStateStore:
                 _json_dumps(normalized["tags"]),
                 normalized["importance"],
                 normalized["created_at"],
+            ),
+        )
+
+    def _insert_upload_metadata_conn(
+        self,
+        conn: sqlite3.Connection,
+        metadata: dict[str, Any],
+    ) -> None:
+        normalized = _normalize_upload_metadata(metadata)
+        conn.execute(
+            """
+            INSERT INTO upload_metadata(
+                original_path, original_name, stored_path, stored_name,
+                sha256, size_bytes, content_type, suffix, created_at,
+                status, preview, truncated, memory_note_created,
+                tags, importance, error
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized["original_path"],
+                normalized["original_name"],
+                normalized["stored_path"],
+                normalized["stored_name"],
+                normalized["sha256"],
+                normalized["size_bytes"],
+                normalized["content_type"],
+                normalized["suffix"],
+                normalized["created_at"],
+                normalized["status"],
+                normalized["preview"],
+                1 if normalized["truncated"] else 0,
+                1 if normalized["memory_note_created"] else 0,
+                _json_dumps(normalized["tags"]),
+                normalized["importance"],
+                normalized["error"],
             ),
         )
 
@@ -1020,6 +1166,23 @@ class SqliteStateStore:
                 conn,
                 "memory",
                 {"metadata": self._metadata("memory", revision)},
+                revision,
+            )
+
+    def _replace_uploads_with_revision(
+        self,
+        uploads: list[dict[str, Any]],
+        *,
+        revision: int,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM upload_metadata")
+            for upload in uploads:
+                self._insert_upload_metadata_conn(conn, upload)
+            self._upsert_document_conn(
+                conn,
+                "uploads",
+                {"metadata": self._metadata("uploads", revision)},
                 revision,
             )
 
@@ -1202,6 +1365,7 @@ def migrate_markdown_workspace_to_sqlite(
     chat = source.read_chat()
     plan = source.read_plan()
     memory = source.read_memory()
+    uploads = source.read_uploads()
     log_entries, log_metadata = read_markdown_log_entries(source.file("log"))
 
     target = SqliteStateStore(source.path)
@@ -1230,6 +1394,10 @@ def migrate_markdown_workspace_to_sqlite(
     )
     target._replace_document("plan", plan, revision=_payload_revision(plan))
     target._replace_memory_with_revision(memory["notes"], revision=_payload_revision(memory))
+    target._replace_uploads_with_revision(
+        uploads.get("uploads", []),
+        revision=_payload_revision(uploads),
+    )
     target._replace_log_entries(log_entries, revision=_metadata_revision(log_metadata))
 
     return {
@@ -1242,6 +1410,7 @@ def migrate_markdown_workspace_to_sqlite(
         },
         "chat_messages": len(chat["messages"]),
         "memory_notes": len(memory["notes"]),
+        "uploads": len(uploads.get("uploads", [])),
         "log_entries": len(log_entries),
     }
 
@@ -1275,6 +1444,52 @@ def _memory_note_from_row(row: sqlite3.Row) -> dict[str, Any]:
     )
 
 
+def _upload_metadata_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    tags = _json_loads(row["tags"], default=[])
+    return _normalize_upload_metadata(
+        {
+            "original_path": row["original_path"],
+            "original_name": row["original_name"],
+            "stored_path": row["stored_path"],
+            "stored_name": row["stored_name"],
+            "sha256": row["sha256"],
+            "size_bytes": row["size_bytes"],
+            "content_type": row["content_type"],
+            "suffix": row["suffix"],
+            "created_at": row["created_at"],
+            "status": row["status"],
+            "preview": row["preview"],
+            "truncated": bool(row["truncated"]),
+            "memory_note_created": bool(row["memory_note_created"]),
+            "tags": tags,
+            "importance": row["importance"],
+            "error": row["error"],
+        }
+    )
+
+
+def _normalize_upload_metadata(value: dict[str, Any]) -> dict[str, Any]:
+    raw = dict(value)
+    return {
+        "original_path": _optional_str(raw.get("original_path")),
+        "original_name": _optional_str(raw.get("original_name")),
+        "stored_path": _optional_str(raw.get("stored_path")),
+        "stored_name": _optional_str(raw.get("stored_name")),
+        "sha256": _optional_str(raw.get("sha256")),
+        "size_bytes": _nonnegative_int(raw.get("size_bytes")),
+        "content_type": _optional_str(raw.get("content_type")),
+        "suffix": _optional_str(raw.get("suffix")),
+        "created_at": _optional_str(raw.get("created_at")),
+        "status": _optional_str(raw.get("status")) or "stored",
+        "preview": _optional_str(raw.get("preview")),
+        "truncated": bool(raw.get("truncated")),
+        "memory_note_created": bool(raw.get("memory_note_created")),
+        "tags": normalize_memory_tags(raw.get("tags")),
+        "importance": _int_or_zero(raw.get("importance")),
+        "error": _optional_str(raw.get("error")),
+    }
+
+
 def _coerce_observation(value: Observation | dict[str, Any]) -> Observation:
     if isinstance(value, Observation):
         return value
@@ -1306,6 +1521,21 @@ def _metadata_revision(metadata: dict[str, Any]) -> int:
         return int(metadata.get("revision") or 1)
     except (TypeError, ValueError):
         return 1
+
+
+def _optional_str(value: Any) -> str:
+    return "" if value is None else str(value)
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _nonnegative_int(value: Any) -> int:
+    return max(0, _int_or_zero(value))
 
 
 def _as_plain(value: Any) -> Any:

@@ -18,7 +18,7 @@ def run_state_check(
     """Inspect state backend readiness without initializing or mutating state."""
 
     root = Path(base_dir).resolve()
-    backend = (config.workspace.backend or "markdown").strip().lower()
+    backend = (config.workspace.backend or "sqlite").strip().lower()
     workspace = open_state_store(config, base_dir=root)
     initialized = workspace.exists()
     audit_dir = workspace.path / "audit"

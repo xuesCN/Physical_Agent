@@ -24,7 +24,7 @@ from physical_agent.state.sqlite import migrate_markdown_workspace_to_sqlite
 from physical_agent.watch.runtime import WatchRuntime
 
 
-app = typer.Typer(help="Physical Agent: Markdown-native runtime for safe physical-world agents.")
+app = typer.Typer(help="Physical Agent: safe runtime for physical-world agents.")
 driver_app = typer.Typer(help="Driver utilities.")
 app.add_typer(driver_app, name="driver")
 skill_app = typer.Typer(help="Skill utilities.")
@@ -362,8 +362,8 @@ def migrate_md_to_sqlite(
         f"log entries: {result['log_entries']}"
     )
     typer.echo(
-        "Config was not changed. To opt in, set `workspace.backend: sqlite` "
-        "in physical-agent.yaml."
+        "Config was not changed. To use this SQLite database, set "
+        "`workspace.backend: sqlite` in physical-agent.yaml."
     )
 
 

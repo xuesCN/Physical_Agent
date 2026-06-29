@@ -33,8 +33,25 @@ class _NoSkills:
         return []
 
 
-def test_open_state_store_defaults_to_markdown(tmp_path):
+def _set_config_backend(config_path, backend: str) -> None:
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data["workspace"]["backend"] = backend
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+
+def test_open_state_store_defaults_to_sqlite(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+
+    store = open_state_store(config_path=config_path)
+
+    assert yaml.safe_load(config_path.read_text(encoding="utf-8"))["workspace"]["backend"] == "sqlite"
+    assert isinstance(store, SqliteStateStore)
+    assert store.path == (tmp_path / "workspace").resolve()
+
+
+def test_open_state_store_explicit_markdown_backend(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _set_config_backend(config_path, "markdown")
 
     store = open_state_store(config_path=config_path)
 
@@ -419,6 +436,7 @@ def test_sqlite_state_store_export_human_view_reads_sqlite_state(tmp_path):
 
 def test_migrate_markdown_to_sqlite_cli_does_not_switch_backend(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _set_config_backend(config_path, "markdown")
     workspace = Workspace(tmp_path / "workspace")
     workspace.initialize()
     workspace.write_task("Inspect the table", ["do not execute directly"])
@@ -461,6 +479,7 @@ def test_migrate_markdown_to_sqlite_cli_does_not_switch_backend(tmp_path):
 
 def test_migrated_sqlite_export_contains_action_board_chat_memory_and_log(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _set_config_backend(config_path, "markdown")
     workspace = Workspace(tmp_path / "workspace")
     workspace.initialize()
     workspace.write_actions(
@@ -507,11 +526,11 @@ def test_export_audit_cli_does_not_change_backend_or_action_board(
     monkeypatch,
 ):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
-    workspace.write_actions([Action(id="act_cli", robot="arm_1", capability="observe")])
+    store = open_state_store(config_path=config_path)
+    store.initialize()
+    store.write_actions([Action(id="act_cli", robot="arm_1", capability="observe")])
     before_config = config_path.read_text(encoding="utf-8")
-    before_actions = workspace.file("actions").read_text(encoding="utf-8")
+    before_actions = store.read_actions()
 
     class ExplodingWatchRuntime:
         def __init__(self, *args, **kwargs):
@@ -532,8 +551,16 @@ def test_export_audit_cli_does_not_change_backend_or_action_board(
 
     assert result.exit_code == 0, result.output
     assert config_path.read_text(encoding="utf-8") == before_config
-    assert workspace.file("actions").read_text(encoding="utf-8") == before_actions
-    assert yaml.safe_load(before_config)["workspace"]["backend"] == "markdown"
+    assert [action.id for action in store.read_actions()["pending"]] == [
+        action.id for action in before_actions["pending"]
+    ]
+    assert [action.id for action in store.read_actions()["completed"]] == [
+        action.id for action in before_actions["completed"]
+    ]
+    assert [action.id for action in store.read_actions()["cancelled"]] == [
+        action.id for action in before_actions["cancelled"]
+    ]
+    assert yaml.safe_load(before_config)["workspace"]["backend"] == "sqlite"
     assert _read_json(tmp_path / "audit" / "actions.json")["pending"][0]["id"] == "act_cli"
 
 
@@ -555,18 +582,18 @@ def test_core_runtimes_use_state_store_factory(tmp_path, monkeypatch):
 
     agent = AgentRuntime(config_path)
     asyncio.run(agent.setup())
-    assert isinstance(agent.workspace, MarkdownStateStore)
+    assert isinstance(agent.workspace, SqliteStateStore)
 
     chat = ChatRuntime(config_path, planner_name="rule_based")
     monkeypatch.setattr(chat, "_skill_router", lambda: _NoSkills())
     result = chat.respond("hello")
     assert result["ok"] is True
-    assert isinstance(chat.workspace, MarkdownStateStore)
+    assert isinstance(chat.workspace, SqliteStateStore)
 
     watch = WatchRuntime(config_path)
     asyncio.run(watch.setup())
     try:
-        assert isinstance(watch.workspace, MarkdownStateStore)
+        assert isinstance(watch.workspace, SqliteStateStore)
     finally:
         asyncio.run(watch.shutdown())
 

@@ -14,7 +14,6 @@ from physical_agent.config import write_default_config
 from physical_agent.drivers.mock_arm import MockArmDriver
 from physical_agent.llm import OpenAICompatibleSettings
 from physical_agent.protocol.schemas import Action
-from physical_agent.protocol.workspace import Workspace
 from physical_agent.quickstart import setup_project
 from physical_agent.state import open_state_store
 
@@ -50,8 +49,8 @@ def _server(responses: list[dict]):
 
 def test_tool_loop_chat_completions_proposes_action_only(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
+    store = open_state_store(config_path=config_path)
+    store.initialize()
     server = _server(
         [
             {
@@ -103,7 +102,7 @@ def test_tool_loop_chat_completions_proposes_action_only(tmp_path):
 
         assert result.content == "Proposed safely."
         assert [step.name for step in result.steps] == ["physical_agent_propose_action"]
-        actions = workspace.read_actions()
+        actions = store.read_actions()
         assert [action.id for action in actions["pending"]] == ["act_tool_001"]
         assert actions["completed"] == []
         first_request = _SequenceHandler.requests[0]
@@ -193,7 +192,7 @@ def test_chat_runtime_tool_loop_submit_task_writes_pending_only(
 ):
     config_path = tmp_path / "physical-agent.yaml"
     setup_project(config_path, publish=True)
-    workspace = Workspace(tmp_path / "workspace")
+    store = open_state_store(config_path=config_path)
     completed = Action(
         id="act_005",
         robot="arm_1",
@@ -208,8 +207,8 @@ def test_chat_runtime_tool_loop_submit_task_writes_pending_only(
         params={},
         reason="Already cancelled.",
     )
-    workspace.write_actions([], [completed], [cancelled])
-    workspace.write_chat(
+    store.write_actions([], [completed], [cancelled])
+    store.write_chat(
         [{"role": "user", "content": "old recent message"}],
         running_summary="Old tool summary mentions unsafe_execute and stale world.",
         compact=False,
@@ -261,7 +260,7 @@ def test_chat_runtime_tool_loop_submit_task_writes_pending_only(
             "physical_agent_submit_task"
         ]
         assert [action["capability"] for action in result["actions"]] == ["observe"]
-        actions = workspace.read_actions()
+        actions = store.read_actions()
         assert [action.id for action in actions["pending"]] == ["act_007"]
         assert [action.id for action in actions["completed"]] == ["act_005"]
         assert [action.id for action in actions["cancelled"]] == ["act_006"]
@@ -284,8 +283,8 @@ def test_chat_runtime_tool_loop_submit_task_writes_pending_only(
 
 def test_tool_loop_responses_api_round_trips_function_output(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
+    store = open_state_store(config_path=config_path)
+    store.initialize()
     server = _server(
         [
             {
@@ -341,8 +340,8 @@ def test_tool_loop_responses_api_round_trips_function_output(tmp_path):
 
 def test_tool_loop_rejects_non_allowlisted_tool(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
+    store = open_state_store(config_path=config_path)
+    store.initialize()
     server = _server(
         [
             {
@@ -376,7 +375,7 @@ def test_tool_loop_rejects_non_allowlisted_tool(tmp_path):
         with pytest.raises(ToolLoopError, match="not allowlisted"):
             asyncio.run(OpenAIToolLoop(config_path, settings=settings).run([]))
 
-        assert workspace.read_actions()["pending"] == []
+        assert store.read_actions()["pending"] == []
     finally:
         server.shutdown()
         server.server_close()

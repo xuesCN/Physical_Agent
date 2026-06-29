@@ -3,7 +3,7 @@ import json
 from physical_agent.agent.chat_runtime import ChatRuntime
 from physical_agent.quickstart import setup_project
 from physical_agent.protocol.schemas import Action, Observation
-from physical_agent.protocol.workspace import Workspace
+from physical_agent.state import open_state_store
 
 
 class _NoSkills:
@@ -24,9 +24,9 @@ def test_chat_runtime_rule_based_remembers(tmp_path):
 
     assert result["ok"] is True
     assert "I will remember" in result["reply"]
-    workspace = Workspace(tmp_path / "workspace")
-    assert "simulation before real hardware" in workspace.read_memory()["notes"][0]["content"]
-    assert len(workspace.read_chat()["messages"]) == 2
+    store = open_state_store(config_path=config_path)
+    assert "simulation before real hardware" in store.read_memory()["notes"][0]["content"]
+    assert len(store.read_chat()["messages"]) == 2
 
 
 def test_chat_runtime_rule_based_proposes_actions(tmp_path):
@@ -39,9 +39,9 @@ def test_chat_runtime_rule_based_proposes_actions(tmp_path):
 
     assert result["ok"] is True
     assert [action["capability"] for action in result["actions"]] == ["pick", "place"]
-    workspace = Workspace(tmp_path / "workspace")
-    assert [action.capability for action in workspace.read_actions()["pending"]] == ["pick", "place"]
-    assert workspace.read_plan()["plan"].needs_watch is True
+    store = open_state_store(config_path=config_path)
+    assert [action.capability for action in store.read_actions()["pending"]] == ["pick", "place"]
+    assert store.read_plan()["plan"].needs_watch is True
 
 
 def test_chat_runtime_auto_step_executes_actions(tmp_path):
@@ -54,9 +54,9 @@ def test_chat_runtime_auto_step_executes_actions(tmp_path):
     )
 
     assert result["executed"] == 2
-    workspace = Workspace(tmp_path / "workspace")
-    assert workspace.read_world()["state"]["objects"]["red_block"]["location"] == "tray"
-    assert workspace.read_actions()["pending"] == []
+    store = open_state_store(config_path=config_path)
+    assert store.read_world()["state"]["objects"]["red_block"]["location"] == "tray"
+    assert store.read_actions()["pending"] == []
 
 
 def test_chat_runtime_auto_falls_back_when_llm_fails(tmp_path, monkeypatch):
@@ -82,8 +82,8 @@ def test_chat_runtime_llm_context_uses_summary_and_live_workspace_state(
 ):
     config_path = tmp_path / "physical-agent.yaml"
     setup_project(config_path, publish=True)
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.write_chat(
+    store = open_state_store(config_path=config_path)
+    store.write_chat(
         [
             {"role": "user", "content": f"recent {index}"}
             for index in range(11)
@@ -94,7 +94,7 @@ def test_chat_runtime_llm_context_uses_summary_and_live_workspace_state(
         ),
         compact=False,
     )
-    workspace.write_capabilities(
+    store.write_capabilities(
         {
             "arm_1": {
                 "capabilities": [
@@ -107,9 +107,9 @@ def test_chat_runtime_llm_context_uses_summary_and_live_workspace_state(
             }
         }
     )
-    workspace.write_world(Observation(summary="live world summary"))
-    workspace.write_feedback({"status": "completed", "message": "live feedback"}, [])
-    workspace.write_actions(
+    store.write_world(Observation(summary="live world summary"))
+    store.write_feedback({"status": "completed", "message": "live feedback"}, [])
+    store.write_actions(
         [
             Action(
                 id="act_005",

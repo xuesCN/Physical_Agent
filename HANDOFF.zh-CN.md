@@ -7,15 +7,15 @@
 
 ## 1. 快速结论
 
-Physical Agent 是一个以 Markdown 文件作为协议黑板的本地 agent/runtime 项目。它把“认知侧 agent”和“物理执行侧 watch”拆开：
+Physical Agent 是一个面向安全物理世界 agent 的本地 agent/runtime 项目。新项目默认使用 SQLite `workspace/state.db` 作为状态真源，同时保留 Markdown backend、Markdown parser / renderer 和可读审计导出。它把“认知侧 agent”和“物理执行侧 watch”拆开：
 
 ```text
-agent/run/chat  ->  写 ACTIONS.md
-watch           ->  读 ACTIONS.md -> safety gate -> driver.execute(action)
-watch           ->  写 CAPABILITIES.md / WORLD.md / FEEDBACK.md / LOG.md
+agent/run/chat  ->  写 pending action proposal
+watch           ->  claim action -> safety gate -> driver.execute(action)
+watch           ->  写 capabilities / world / feedback / log
 ```
 
-核心边界是：agent 可以提出动作意图，但不能直接触碰硬件或 driver；只有 watch 进程会加载 driver 并执行动作。当前默认 quickstart 使用内置 `mock_arm`，不需要真实硬件，也不需要 LLM API key。
+核心边界是：agent 可以提出动作意图，但不能直接触碰硬件或 driver；只有 watch 进程会加载 driver 并执行动作。当前默认 quickstart 使用内置 `mock_arm` 和 SQLite backend，不需要真实硬件，也不需要 LLM API key。
 
 本次已完成：
 
@@ -49,7 +49,7 @@ py --version
 py scripts\bootstrap.py
 ```
 
-bootstrap 会创建 `.venv/`，安装 `.[dev]`，运行全量测试，生成 `physical-agent.yaml` 和 `workspace/`，并执行 mock arm smoke test。
+bootstrap 会创建 `.venv/`，安装 `.[dev]`，运行全量测试，生成默认 `workspace.backend: sqlite` 的 `physical-agent.yaml` 和 `workspace/`，并执行 mock arm smoke test。
 
 ### 2.2 常用命令
 
@@ -127,7 +127,7 @@ physical_agent/
   agent/                 agent、chat、planner、代码技能、硬件接入助手
   watch/                 watch runtime、safety gate、action dependency 工具
   drivers/               driver contract、loader、内置 driver、driver 模板
-  protocol/              Markdown 协议 schema/parser/renderer/workspace
+  protocol/              Markdown 协议 schema/parser/renderer/workspace（兼容与审计路径仍保留）
   gui/                   依赖最少的本地 Web GUI
   llm/                   OpenAI-compatible Chat Completions 客户端
   mcp/                   轻量 MCP-shaped facade
@@ -144,7 +144,7 @@ tests/                   单元/集成测试，覆盖 runtime、GUI、chat、saf
 
 CLI 使用 Typer，主命令包括：
 
-- `init`：写默认 `physical-agent.yaml` 并初始化 workspace。
+- `init`：写默认 `physical-agent.yaml` 并初始化 workspace；新项目默认 `workspace.backend: sqlite`。
 - `setup`：调用 quickstart，支持 `--smoke-test`。
 - `doctor`：运行健康检查。
 - `gui`：启动本地 Web 控制台。
@@ -159,9 +159,12 @@ CLI 使用 Typer，主命令包括：
 
 ### 4.2 `physical_agent/config.py` 和 `quickstart.py`
 
-默认配置会生成一个 `mock_arm`：
+默认配置会生成一个 `mock_arm`，并把新项目 backend 设为 SQLite：
 
 ```yaml
+workspace:
+  path: ./workspace
+  backend: sqlite
 robots:
   arm_1:
     driver: mock_arm
@@ -176,14 +179,14 @@ robots:
 `setup_project()` 的流程：
 
 1. 写入默认配置。
-2. 初始化 `workspace/`。
+2. 初始化 `workspace/`；默认创建 `workspace/state.db`，并保留 `SAFETY.md` 文件真源。
 3. 可选启动 `WatchRuntime.setup()` 发布 capabilities/world。
 4. 可选 smoke test：`AgentRuntime.run_task()` 写 action，`WatchRuntime.step()` 执行。
 5. 跑 `doctor` 并返回结果。
 
-### 4.3 `physical_agent/protocol/*`
+### 4.3 `physical_agent/protocol/*` 与 StateStore
 
-协议层负责把 Markdown 文件变成结构化数据。
+协议层仍保留 Markdown 文件的 schema/parser/renderer/workspace，用于显式 Markdown backend、迁移和审计兼容。默认运行态通过 `StateStore` 工厂打开 SQLite backend；`SAFETY.md` 仍由文件读取。
 
 核心 schema：
 
@@ -221,7 +224,7 @@ artifacts/
 4. 根据配置选择 planner。
 5. planner 生成 `Action` 列表。
 6. 对 action id 做去重/续号。
-7. 写入 `ACTIONS.md`。
+7. 写入当前 StateStore 的 pending action；显式 Markdown backend 下对应 `ACTIONS.md`。
 8. 如需等待，则轮询 `FEEDBACK.md` 直到 action 完成/失败/取消或超时。
 
 重要点：`AgentRuntime` 不加载 driver，也不调用硬件 SDK。
@@ -582,12 +585,13 @@ GUI 相关测试重点文件：
 ## 7. 重要接手注意事项
 
 1. `python` 命令在当前 Windows 环境不可用，优先用 `py` 或 `.venv\Scripts\python.exe`。
-2. `workspace/` 和 `physical-agent.yaml` 是运行态文件，默认被 gitignore，不要把它们当源码改动提交。
-3. agent/watch 的安全边界不要打破：任何真实硬件执行都必须经过 `ACTIONS.md -> watch -> SafetyGate -> driver.execute()`。
-4. GUI 是单文件内联前端，改起来方便但可维护性一般；如果继续扩展 UI，建议拆出模板/static assets 或引入轻量前端结构。
-5. LLM 相关功能需要 `.env`，默认没有 key 时 rule-based 路径仍然能跑。
-6. PowerShell 下用 `curl.exe -d '{"force":true}'` 可能吞掉 JSON 双引号；调试 API 建议用 `Invoke-RestMethod`。
-7. 中文文案/触发词疑似 mojibake，需要专项修复。
+2. `workspace/`、`workspace/state.db` 和 `physical-agent.yaml` 是运行态文件，默认被 gitignore，不要把它们当源码改动提交。
+3. 新项目默认 backend 是 SQLite；已有 Markdown 项目只要显式保留 `workspace.backend: markdown`，仍走 Markdown backend。单项目回滚也是把该配置改回 `markdown`。
+4. agent/watch 的安全边界不要打破：任何真实硬件执行都必须经过 `action board -> watch -> SafetyGate -> driver.execute()`。
+5. GUI 是单文件内联前端，改起来方便但可维护性一般；如果继续扩展 UI，建议拆出模板/static assets 或引入轻量前端结构。
+6. LLM 相关功能需要 `.env`，默认没有 key 时 rule-based 路径仍然能跑。
+7. PowerShell 下用 `curl.exe -d '{"force":true}'` 可能吞掉 JSON 双引号；调试 API 建议用 `Invoke-RestMethod`。
+8. 中文文案/触发词疑似 mojibake，需要专项修复。
 
 ## 8. 建议下一步
 

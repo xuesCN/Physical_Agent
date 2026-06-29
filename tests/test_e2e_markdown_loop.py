@@ -1,5 +1,7 @@
 import asyncio
 
+import yaml
+
 from physical_agent.agent.runtime import AgentRuntime
 from physical_agent.config import write_default_config
 from physical_agent.protocol.workspace import Workspace
@@ -8,6 +10,9 @@ from physical_agent.watch.runtime import WatchRuntime
 
 def test_e2e_markdown_pick_place_loop(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data["workspace"]["backend"] = "markdown"
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     watch = WatchRuntime(config_path)
     asyncio.run(watch.setup())
 

@@ -12,6 +12,9 @@ from physical_agent.watch.runtime import WatchRuntime
 
 def test_watch_runtime_step_executes_action(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data["workspace"]["backend"] = "markdown"
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     runtime = WatchRuntime(config_path)
     asyncio.run(runtime.setup())
     workspace = Workspace(tmp_path / "workspace")

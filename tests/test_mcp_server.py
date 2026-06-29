@@ -8,6 +8,9 @@ from physical_agent.state import open_state_store
 
 def test_mcp_propose_action_only_writes_pending_board(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data["workspace"]["backend"] = "markdown"
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     workspace = Workspace(tmp_path / "workspace")
     workspace.initialize()
     mcp = PhysicalAgentMCP(config_path)

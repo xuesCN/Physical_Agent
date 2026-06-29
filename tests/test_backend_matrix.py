@@ -32,10 +32,9 @@ class _NoSkills:
 
 def _config_for_backend(tmp_path: Path, backend: str) -> Path:
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    if backend != "markdown":
-        data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        data["workspace"]["backend"] = backend
-        config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data["workspace"]["backend"] = backend
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     return config_path
 
 
@@ -45,6 +44,36 @@ def _ids(actions: list[Action]) -> list[str]:
 
 def _read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_default_init_setup_and_state_check_use_sqlite_with_safety_file(tmp_path):
+    runner = CliRunner()
+    for command in ("init", "setup"):
+        project_dir = tmp_path / command
+        project_dir.mkdir()
+        config_path = project_dir / "physical-agent.yaml"
+
+        result = runner.invoke(cli_module.app, [command, "--config", str(config_path)])
+
+        assert result.exit_code == 0, result.output
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert data["workspace"]["backend"] == "sqlite"
+        store = open_state_store(config_path=config_path)
+        assert isinstance(store, SqliteStateStore)
+        assert store.exists()
+        assert store.db_path.exists()
+        assert store.file("safety").exists()
+
+        check = runner.invoke(
+            cli_module.app,
+            ["state-check", "--config", str(config_path)],
+        )
+
+        assert check.exit_code == 0, check.output
+        assert "Backend: sqlite" in check.output
+        assert "Workspace initialized: yes" in check.output
+        assert "SQLite schema complete: yes" in check.output
+        assert "Audit export writable: yes" in check.output
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -171,6 +200,9 @@ def test_backend_matrix_watch_success_rejection_and_driver_exception(
 
 def test_markdown_to_sqlite_migration_preserves_readiness_state_and_audit(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data["workspace"]["backend"] = "markdown"
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     workspace = Workspace(tmp_path / "workspace")
     workspace.initialize()
     workspace.write_task("Inspect readiness", ["preserve state"])

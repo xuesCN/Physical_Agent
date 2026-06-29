@@ -26,7 +26,7 @@ def open_state_store(
         config = load_config(config_file)
         root = Path(base_dir).resolve() if base_dir is not None else config_file.parent
 
-    backend = (config.workspace.backend or "markdown").strip().lower()
+    backend = (config.workspace.backend or "sqlite").strip().lower()
     if backend == "markdown":
         return MarkdownStateStore(config.workspace_path(root))
     if backend == "sqlite":

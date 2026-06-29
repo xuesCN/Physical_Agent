@@ -1,7 +1,5 @@
 import asyncio
 
-import yaml
-
 from physical_agent.agent.runtime import AgentRuntime
 from physical_agent.config import write_default_config
 from physical_agent.state import open_state_store
@@ -10,9 +8,6 @@ from physical_agent.watch.runtime import WatchRuntime
 
 def test_e2e_sqlite_pick_place_loop(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    data["workspace"]["backend"] = "sqlite"
-    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
     watch = WatchRuntime(config_path)
     asyncio.run(watch.setup())
@@ -28,6 +23,7 @@ def test_e2e_sqlite_pick_place_loop(tmp_path):
         assert result["ok"] is True
 
         store = open_state_store(config_path=config_path)
+        assert store.db_path.exists()
         planned = store.read_actions()["pending"]
         assert [action.capability for action in planned] == ["pick", "place"]
 
@@ -46,4 +42,3 @@ def test_e2e_sqlite_pick_place_loop(tmp_path):
         assert world["state"]["objects"]["red_block"]["location"] == "tray"
     finally:
         asyncio.run(watch.shutdown())
-

@@ -2,9 +2,9 @@
 
 [English version](README.md)
 
-Physical Agent is a Markdown-native runtime for safe physical-world agents.
+Physical Agent is a safe runtime for physical-world agents with a SQLite default state store and Markdown audit compatibility.
 
-Physical Agent 是一个面向安全物理世界 agent 的 Markdown 原生运行时。v1 的重点不是堆功能，而是把认知侧 agent、物理侧 watch、driver 接入协议和安全边界拆清楚。
+Physical Agent 是一个面向安全物理世界 agent 的本地运行时。新项目默认使用 SQLite 作为状态真源，同时保留 Markdown backend、Markdown parser / renderer 和可读审计导出。v1 的重点不是堆功能，而是把认知侧 agent、物理侧 watch、driver 接入协议和安全边界拆清楚。
 
 核心原则：
 
@@ -21,7 +21,7 @@ Physical Agent v1 采用双进程架构：
 ```text
 Terminal 1: physical-agent watch
 Terminal 2: physical-agent run --task "..."
-Workspace: Markdown files are the protocol between cognition and execution.
+StateStore: new projects use workspace/state.db by default; SAFETY.md remains a file source.
 ```
 
 `physical-agent watch` 是物理侧守护进程，负责：
@@ -32,13 +32,13 @@ Workspace: Markdown files are the protocol between cognition and execution.
 - 连接硬件或 simulator
 - 发布 `CAPABILITIES.md`
 - 更新 `WORLD.md`
-- 监听 `ACTIONS.md`
+- 监听 action board（默认 SQLite；Markdown backend 下为 `ACTIONS.md`）
 - 在执行前做 safety gate 校验
 - 调用 `driver.execute(action)`
 - 写入 `FEEDBACK.md`
 - 追加 `LOG.md`
 
-`physical-agent run` 和 `physical-agent chat` 是认知侧入口，负责读取 Markdown workspace、理解任务、生成结构化 action intent，并写入 `ACTIONS.md`。
+`physical-agent run` 和 `physical-agent chat` 是认知侧入口，负责读取当前 StateStore、理解任务、生成结构化 action intent，并写入 pending action。显式使用 Markdown backend 时，这对应写入 `ACTIONS.md`。
 
 现在 `physical-agent chat` 也会自动识别代码类请求，比如“修改这个文件”“写测试”“修复这个 bug”“帮我接入这个 SDK”。命中后，它会切换到代码技能：在当前仓库根目录内直接写文件、运行测试、记录 lessons，并返回修改结果。这个能力仍然不改变物理执行边界，真正能接触硬件的只有 `physical-agent watch`。
 
@@ -139,9 +139,27 @@ physical-agent run --task "pick the red block and place it on the tray"
 physical-agent inspect
 ```
 
-## Workspace 协议
+## StateStore 与 Workspace 协议
 
-`workspace/*.md` 不是普通日志，而是 v1 的核心通信协议。
+新项目默认配置为：
+
+```yaml
+workspace:
+  path: ./workspace
+  backend: sqlite
+```
+
+默认情况下，动态运行状态写入 `workspace/state.db`。`SAFETY.md` 仍是人类拥有的文件真源，watch 每次执行前都会读取并强制执行。`export-audit` 可以把 SQLite 状态导出为可读审计视图到 `workspace/audit/`。
+
+Markdown backend 仍然保留。已有项目如果显式配置：
+
+```yaml
+workspace:
+  path: ./workspace
+  backend: markdown
+```
+
+则 `workspace/*.md` 仍是状态真源。
 
 ```text
 workspace/
@@ -173,7 +191,9 @@ workspace/
 - `PLAN.md`：chat agent 当前意图、步骤和 proposed actions
 - `MEMORY.md`：chat agent 跨轮次保留的小型记忆
 
-静态启动配置放在 `physical-agent.yaml`。动态运行状态放在 Markdown workspace。
+静态启动配置放在 `physical-agent.yaml`。动态运行状态默认放在 `workspace/state.db`；显式 `backend: markdown` 时放在 Markdown workspace。
+
+SQLite 默认切换的回滚方式很小：把项目配置改回 `workspace.backend: markdown`。`migrate-md-to-sqlite` 仍不会自动修改已有 config，`export-audit` 仍不会修改 backend 或 action board。
 
 ## Driver Contract
 
@@ -194,7 +214,7 @@ my_robot_driver/
 - driver 只和 `physical-agent watch` 交互
 - driver 不解析 Markdown
 - driver 不调用 agent runtime
-- agent 只通过 Markdown 看见 capabilities、world、actions 和 feedback
+- agent 只通过 StateStore 看见 capabilities、world、actions 和 feedback
 - agent 不直接调用硬件 SDK
 
 生成一个空 driver 模板：
@@ -248,7 +268,7 @@ LLM coding 会先生成安全脚手架，再把 SDK 片段和脚手架发给模�
 这不代表 LLM 可以绕过安全边界。接入助手只帮助写 watch 侧 driver 草稿和文档；真正执行动作时仍然必须经过：
 
 ```text
-agent -> ACTIONS.md -> watch safety gate -> driver.execute(action)
+agent -> action board -> watch safety gate -> driver.execute(action)
 ```
 
 小智 MCP 风格硬件接入示例：
@@ -406,6 +426,8 @@ pytest -q
 
 - Markdown front matter 和 fenced YAML parser / renderer
 - workspace 初始化、revision 递增、log append
+- StateStore backend matrix（Markdown / SQLite）
+- 默认 SQLite init / setup / state-check / export-audit
 - driver manifest 和 config schema 校验
 - built-in driver 与本地 driver loader
 - 硬件接入助手生成可加载 driver scaffold
@@ -414,7 +436,7 @@ pytest -q
 - mock arm pick/place 状态变化
 - rule-based planner
 - watch runtime step
-- 端到端 Markdown loop
+- 端到端 Markdown loop 和 SQLite loop
 - 一条命令 setup 和 smoke test
 - doctor 健康检查
 - GUI HTTP endpoints

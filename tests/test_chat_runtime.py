@@ -1,6 +1,17 @@
+import json
+
 from physical_agent.agent.chat_runtime import ChatRuntime
 from physical_agent.quickstart import setup_project
+from physical_agent.protocol.schemas import Action, Observation
 from physical_agent.protocol.workspace import Workspace
+
+
+class _NoSkills:
+    def match(self, message):
+        return None
+
+    def list_skills(self):
+        return []
 
 
 def test_chat_runtime_rule_based_remembers(tmp_path):
@@ -63,3 +74,88 @@ def test_chat_runtime_auto_falls_back_when_llm_fails(tmp_path, monkeypatch):
 
     assert result["mode"] == "rule_based"
     assert "LLM chat was unavailable" in result["reply"]
+
+
+def test_chat_runtime_llm_context_uses_summary_and_live_workspace_state(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    workspace = Workspace(tmp_path / "workspace")
+    workspace.write_chat(
+        [
+            {"role": "user", "content": f"recent {index}"}
+            for index in range(11)
+        ],
+        running_summary=(
+            "Old summary says capability unsafe_execute, world is stale, "
+            "feedback failed, pending action act_900."
+        ),
+        compact=False,
+    )
+    workspace.write_capabilities(
+        {
+            "arm_1": {
+                "capabilities": [
+                    {
+                        "name": "observe",
+                        "description": "Inspect the workspace.",
+                        "params_schema": {"type": "object"},
+                    }
+                ]
+            }
+        }
+    )
+    workspace.write_world(Observation(summary="live world summary"))
+    workspace.write_feedback({"status": "completed", "message": "live feedback"}, [])
+    workspace.write_actions(
+        [
+            Action(
+                id="act_005",
+                robot="arm_1",
+                capability="observe",
+                params={},
+                reason="Live pending action.",
+            )
+        ]
+    )
+
+    class FakeClient:
+        messages = []
+
+        def structured_json(self, messages, **kwargs):
+            self.messages = messages
+            return {
+                "reply": "Proposed from live state.",
+                "intent": "act",
+                "steps": [],
+                "actions": [
+                    {
+                        "robot": "arm_1",
+                        "capability": "observe",
+                        "params": {},
+                        "reason": "Use the live capability.",
+                        "depends_on": [],
+                    }
+                ],
+                "memory": [],
+            }
+
+    runtime = ChatRuntime(config_path, planner_name="llm")
+    fake_client = FakeClient()
+    monkeypatch.setattr(runtime, "_llm_client", lambda: fake_client)
+    monkeypatch.setattr(runtime, "_skill_router", lambda: _NoSkills())
+
+    result = runtime.respond("what is current state?")
+
+    payload = json.loads(fake_client.messages[1]["content"])
+    assert payload["running_summary"].startswith("Old summary says capability unsafe_execute")
+    assert len(payload["chat_history"]) == 12
+    assert payload["chat_history"][-1]["content"] == "what is current state?"
+    assert payload["capabilities"]["robots"]["arm_1"]["capabilities"][0]["name"] == "observe"
+    assert payload["world"]["summary"] == "live world summary"
+    assert payload["feedback"]["latest"]["status"] == "completed"
+    assert "unsafe_execute" not in json.dumps(payload["capabilities"])
+    assert "stale" not in json.dumps(payload["world"])
+    assert [action["id"] for action in result["actions"]] == ["act_006"]

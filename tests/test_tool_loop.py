@@ -140,6 +140,11 @@ def test_chat_runtime_tool_loop_submit_task_writes_pending_only(
         reason="Already cancelled.",
     )
     workspace.write_actions([], [completed], [cancelled])
+    workspace.write_chat(
+        [{"role": "user", "content": "old recent message"}],
+        running_summary="Old tool summary mentions unsafe_execute and stale world.",
+        compact=False,
+    )
 
     async def fail_execute(self, action):
         raise AssertionError("driver.execute must not be called by tool_loop submit_task")
@@ -192,6 +197,13 @@ def test_chat_runtime_tool_loop_submit_task_writes_pending_only(
         assert [action.id for action in actions["completed"]] == ["act_005"]
         assert [action.id for action in actions["cancelled"]] == ["act_006"]
         assert actions["pending"][0].capability == "observe"
+        context = json.loads(_SequenceHandler.requests[0]["messages"][1]["content"])
+        assert context["running_summary"] == (
+            "Old tool summary mentions unsafe_execute and stale world."
+        )
+        assert context["chat_history"][-1]["content"] == "look around"
+        assert context["capabilities"]["robots"]["arm_1"]["capabilities"][0]["name"] == "observe"
+        assert "unsafe_execute" not in json.dumps(context["capabilities"])
         assert _SequenceHandler.requests[0]["tools"][0]["function"]["name"] == (
             "physical_agent_submit_task"
         )

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from physical_agent.protocol.markdown import parse_front_matter, render_front_matter
+from physical_agent.protocol.chat_summary import compact_chat_messages
 from physical_agent.protocol.parsers import (
     parse_actions,
     parse_capabilities,
@@ -170,10 +171,35 @@ class Workspace:
     def read_safety(self) -> dict[str, Any]:
         return parse_safety(self.file("safety").read_text(encoding="utf-8"))
 
-    def write_chat(self, messages: list[ChatMessage | dict[str, Any]]) -> None:
+    def write_chat(
+        self,
+        messages: list[ChatMessage | dict[str, Any]],
+        *,
+        running_summary: str | None = None,
+        compact: bool = True,
+    ) -> None:
         target = self.file("chat")
+        if running_summary is None and target.exists():
+            try:
+                running_summary = self.read_chat().get("running_summary", "")
+            except Exception:
+                running_summary = ""
+        summary = running_summary or ""
+        output_messages = [
+            item if isinstance(item, ChatMessage) else ChatMessage.model_validate(item)
+            for item in messages
+        ]
+        if compact:
+            summary, output_messages = compact_chat_messages(
+                output_messages,
+                running_summary=summary,
+            )
         target.write_text(
-            render_chat(messages, revision=self._next_revision(target)),
+            render_chat(
+                output_messages,
+                running_summary=summary,
+                revision=self._next_revision(target),
+            ),
             encoding="utf-8",
         )
 

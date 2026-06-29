@@ -15,6 +15,7 @@ from physical_agent.agent.skills import SkillRouter
 from physical_agent.agent.tool_loop import OpenAIToolLoop
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config, write_default_config
 from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
+from physical_agent.protocol.chat_summary import recent_chat_messages
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, CodeTaskResult
 from physical_agent.protocol.workspace import Workspace
 from physical_agent.watch.runtime import WatchRuntime
@@ -201,6 +202,7 @@ class ChatRuntime:
             return self._respond_with_tool_loop(
                 message=message,
                 chat_messages=chat["messages"],
+                running_summary=chat.get("running_summary", ""),
                 capabilities=capabilities,
                 world=world,
                 feedback=feedback,
@@ -212,6 +214,7 @@ class ChatRuntime:
                 response = self._respond_with_llm(
                     message=message,
                     chat_messages=chat["messages"],
+                    running_summary=chat.get("running_summary", ""),
                     capabilities=capabilities,
                     world=world,
                     feedback=feedback,
@@ -412,6 +415,7 @@ class ChatRuntime:
         *,
         message: str,
         chat_messages: list[ChatMessage],
+        running_summary: str,
         capabilities: dict[str, Any],
         world: dict[str, Any],
         feedback: dict[str, Any],
@@ -445,8 +449,10 @@ class ChatRuntime:
                         "content": json.dumps(
                             {
                                 "latest_user_message": message,
+                                "running_summary": running_summary,
                                 "chat_history": [
-                                    item.model_dump(mode="json") for item in chat_messages[-12:]
+                                    item.model_dump(mode="json")
+                                    for item in recent_chat_messages(chat_messages)
                                 ],
                                 "memory": memory.get("notes", [])[-20:],
                                 "capabilities": _json_safe(capabilities),
@@ -536,6 +542,7 @@ class ChatRuntime:
         *,
         message: str,
         chat_messages: list[ChatMessage],
+        running_summary: str,
         capabilities: dict[str, Any],
         world: dict[str, Any],
         feedback: dict[str, Any],
@@ -564,8 +571,10 @@ class ChatRuntime:
                     "content": json.dumps(
                         {
                             "latest_user_message": message,
+                            "running_summary": running_summary,
                             "chat_history": [
-                                item.model_dump(mode="json") for item in chat_messages[-12:]
+                                item.model_dump(mode="json")
+                                for item in recent_chat_messages(chat_messages)
                             ],
                             "memory": memory.get("notes", [])[-20:],
                             "capabilities": _json_safe(capabilities),

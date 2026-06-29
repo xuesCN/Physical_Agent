@@ -141,13 +141,25 @@ def render_log(body: str = "# Physical Agent Log\n", *, revision: int = 1) -> st
     return render_front_matter(metadata, body)
 
 
-def render_chat(messages: list[ChatMessage | dict[str, Any]] | None = None, *, revision: int = 1) -> str:
+def render_chat(
+    messages: list[ChatMessage | dict[str, Any]] | None = None,
+    *,
+    running_summary: str = "",
+    revision: int = 1,
+) -> str:
     metadata = {
         "schema": "physical-agent/chat/v1",
         "owner": "agent",
         "revision": revision,
     }
-    body = "# Chat\n\n## Messages\n\n" f"{fenced_yaml(_as_plain(messages or []))}\n"
+    summary = {"summary": running_summary.strip()}
+    body = (
+        "# Chat\n\n"
+        "## Running Summary\n\n"
+        f"{fenced_yaml(summary)}\n\n"
+        "## Messages\n\n"
+        f"{fenced_yaml(_as_plain(messages or []))}\n"
+    )
     return render_front_matter(metadata, body)
 
 

@@ -188,6 +188,80 @@ def test_sqlite_append_pending_action_writes_pending(tmp_path):
     assert row == ("pending",)
 
 
+def test_sqlite_initialize_migrates_old_action_claim_schema(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    db_path = workspace / "state.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE actions (
+                id TEXT PRIMARY KEY,
+                robot TEXT,
+                capability TEXT,
+                params TEXT,
+                reason TEXT,
+                depends_on TEXT,
+                status TEXT,
+                result TEXT,
+                seq INTEGER,
+                created_at TEXT,
+                updated_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO actions(
+                id, robot, capability, params, reason, depends_on,
+                status, result, seq, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "act_legacy",
+                "arm_1",
+                "observe",
+                "{}",
+                None,
+                "[]",
+                "pending",
+                "{}",
+                1,
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:00:00Z",
+            ),
+        )
+
+    store = SqliteStateStore(workspace)
+    store.initialize()
+
+    assert store.exists()
+    with sqlite3.connect(store.db_path) as conn:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(actions)").fetchall()
+        }
+    assert {"claimed_at", "claim_owner", "attempts"}.issubset(columns)
+
+    claimed = store.claim_next_ready_action(claim_owner="test-watch")
+    assert claimed is not None
+    assert claimed.id == "act_legacy"
+    with sqlite3.connect(store.db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT status, claimed_at, claim_owner, attempts
+            FROM actions
+            WHERE id = ?
+            """,
+            ("act_legacy",),
+        ).fetchone()
+    assert row[0] == "in_progress"
+    assert row[1]
+    assert row[2] == "test-watch"
+    assert row[3] == 1
+
+
 def test_sqlite_claim_next_ready_action_is_not_duplicated(tmp_path):
     store = SqliteStateStore(tmp_path / "workspace")
     store.initialize()
@@ -207,14 +281,68 @@ def test_sqlite_claim_next_ready_action_is_not_duplicated(tmp_path):
     assert actions["completed"] == []
     assert actions["cancelled"] == []
     with sqlite3.connect(store.db_path) as conn:
-        status = conn.execute(
-            "SELECT status FROM actions WHERE id = ?",
+        row = conn.execute(
+            """
+            SELECT status, claimed_at, claim_owner, attempts
+            FROM actions
+            WHERE id = ?
+            """,
             ("act_once",),
-        ).fetchone()[0]
-    assert status == "in_progress"
+        ).fetchone()
+    assert row[0] == "in_progress"
+    assert row[1]
+    assert row[2] == "watch"
+    assert row[3] == 1
 
     store.mark_action_completed(claimed[0])
     assert [action.id for action in store.read_actions()["completed"]] == ["act_once"]
+
+
+def test_sqlite_recover_stale_actions_releases_only_expired_claims(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.append_pending_action(Action(id="act_stale", robot="arm_1", capability="observe"))
+    store.append_pending_action(Action(id="act_fresh", robot="arm_1", capability="observe"))
+
+    stale = store.claim_next_ready_action(claim_owner="watch-a")
+    fresh = store.claim_next_ready_action(claim_owner="watch-a")
+    assert stale is not None
+    assert fresh is not None
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "UPDATE actions SET claimed_at = ? WHERE id = ?",
+            ("2000-01-01T00:00:00Z", stale.id),
+        )
+
+    recovered = store.recover_stale_actions(max_age_s=60)
+
+    assert recovered == 1
+    assert [action.id for action in store.read_actions()["pending"]] == [stale.id]
+    reclaimed = store.claim_next_ready_action(claim_owner="watch-b")
+    assert reclaimed is not None
+    assert reclaimed.id == stale.id
+    assert store.claim_next_ready_action(claim_owner="watch-b") is None
+    with sqlite3.connect(store.db_path) as conn:
+        rows = {
+            row[0]: (row[1], row[2], row[3])
+            for row in conn.execute(
+                "SELECT id, status, claim_owner, attempts FROM actions ORDER BY id"
+            ).fetchall()
+        }
+    assert rows["act_stale"] == ("in_progress", "watch-b", 2)
+    assert rows["act_fresh"] == ("in_progress", "watch-a", 1)
+
+
+def test_sqlite_recover_stale_actions_leaves_fresh_claims_in_progress(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.append_pending_action(Action(id="act_fresh", robot="arm_1", capability="observe"))
+    claimed = store.claim_next_ready_action()
+
+    assert claimed is not None
+    assert store.recover_stale_actions(max_age_s=60) == 0
+    assert store.read_actions()["pending"] == []
+    assert store.claim_next_ready_action() is None
 
 
 def test_sqlite_state_store_chat_rolling_summary(tmp_path):

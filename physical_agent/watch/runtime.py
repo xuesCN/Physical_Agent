@@ -11,6 +11,10 @@ from physical_agent.state import StateStore, open_state_store
 from physical_agent.watch.safety import SafetyGate
 
 
+ACTION_LEASE_SECONDS = 300
+CLAIM_OWNER = "watch"
+
+
 class WatchRuntime:
     def __init__(self, config_path: str | Path = DEFAULT_CONFIG_NAME):
         self.config_path = Path(config_path).resolve()
@@ -79,13 +83,14 @@ class WatchRuntime:
         if setup:
             await self.setup()
         workspace = self._workspace()
+        workspace.recover_stale_actions(ACTION_LEASE_SECONDS)
         actions_doc = workspace.read_actions()
         safety_rules = workspace.read_safety()["rules"]
         executed_count = 0
         initial_pending_count = len(actions_doc["pending"])
 
         for _ in range(initial_pending_count):
-            action = workspace.claim_next_ready_action()
+            action = workspace.claim_next_ready_action(claim_owner=CLAIM_OWNER)
             if action is None:
                 break
             latest_actions = workspace.read_actions()
@@ -112,7 +117,18 @@ class WatchRuntime:
                 continue
 
             loaded = self.loaded_drivers[action.robot]
-            result = await loaded.driver.execute(action)
+            try:
+                result = await loaded.driver.execute(action)
+            except Exception as exc:
+                result = ActionResult(
+                    status="failed",
+                    message=f"Driver execute failed: {type(exc).__name__}: {exc}",
+                    result={"error_type": type(exc).__name__},
+                )
+                workspace.mark_action_cancelled(action)
+                executed_count += 1
+                await self._record_action_result(action, result)
+                continue
             if result.status == "completed":
                 workspace.mark_action_completed(action)
             else:

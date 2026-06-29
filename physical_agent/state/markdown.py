@@ -77,7 +77,7 @@ class MarkdownStateStore:
         )
         return parsed
 
-    def claim_next_ready_action(self) -> Action | None:
+    def claim_next_ready_action(self, *, claim_owner: str = "watch") -> Action | None:
         board = self.read_actions()
         pending = list(board["pending"])
         if not pending:
@@ -85,6 +85,14 @@ class MarkdownStateStore:
         action = pending.pop(0)
         self.write_actions(pending, board["completed"], board["cancelled"])
         return action
+
+    def recover_stale_actions(
+        self,
+        max_age_s: float,
+        *,
+        claim_owner: str | None = None,
+    ) -> int:
+        return 0
 
     def mark_action_completed(self, action: Action | dict[str, Any]) -> None:
         self._move_action_to_terminal_status(action, "completed")

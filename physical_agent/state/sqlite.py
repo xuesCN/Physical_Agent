@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 import sqlite3
@@ -43,6 +43,15 @@ REQUIRED_TABLES = {
     "log_entries",
     "chat_messages",
     "memory_notes",
+}
+
+DEFAULT_ACTION_LEASE_SECONDS = 300
+DEFAULT_CLAIM_OWNER = "watch"
+
+ACTION_CLAIM_COLUMNS = {
+    "claimed_at": "TEXT",
+    "claim_owner": "TEXT",
+    "attempts": "INTEGER DEFAULT 0",
 }
 
 
@@ -211,9 +220,10 @@ class SqliteStateStore:
                 """
                 INSERT INTO actions(
                     id, robot, capability, params, reason, depends_on,
-                    status, result, seq, created_at, updated_at
+                    status, result, seq, created_at, updated_at,
+                    claimed_at, claim_owner, attempts
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     parsed.id,
@@ -227,6 +237,9 @@ class SqliteStateStore:
                     seq,
                     timestamp,
                     timestamp,
+                    None,
+                    None,
+                    0,
                 ),
             )
             self._upsert_document_conn(
@@ -237,9 +250,13 @@ class SqliteStateStore:
             )
         return parsed
 
-    def claim_next_ready_action(self) -> Action | None:
+    def claim_next_ready_action(self, *, claim_owner: str = DEFAULT_CLAIM_OWNER) -> Action | None:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            self._recover_stale_actions_conn(
+                conn,
+                DEFAULT_ACTION_LEASE_SECONDS,
+            )
             row = conn.execute(
                 """
                 SELECT id, robot, capability, params, reason, depends_on
@@ -253,13 +270,18 @@ class SqliteStateStore:
                 return None
 
             revision = self._next_revision_conn(conn, "actions")
+            timestamp = _now()
             cursor = conn.execute(
                 """
                 UPDATE actions
-                SET status = 'in_progress', updated_at = ?
+                SET status = 'in_progress',
+                    claimed_at = ?,
+                    claim_owner = ?,
+                    attempts = COALESCE(attempts, 0) + 1,
+                    updated_at = ?
                 WHERE id = ? AND status = 'pending'
                 """,
-                (_now(), row["id"]),
+                (timestamp, claim_owner, timestamp, row["id"]),
             )
             if cursor.rowcount != 1:
                 return None
@@ -270,6 +292,20 @@ class SqliteStateStore:
                 revision,
             )
             return _action_from_row(row)
+
+    def recover_stale_actions(
+        self,
+        max_age_s: float,
+        *,
+        claim_owner: str | None = None,
+    ) -> int:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            return self._recover_stale_actions_conn(
+                conn,
+                max_age_s,
+                claim_owner=claim_owner,
+            )
 
     def mark_action_completed(self, action: Action | dict[str, Any]) -> None:
         self._mark_action_status(action, "completed")
@@ -559,12 +595,19 @@ class SqliteStateStore:
                 result TEXT,
                 seq INTEGER,
                 created_at TEXT,
-                updated_at TEXT
+                updated_at TEXT,
+                claimed_at TEXT,
+                claim_owner TEXT,
+                attempts INTEGER DEFAULT 0
             )
             """
         )
+        self._ensure_action_claim_columns(conn)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_actions_status ON actions(status, seq)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_actions_status_claimed_at ON actions(status, claimed_at)"
         )
         conn.execute(
             """
@@ -698,9 +741,10 @@ class SqliteStateStore:
                     """
                     INSERT INTO actions(
                         id, robot, capability, params, reason, depends_on,
-                        status, result, seq, created_at, updated_at
+                        status, result, seq, created_at, updated_at,
+                        claimed_at, claim_owner, attempts
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         action.id,
@@ -714,6 +758,9 @@ class SqliteStateStore:
                         seq,
                         existing.get(action.id, timestamp),
                         timestamp,
+                        None,
+                        None,
+                        0,
                     ),
                 )
 
@@ -738,9 +785,10 @@ class SqliteStateStore:
                     """
                     INSERT INTO actions(
                         id, robot, capability, params, reason, depends_on,
-                        status, result, seq, created_at, updated_at
+                        status, result, seq, created_at, updated_at,
+                        claimed_at, claim_owner, attempts
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         parsed.id,
@@ -754,6 +802,9 @@ class SqliteStateStore:
                         self._next_action_seq_conn(conn),
                         timestamp,
                         timestamp,
+                        None,
+                        None,
+                        0,
                     ),
                 )
             else:
@@ -766,6 +817,8 @@ class SqliteStateStore:
                         reason = ?,
                         depends_on = ?,
                         status = ?,
+                        claimed_at = NULL,
+                        claim_owner = NULL,
                         updated_at = ?
                     WHERE id = ?
                     """,
@@ -786,6 +839,56 @@ class SqliteStateStore:
                 {"metadata": self._metadata("actions", revision)},
                 revision,
             )
+
+    def _ensure_action_claim_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(actions)").fetchall()
+        }
+        for name, definition in ACTION_CLAIM_COLUMNS.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE actions ADD COLUMN {name} {definition}")
+        conn.execute("UPDATE actions SET attempts = 0 WHERE attempts IS NULL")
+
+    def _recover_stale_actions_conn(
+        self,
+        conn: sqlite3.Connection,
+        max_age_s: float,
+        *,
+        claim_owner: str | None = None,
+    ) -> int:
+        if max_age_s < 0:
+            raise ValueError("max_age_s must be non-negative")
+        timestamp = _now()
+        cutoff = _seconds_ago(max_age_s)
+        owner_clause = ""
+        params: list[Any] = [timestamp, cutoff]
+        if claim_owner is not None:
+            owner_clause = " AND (claim_owner = ? OR claim_owner IS NULL)"
+            params.append(claim_owner)
+        cursor = conn.execute(
+            f"""
+            UPDATE actions
+            SET status = 'pending',
+                claimed_at = NULL,
+                claim_owner = NULL,
+                updated_at = ?
+            WHERE status = 'in_progress'
+              AND (claimed_at IS NULL OR claimed_at <= ?)
+              {owner_clause}
+            """,
+            params,
+        )
+        recovered = int(cursor.rowcount or 0)
+        if recovered:
+            revision = self._next_revision_conn(conn, "actions")
+            self._upsert_document_conn(
+                conn,
+                "actions",
+                {"metadata": self._metadata("actions", revision)},
+                revision,
+            )
+        return recovered
 
     def _replace_actions_with_revision(
         self,
@@ -1165,6 +1268,11 @@ def _json_loads(value: str | None, *, default: Any) -> Any:
 
 def _now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _seconds_ago(seconds: float) -> str:
+    value = datetime.now(UTC) - timedelta(seconds=seconds)
+    return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _render_log_file() -> str:

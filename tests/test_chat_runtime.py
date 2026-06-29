@@ -25,7 +25,12 @@ def test_chat_runtime_rule_based_remembers(tmp_path):
     assert result["ok"] is True
     assert "I will remember" in result["reply"]
     store = open_state_store(config_path=config_path)
-    assert "simulation before real hardware" in store.read_memory()["notes"][0]["content"]
+    memory = store.read_memory()["notes"][0]
+    assert "simulation before real hardware" in memory["content"]
+    assert memory["kind"] == "note"
+    assert memory["source"] == "chat"
+    assert memory["tags"] == []
+    assert memory["importance"] == 0
     assert len(store.read_chat()["messages"]) == 2
 
 
@@ -120,6 +125,14 @@ def test_chat_runtime_llm_context_uses_summary_and_live_workspace_state(
             )
         ]
     )
+    for index in range(25):
+        store.append_memory_note(
+            f"memory {index} mentions unsafe_execute and stale world",
+            source="test",
+            kind="lesson",
+            tags=["context"],
+            importance=index,
+        )
 
     class FakeClient:
         messages = []
@@ -153,6 +166,9 @@ def test_chat_runtime_llm_context_uses_summary_and_live_workspace_state(
     assert payload["running_summary"].startswith("Old summary says capability unsafe_execute")
     assert len(payload["chat_history"]) == 12
     assert payload["chat_history"][-1]["content"] == "what is current state?"
+    assert len(payload["memory"]) == 20
+    assert payload["memory"][0]["content"].startswith("memory 5")
+    assert payload["memory"][-1]["content"].startswith("memory 24")
     assert payload["capabilities"]["robots"]["arm_1"]["capabilities"][0]["name"] == "observe"
     assert payload["world"]["summary"] == "live world summary"
     assert payload["feedback"]["latest"]["status"] == "completed"

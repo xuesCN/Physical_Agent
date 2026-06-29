@@ -146,11 +146,37 @@ class MarkdownStateStore:
     def write_memory(self, notes: list[dict[str, Any]]) -> None:
         self.workspace.write_memory(notes)
 
-    def read_memory(self) -> dict[str, Any]:
-        return self.workspace.read_memory()
+    def read_memory(
+        self,
+        *,
+        kind: str | None = None,
+        source: str | None = None,
+        limit: int | None = None,
+        tags: list[str] | str | None = None,
+    ) -> dict[str, Any]:
+        return self.workspace.read_memory(
+            kind=kind,
+            source=source,
+            limit=limit,
+            tags=tags,
+        )
 
-    def append_memory_note(self, content: str, *, source: str = "chat") -> dict[str, Any]:
-        return self.workspace.append_memory_note(content, source=source)
+    def append_memory_note(
+        self,
+        content: str,
+        *,
+        source: str = "chat",
+        kind: str = "note",
+        tags: list[str] | str | None = None,
+        importance: int = 0,
+    ) -> dict[str, Any]:
+        return self.workspace.append_memory_note(
+            content,
+            source=source,
+            kind=kind,
+            tags=tags,
+            importance=importance,
+        )
 
     def append_log(self, message: str, *, actor: str | None = None) -> None:
         self.workspace.append_log(message, actor=actor)

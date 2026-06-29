@@ -7,7 +7,12 @@ from typing import Any
 
 from physical_agent.config import PhysicalAgentConfig
 from physical_agent.state.factory import open_state_store
-from physical_agent.state.sqlite import ACTION_CLAIM_COLUMNS, REQUIRED_TABLES, SqliteStateStore
+from physical_agent.state.sqlite import (
+    ACTION_CLAIM_COLUMNS,
+    MEMORY_NOTE_COLUMNS,
+    REQUIRED_TABLES,
+    SqliteStateStore,
+)
 
 
 def run_state_check(
@@ -32,6 +37,7 @@ def run_state_check(
         "sqlite_schema_complete": None,
         "sqlite_missing_tables": [],
         "sqlite_missing_action_columns": [],
+        "sqlite_missing_memory_columns": [],
     }
     if isinstance(workspace, SqliteStateStore):
         result.update(_sqlite_schema_status(workspace.db_path))
@@ -55,6 +61,7 @@ def _sqlite_schema_status(db_path: Path) -> dict[str, Any]:
             "sqlite_schema_complete": False,
             "sqlite_missing_tables": sorted(REQUIRED_TABLES),
             "sqlite_missing_action_columns": sorted(ACTION_CLAIM_COLUMNS),
+            "sqlite_missing_memory_columns": sorted(MEMORY_NOTE_COLUMNS),
         }
     try:
         with sqlite3.connect(db_path) as conn:
@@ -68,19 +75,30 @@ def _sqlite_schema_status(db_path: Path) -> dict[str, Any]:
                     str(row[1])
                     for row in conn.execute("PRAGMA table_info(actions)").fetchall()
                 }
+            memory_columns: set[str] = set()
+            if "memory_notes" in tables:
+                memory_columns = {
+                    str(row[1])
+                    for row in conn.execute("PRAGMA table_info(memory_notes)").fetchall()
+                }
     except sqlite3.Error:
         return {
             "sqlite_schema_complete": False,
             "sqlite_missing_tables": sorted(REQUIRED_TABLES),
             "sqlite_missing_action_columns": sorted(ACTION_CLAIM_COLUMNS),
+            "sqlite_missing_memory_columns": sorted(MEMORY_NOTE_COLUMNS),
         }
 
     missing_tables = sorted(REQUIRED_TABLES - tables)
     missing_action_columns = sorted(set(ACTION_CLAIM_COLUMNS) - action_columns)
+    missing_memory_columns = sorted(set(MEMORY_NOTE_COLUMNS) - memory_columns)
     return {
-        "sqlite_schema_complete": not missing_tables and not missing_action_columns,
+        "sqlite_schema_complete": not missing_tables
+        and not missing_action_columns
+        and not missing_memory_columns,
         "sqlite_missing_tables": missing_tables,
         "sqlite_missing_action_columns": missing_action_columns,
+        "sqlite_missing_memory_columns": missing_memory_columns,
     }
 
 

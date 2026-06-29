@@ -237,7 +237,17 @@ def test_markdown_to_sqlite_migration_preserves_readiness_state_and_audit(tmp_pa
         running_summary="readiness summary",
         compact=False,
     )
-    workspace.write_memory([{"content": "readiness memory", "source": "test"}])
+    workspace.write_memory(
+        [
+            {
+                "content": "readiness memory",
+                "source": "test",
+                "kind": "lesson",
+                "tags": ["readiness"],
+                "importance": 7,
+            }
+        ]
+    )
     workspace.append_log("readiness log", actor="test")
 
     migrate_result = CliRunner().invoke(
@@ -259,7 +269,11 @@ def test_markdown_to_sqlite_migration_preserves_readiness_state_and_audit(tmp_pa
     assert sqlite_store.read_feedback()["latest"]["action_id"] == "act_completed"
     assert sqlite_store.read_chat()["running_summary"] == "readiness summary"
     assert sqlite_store.read_chat()["messages"][0].content == "hello readiness"
-    assert sqlite_store.read_memory()["notes"][0]["content"] == "readiness memory"
+    memory = sqlite_store.read_memory()["notes"][0]
+    assert memory["content"] == "readiness memory"
+    assert memory["kind"] == "lesson"
+    assert memory["tags"] == ["readiness"]
+    assert memory["importance"] == 7
 
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     data["workspace"]["backend"] = "sqlite"
@@ -276,7 +290,11 @@ def test_markdown_to_sqlite_migration_preserves_readiness_state_and_audit(tmp_pa
     assert _read_json(audit_dir / "actions.json")["pending"][0]["id"] == "act_pending"
     assert _read_json(audit_dir / "feedback.json")["latest"]["action_id"] == "act_completed"
     assert _read_json(audit_dir / "chat.json")["running_summary"] == "readiness summary"
-    assert _read_json(audit_dir / "memory.json")["notes"][0]["content"] == "readiness memory"
+    audit_memory = _read_json(audit_dir / "memory.json")["notes"][0]
+    assert audit_memory["content"] == "readiness memory"
+    assert audit_memory["kind"] == "lesson"
+    assert audit_memory["tags"] == ["readiness"]
+    assert audit_memory["importance"] == 7
     assert _read_json(audit_dir / "log.json")["entries"][0]["message"] == "readiness log"
 
 
@@ -389,6 +407,15 @@ def test_state_check_reports_incomplete_legacy_sqlite_schema_without_migrating(t
     assert "Workspace initialized: yes" in result.output
     assert "SQLite schema complete: no" in result.output
     assert "claimed_at" in result.output
+    assert "kind" in result.output
+    assert "importance" in result.output
     with sqlite3.connect(db_path) as conn:
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(actions)").fetchall()}
-    assert "claimed_at" not in columns
+        action_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(actions)").fetchall()
+        }
+        memory_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(memory_notes)").fetchall()
+        }
+    assert "claimed_at" not in action_columns
+    assert "kind" not in memory_columns
+    assert "importance" not in memory_columns

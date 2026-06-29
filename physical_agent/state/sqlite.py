@@ -8,6 +8,11 @@ import sqlite3
 from typing import Any, Iterator
 
 from physical_agent.protocol.chat_summary import compact_chat_messages
+from physical_agent.protocol.memory import (
+    filter_memory_notes,
+    normalize_memory_note,
+    normalize_memory_tags,
+)
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, Observation
 from physical_agent.protocol.workspace import Workspace
 from physical_agent.state.audit import export_audit_documents, read_markdown_log_entries
@@ -52,6 +57,15 @@ ACTION_CLAIM_COLUMNS = {
     "claimed_at": "TEXT",
     "claim_owner": "TEXT",
     "attempts": "INTEGER DEFAULT 0",
+}
+
+MEMORY_NOTE_COLUMNS = {
+    "content": "TEXT",
+    "kind": "TEXT DEFAULT 'note'",
+    "source": "TEXT DEFAULT 'chat'",
+    "tags": "TEXT DEFAULT '[]'",
+    "importance": "INTEGER DEFAULT 0",
+    "created_at": "TEXT",
 }
 
 
@@ -455,17 +469,7 @@ class SqliteStateStore:
             revision = self._next_revision_conn(conn, "memory")
             conn.execute("DELETE FROM memory_notes")
             for note in notes:
-                conn.execute(
-                    """
-                    INSERT INTO memory_notes(content, source, created_at)
-                    VALUES (?, ?, ?)
-                    """,
-                    (
-                        str(note.get("content") or ""),
-                        str(note.get("source") or "chat"),
-                        note.get("created_at"),
-                    ),
-                )
+                self._insert_memory_note_conn(conn, note)
             self._upsert_document_conn(
                 conn,
                 "memory",
@@ -473,43 +477,57 @@ class SqliteStateStore:
                 revision,
             )
 
-    def read_memory(self) -> dict[str, Any]:
+    def read_memory(
+        self,
+        *,
+        kind: str | None = None,
+        source: str | None = None,
+        limit: int | None = None,
+        tags: list[str] | str | None = None,
+    ) -> dict[str, Any]:
         with self._connect() as conn:
             metadata = self._read_metadata_conn(conn, "memory")
             rows = conn.execute(
                 """
-                SELECT content, source, created_at
+                SELECT content, kind, source, tags, importance, created_at
                 FROM memory_notes
                 ORDER BY id
                 """
             ).fetchall()
+        notes = [_memory_note_from_row(row) for row in rows]
         return {
             "metadata": metadata,
-            "notes": [
-                {
-                    key: value
-                    for key, value in {
-                        "content": row["content"],
-                        "source": row["source"],
-                        "created_at": row["created_at"],
-                    }.items()
-                    if value is not None
-                }
-                for row in rows
-            ],
+            "notes": filter_memory_notes(
+                notes,
+                kind=kind,
+                source=source,
+                limit=limit,
+                tags=tags,
+            ),
         }
 
-    def append_memory_note(self, content: str, *, source: str = "chat") -> dict[str, Any]:
-        note = {"content": content, "source": source, "created_at": _now()}
+    def append_memory_note(
+        self,
+        content: str,
+        *,
+        source: str = "chat",
+        kind: str = "note",
+        tags: list[str] | str | None = None,
+        importance: int = 0,
+    ) -> dict[str, Any]:
+        note = normalize_memory_note(
+            {
+                "content": content,
+                "source": source,
+                "kind": kind,
+                "tags": tags,
+                "importance": importance,
+                "created_at": _now(),
+            }
+        )
         with self._connect() as conn:
             revision = self._next_revision_conn(conn, "memory")
-            conn.execute(
-                """
-                INSERT INTO memory_notes(content, source, created_at)
-                VALUES (?, ?, ?)
-                """,
-                (note["content"], note["source"], note["created_at"]),
-            )
+            self._insert_memory_note_conn(conn, note)
             self._upsert_document_conn(
                 conn,
                 "memory",
@@ -635,10 +653,17 @@ class SqliteStateStore:
             CREATE TABLE IF NOT EXISTS memory_notes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 content TEXT,
+                kind TEXT DEFAULT 'note',
                 source TEXT,
+                tags TEXT DEFAULT '[]',
+                importance INTEGER DEFAULT 0,
                 created_at TEXT
             )
             """
+        )
+        self._ensure_memory_note_columns(conn)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memory_notes_kind_source ON memory_notes(kind, source, id)"
         )
 
     def _unlink_database_files(self) -> None:
@@ -850,6 +875,44 @@ class SqliteStateStore:
                 conn.execute(f"ALTER TABLE actions ADD COLUMN {name} {definition}")
         conn.execute("UPDATE actions SET attempts = 0 WHERE attempts IS NULL")
 
+    def _ensure_memory_note_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(memory_notes)").fetchall()
+        }
+        for name, definition in MEMORY_NOTE_COLUMNS.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE memory_notes ADD COLUMN {name} {definition}")
+        conn.execute(
+            "UPDATE memory_notes SET kind = 'note' WHERE kind IS NULL OR TRIM(kind) = ''"
+        )
+        conn.execute(
+            "UPDATE memory_notes SET source = 'chat' WHERE source IS NULL OR TRIM(source) = ''"
+        )
+        conn.execute("UPDATE memory_notes SET tags = '[]' WHERE tags IS NULL OR tags = ''")
+        conn.execute("UPDATE memory_notes SET importance = 0 WHERE importance IS NULL")
+
+    def _insert_memory_note_conn(
+        self,
+        conn: sqlite3.Connection,
+        note: dict[str, Any],
+    ) -> None:
+        normalized = normalize_memory_note(note)
+        conn.execute(
+            """
+            INSERT INTO memory_notes(content, kind, source, tags, importance, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized["content"],
+                normalized["kind"],
+                normalized["source"],
+                _json_dumps(normalized["tags"]),
+                normalized["importance"],
+                normalized["created_at"],
+            ),
+        )
+
     def _recover_stale_actions_conn(
         self,
         conn: sqlite3.Connection,
@@ -952,17 +1015,7 @@ class SqliteStateStore:
         with self._connect() as conn:
             conn.execute("DELETE FROM memory_notes")
             for note in notes:
-                conn.execute(
-                    """
-                    INSERT INTO memory_notes(content, source, created_at)
-                    VALUES (?, ?, ?)
-                    """,
-                    (
-                        str(note.get("content") or ""),
-                        str(note.get("source") or "chat"),
-                        note.get("created_at"),
-                    ),
-                )
+                self._insert_memory_note_conn(conn, note)
             self._upsert_document_conn(
                 conn,
                 "memory",
@@ -1205,6 +1258,20 @@ def _action_from_row(row: sqlite3.Row) -> Action:
         params=_json_loads(row["params"], default={}),
         reason=row["reason"],
         depends_on=_json_loads(row["depends_on"], default=[]),
+    )
+
+
+def _memory_note_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    tags = _json_loads(row["tags"], default=[])
+    return normalize_memory_note(
+        {
+            "content": row["content"],
+            "kind": row["kind"],
+            "source": row["source"],
+            "tags": normalize_memory_tags(tags),
+            "importance": row["importance"],
+            "created_at": row["created_at"],
+        }
     )
 
 

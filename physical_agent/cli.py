@@ -102,7 +102,11 @@ def state_check(
             "SQLite schema complete: "
             f"{'yes' if sqlite_schema_complete else 'no'}"
         )
-        missing = result["sqlite_missing_tables"] + result["sqlite_missing_action_columns"]
+        missing = (
+            result["sqlite_missing_tables"]
+            + result["sqlite_missing_action_columns"]
+            + result["sqlite_missing_memory_columns"]
+        )
         if missing:
             typer.echo(f"SQLite missing: {', '.join(missing)}")
     typer.echo(f"Audit directory: {result['audit_dir']}")

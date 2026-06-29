@@ -97,9 +97,24 @@ class StateStore(Protocol):
 
     def write_memory(self, notes: list[dict[str, Any]]) -> None: ...
 
-    def read_memory(self) -> dict[str, Any]: ...
+    def read_memory(
+        self,
+        *,
+        kind: str | None = None,
+        source: str | None = None,
+        limit: int | None = None,
+        tags: list[str] | str | None = None,
+    ) -> dict[str, Any]: ...
 
-    def append_memory_note(self, content: str, *, source: str = "chat") -> dict[str, Any]: ...
+    def append_memory_note(
+        self,
+        content: str,
+        *,
+        source: str = "chat",
+        kind: str = "note",
+        tags: list[str] | str | None = None,
+        importance: int = 0,
+    ) -> dict[str, Any]: ...
 
     def append_log(self, message: str, *, actor: str | None = None) -> None: ...
 

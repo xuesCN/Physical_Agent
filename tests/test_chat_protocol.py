@@ -25,9 +25,22 @@ def test_chat_plan_memory_render_parse_roundtrip():
     assert parsed_plan["plan"].summary == "hello back"
     assert parsed_plan["plan"].steps == ["read chat"]
 
-    memory = render_memory([{"content": "prefers cautious execution", "source": "test"}])
+    memory = render_memory(
+        [
+            {
+                "content": "prefers cautious execution",
+                "source": "test",
+                "kind": "preference",
+                "tags": ["safety"],
+                "importance": 2,
+            }
+        ]
+    )
     parsed_memory = parse_memory(memory)
     assert parsed_memory["notes"][0]["content"] == "prefers cautious execution"
+    assert parsed_memory["notes"][0]["kind"] == "preference"
+    assert parsed_memory["notes"][0]["tags"] == ["safety"]
+    assert parsed_memory["notes"][0]["importance"] == 2
 
 
 def test_workspace_chat_helpers(tmp_path):
@@ -35,11 +48,19 @@ def test_workspace_chat_helpers(tmp_path):
     workspace.initialize()
     workspace.append_chat_message("user", "remember that I prefer simulation first")
     workspace.append_chat_message("assistant", "Noted.")
-    workspace.append_memory_note("User prefers simulation first.")
+    workspace.append_memory_note(
+        "User prefers simulation first.",
+        kind="preference",
+        tags=["simulation"],
+        importance=1,
+    )
     workspace.write_plan({"status": "answered", "intent": "remember", "summary": "Noted."})
 
     assert workspace.read_chat()["messages"][0].role == "user"
     assert workspace.read_memory()["notes"][0]["content"] == "User prefers simulation first."
+    assert workspace.read_memory(kind="preference", tags=["simulation"])["notes"][0][
+        "importance"
+    ] == 1
     assert workspace.read_plan()["plan"].intent == "remember"
 
 

@@ -139,12 +139,38 @@ def test_sqlite_state_store_protocol_roundtrip(tmp_path):
     store.write_plan(ChatPlan(status="answered", intent="chat", summary="done"))
     assert store.read_plan()["plan"].summary == "done"
 
-    store.write_memory([{"content": "prefers simulation", "source": "test"}])
-    note = store.append_memory_note("likes short plans", source="chat")
+    store.write_memory(
+        [
+            {
+                "content": "prefers simulation",
+                "source": "test",
+                "kind": "preference",
+                "tags": ["safety", "planning"],
+                "importance": 3,
+            }
+        ]
+    )
+    note = store.append_memory_note(
+        "likes short plans",
+        source="chat",
+        kind="preference",
+        tags=["planning"],
+        importance=2,
+    )
     assert note["created_at"]
     assert [item["content"] for item in store.read_memory()["notes"]] == [
         "prefers simulation",
         "likes short plans",
+    ]
+    assert store.read_memory()["notes"][0]["kind"] == "preference"
+    assert store.read_memory()["notes"][0]["tags"] == ["safety", "planning"]
+    assert store.read_memory()["notes"][0]["importance"] == 3
+    assert [item["content"] for item in store.read_memory(tags=["planning"])["notes"]] == [
+        "prefers simulation",
+        "likes short plans",
+    ]
+    assert [item["content"] for item in store.read_memory(source="chat", limit=1)["notes"]] == [
+        "likes short plans"
     ]
 
     store.append_log("hello", actor="test")
@@ -279,6 +305,62 @@ def test_sqlite_initialize_migrates_old_action_claim_schema(tmp_path):
     assert row[3] == 1
 
 
+def test_sqlite_initialize_migrates_old_memory_schema(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    db_path = workspace / "state.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE memory_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT,
+                source TEXT,
+                created_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO memory_notes(content, source, created_at)
+            VALUES (?, ?, ?)
+            """,
+            ("legacy memory", "chat", "2026-01-01T00:00:00Z"),
+        )
+
+    store = SqliteStateStore(workspace)
+    store.initialize()
+
+    with sqlite3.connect(store.db_path) as conn:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(memory_notes)").fetchall()
+        }
+        row = conn.execute(
+            """
+            SELECT content, kind, source, tags, importance, created_at
+            FROM memory_notes
+            """
+        ).fetchone()
+    assert {"kind", "tags", "importance"}.issubset(columns)
+    assert row == (
+        "legacy memory",
+        "note",
+        "chat",
+        "[]",
+        0,
+        "2026-01-01T00:00:00Z",
+    )
+    assert store.read_memory()["notes"][0] == {
+        "content": "legacy memory",
+        "kind": "note",
+        "source": "chat",
+        "tags": [],
+        "importance": 0,
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+
+
 def test_sqlite_claim_next_ready_action_is_not_duplicated(tmp_path):
     store = SqliteStateStore(tmp_path / "workspace")
     store.initialize()
@@ -388,7 +470,13 @@ def test_markdown_state_store_export_human_view(tmp_path):
         running_summary="markdown summary",
         compact=False,
     )
-    store.append_memory_note("markdown memory", source="test")
+    store.append_memory_note(
+        "markdown memory",
+        source="test",
+        kind="lesson",
+        tags=["audit", "markdown"],
+        importance=4,
+    )
     store.append_log("markdown log", actor="test")
 
     result = store.export_human_view()
@@ -399,7 +487,11 @@ def test_markdown_state_store_export_human_view(tmp_path):
     assert _read_json(audit_dir / "task.json")["task"] == "Export the markdown state"
     assert _read_json(audit_dir / "actions.json")["pending"][0]["id"] == "act_md"
     assert _read_json(audit_dir / "chat.json")["running_summary"] == "markdown summary"
-    assert _read_json(audit_dir / "memory.json")["notes"][0]["content"] == "markdown memory"
+    memory = _read_json(audit_dir / "memory.json")["notes"][0]
+    assert memory["content"] == "markdown memory"
+    assert memory["kind"] == "lesson"
+    assert memory["tags"] == ["audit", "markdown"]
+    assert memory["importance"] == 4
     assert _read_json(audit_dir / "log.json")["entries"][0]["message"] == "markdown log"
     assert (audit_dir / "SAFETY.md").read_text(encoding="utf-8") == store.file(
         "safety"
@@ -416,7 +508,17 @@ def test_sqlite_state_store_export_human_view_reads_sqlite_state(tmp_path):
         running_summary="sqlite summary",
         compact=False,
     )
-    store.write_memory([{"content": "db memory", "source": "test"}])
+    store.write_memory(
+        [
+            {
+                "content": "db memory",
+                "source": "test",
+                "kind": "lesson",
+                "tags": ["audit", "sqlite"],
+                "importance": 5,
+            }
+        ]
+    )
     store.append_log("db log", actor="test")
     store.file("actions").write_text("tampered markdown action board", encoding="utf-8")
     store.file("log").write_text("tampered markdown log", encoding="utf-8")
@@ -428,7 +530,11 @@ def test_sqlite_state_store_export_human_view_reads_sqlite_state(tmp_path):
     assert _read_json(audit_dir / "task.json")["task"] == "Export the sqlite state"
     assert _read_json(audit_dir / "actions.json")["pending"][0]["id"] == "act_db"
     assert _read_json(audit_dir / "chat.json")["running_summary"] == "sqlite summary"
-    assert _read_json(audit_dir / "memory.json")["notes"][0]["content"] == "db memory"
+    memory = _read_json(audit_dir / "memory.json")["notes"][0]
+    assert memory["content"] == "db memory"
+    assert memory["kind"] == "lesson"
+    assert memory["tags"] == ["audit", "sqlite"]
+    assert memory["importance"] == 5
     log_entries = _read_json(audit_dir / "log.json")["entries"]
     assert log_entries[0]["message"] == "db log"
     assert "tampered markdown log" not in (audit_dir / "log.json").read_text(encoding="utf-8")
@@ -470,7 +576,11 @@ def test_migrate_markdown_to_sqlite_cli_does_not_switch_backend(tmp_path):
     assert [action.id for action in store.read_actions()["completed"]] == ["act_002"]
     assert [action.id for action in store.read_actions()["cancelled"]] == ["act_003"]
     assert store.read_chat()["running_summary"] == "older context"
-    assert store.read_memory()["notes"][0]["content"] == "remember this"
+    migrated_memory = store.read_memory()["notes"][0]
+    assert migrated_memory["content"] == "remember this"
+    assert migrated_memory["kind"] == "note"
+    assert migrated_memory["tags"] == []
+    assert migrated_memory["importance"] == 0
 
     with sqlite3.connect(store.db_path) as conn:
         log_count = conn.execute("SELECT count(*) FROM log_entries").fetchone()[0]
@@ -492,7 +602,13 @@ def test_migrated_sqlite_export_contains_action_board_chat_memory_and_log(tmp_pa
         running_summary="migrated summary",
         compact=False,
     )
-    workspace.append_memory_note("migrated memory", source="test")
+    workspace.append_memory_note(
+        "migrated memory",
+        source="test",
+        kind="lesson",
+        tags=["migration"],
+        importance=6,
+    )
     workspace.append_log("migrated log", actor="test")
 
     migrate_result = CliRunner().invoke(
@@ -517,7 +633,11 @@ def test_migrated_sqlite_export_contains_action_board_chat_memory_and_log(tmp_pa
     assert [action["id"] for action in actions["completed"]] == ["act_completed"]
     assert [action["id"] for action in actions["cancelled"]] == ["act_cancelled"]
     assert _read_json(audit_dir / "chat.json")["running_summary"] == "migrated summary"
-    assert _read_json(audit_dir / "memory.json")["notes"][0]["content"] == "migrated memory"
+    memory = _read_json(audit_dir / "memory.json")["notes"][0]
+    assert memory["content"] == "migrated memory"
+    assert memory["kind"] == "lesson"
+    assert memory["tags"] == ["migration"]
+    assert memory["importance"] == 6
     assert _read_json(audit_dir / "log.json")["entries"][0]["message"] == "migrated log"
 
 

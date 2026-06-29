@@ -7,6 +7,7 @@ from physical_agent.protocol.markdown import (
     extract_yaml_block_after_heading,
     parse_front_matter,
 )
+from physical_agent.protocol.memory import normalize_memory_notes
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, Observation
 
 
@@ -112,7 +113,8 @@ def parse_plan(text: str) -> dict[str, Any]:
 
 def parse_memory(text: str) -> dict[str, Any]:
     doc = parse_front_matter(text)
+    notes = extract_yaml_block_after_heading(doc.body, "Notes", level=2) or []
     return {
         "metadata": doc.metadata,
-        "notes": extract_yaml_block_after_heading(doc.body, "Notes", level=2) or [],
+        "notes": normalize_memory_notes(notes),
     }

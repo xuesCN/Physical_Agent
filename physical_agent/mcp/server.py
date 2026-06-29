@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from physical_agent.agent.runtime import AgentRuntime
 from physical_agent.config import DEFAULT_CONFIG_NAME
 from physical_agent.protocol.schemas import Action
 from physical_agent.state import StateStore, open_state_store
@@ -21,6 +20,8 @@ class PhysicalAgentMCP:
         self.config_path = Path(config_path).resolve()
 
     async def submit_task(self, task: str) -> dict[str, Any]:
+        from physical_agent.agent.runtime import AgentRuntime
+
         runtime = AgentRuntime(self.config_path)
         await runtime.setup()
         workspace = runtime._workspace()

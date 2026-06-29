@@ -6,6 +6,7 @@ from typing import Any
 
 from physical_agent.protocol.markdown import parse_front_matter, render_front_matter
 from physical_agent.protocol.chat_summary import compact_chat_messages
+from physical_agent.protocol.memory import filter_memory_notes, normalize_memory_note
 from physical_agent.protocol.parsers import (
     parse_actions,
     parse_capabilities,
@@ -242,13 +243,45 @@ class Workspace:
             encoding="utf-8",
         )
 
-    def read_memory(self) -> dict[str, Any]:
-        return parse_memory(self.file("memory").read_text(encoding="utf-8"))
+    def read_memory(
+        self,
+        *,
+        kind: str | None = None,
+        source: str | None = None,
+        limit: int | None = None,
+        tags: list[str] | str | None = None,
+    ) -> dict[str, Any]:
+        payload = parse_memory(self.file("memory").read_text(encoding="utf-8"))
+        payload["notes"] = filter_memory_notes(
+            payload.get("notes", []),
+            kind=kind,
+            source=source,
+            limit=limit,
+            tags=tags,
+        )
+        return payload
 
-    def append_memory_note(self, content: str, *, source: str = "chat") -> dict[str, Any]:
+    def append_memory_note(
+        self,
+        content: str,
+        *,
+        source: str = "chat",
+        kind: str = "note",
+        tags: list[str] | str | None = None,
+        importance: int = 0,
+    ) -> dict[str, Any]:
         notes = list(self.read_memory()["notes"])
         timestamp = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-        note = {"content": content, "source": source, "created_at": timestamp}
+        note = normalize_memory_note(
+            {
+                "content": content,
+                "source": source,
+                "kind": kind,
+                "tags": tags,
+                "importance": importance,
+                "created_at": timestamp,
+            }
+        )
         notes.append(note)
         self.write_memory(notes)
         return note

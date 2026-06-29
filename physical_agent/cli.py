@@ -19,6 +19,7 @@ from physical_agent.gui import run_gui
 from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
 from physical_agent.quickstart import setup_project
 from physical_agent.state import open_state_store
+from physical_agent.state.check import run_state_check, state_check_ok
 from physical_agent.state.sqlite import migrate_markdown_workspace_to_sqlite
 from physical_agent.watch.runtime import WatchRuntime
 
@@ -77,6 +78,40 @@ def doctor(
         marker = "OK" if check.ok else "FAIL"
         typer.echo(f"[{marker}] {check.name}: {check.message}")
     if not doctor_ok(checks):
+        raise typer.Exit(code=1)
+
+
+@app.command("state-check")
+def state_check(
+    config: Path = typer.Option(Path(DEFAULT_CONFIG_NAME), "--config", "-c", help="Config path."),
+) -> None:
+    cfg = load_config(config)
+    result = run_state_check(cfg, base_dir=config.resolve().parent)
+
+    typer.echo(f"Backend: {result['backend']}")
+    typer.echo(f"Workspace: {result['workspace_path']}")
+    typer.echo(
+        "Workspace initialized: "
+        f"{'yes' if result['workspace_initialized'] else 'no'}"
+    )
+    sqlite_schema_complete = result["sqlite_schema_complete"]
+    if sqlite_schema_complete is None:
+        typer.echo("SQLite schema complete: n/a")
+    else:
+        typer.echo(
+            "SQLite schema complete: "
+            f"{'yes' if sqlite_schema_complete else 'no'}"
+        )
+        missing = result["sqlite_missing_tables"] + result["sqlite_missing_action_columns"]
+        if missing:
+            typer.echo(f"SQLite missing: {', '.join(missing)}")
+    typer.echo(f"Audit directory: {result['audit_dir']}")
+    typer.echo(
+        "Audit export writable: "
+        f"{'yes' if result['audit_export_writable'] else 'no'}"
+    )
+
+    if not state_check_ok(result):
         raise typer.Exit(code=1)
 
 

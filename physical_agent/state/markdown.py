@@ -67,6 +67,31 @@ class MarkdownStateStore:
     def read_actions(self) -> dict[str, Any]:
         return self.workspace.read_actions()
 
+    def append_pending_action(self, action: Action | dict[str, Any]) -> Action:
+        parsed = action if isinstance(action, Action) else Action.model_validate(action)
+        board = self.read_actions()
+        self.write_actions(
+            board["pending"] + [parsed],
+            board["completed"],
+            board["cancelled"],
+        )
+        return parsed
+
+    def claim_next_ready_action(self) -> Action | None:
+        board = self.read_actions()
+        pending = list(board["pending"])
+        if not pending:
+            return None
+        action = pending.pop(0)
+        self.write_actions(pending, board["completed"], board["cancelled"])
+        return action
+
+    def mark_action_completed(self, action: Action | dict[str, Any]) -> None:
+        self._move_action_to_terminal_status(action, "completed")
+
+    def mark_action_cancelled(self, action: Action | dict[str, Any]) -> None:
+        self._move_action_to_terminal_status(action, "cancelled")
+
     def write_feedback(
         self,
         latest: dict[str, Any] | None = None,
@@ -141,3 +166,21 @@ class MarkdownStateStore:
             safety_source=self.file("safety"),
             out_dir=out_dir,
         )
+
+    def _move_action_to_terminal_status(
+        self,
+        action: Action | dict[str, Any],
+        status: str,
+    ) -> None:
+        parsed = action if isinstance(action, Action) else Action.model_validate(action)
+        board = self.read_actions()
+        pending = [item for item in board["pending"] if item.id != parsed.id]
+        completed = [item for item in board["completed"] if item.id != parsed.id]
+        cancelled = [item for item in board["cancelled"] if item.id != parsed.id]
+        if status == "completed":
+            completed.append(parsed)
+        elif status == "cancelled":
+            cancelled.append(parsed)
+        else:
+            raise ValueError(f"Unsupported action status: {status}")
+        self.write_actions(pending, completed, cancelled)

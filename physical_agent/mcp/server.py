@@ -10,7 +10,7 @@ from physical_agent.state import StateStore, open_state_store
 
 
 class PhysicalAgentMCP:
-    """Lightweight MCP-shaped facade over the Markdown workspace.
+    """Lightweight MCP-shaped facade over the configured workspace state store.
 
     The v1 package keeps this dependency-free so MCP support does not become
     part of the critical watch/agent loop. A future adapter can expose these
@@ -41,12 +41,8 @@ class PhysicalAgentMCP:
             return {"ok": False, "message": message, "actions": []}
 
         actions = runtime._renumber_actions(actions, workspace)
-        board = workspace.read_actions()
-        workspace.write_actions(
-            board["pending"] + actions,
-            board["completed"],
-            board["cancelled"],
-        )
+        for action in actions:
+            workspace.append_pending_action(action)
         workspace.append_log(
             f"MCP submitted task `{task}` as {len(actions)} pending action(s): "
             + ", ".join(f"`{action.id}`" for action in actions),
@@ -54,7 +50,7 @@ class PhysicalAgentMCP:
         )
         return {
             "ok": True,
-            "message": "Actions proposed in Markdown workspace; watch must validate before execution.",
+            "message": "Actions proposed in the action board; watch must validate before execution.",
             "actions": actions,
             "feedback": [],
         }
@@ -75,23 +71,20 @@ class PhysicalAgentMCP:
         """Submit an action intent without executing hardware.
 
         Agents SDK or MCP tool callers should use this method for tool calling.
-        It only appends to ACTIONS.md; watch remains the only component that can
-        validate and execute pending actions.
+        It only appends to the action board; watch remains the only component
+        that can validate and execute pending actions.
         """
 
         workspace = self._workspace()
-        actions = workspace.read_actions()
-        pending = actions["pending"]
         parsed = Action.model_validate(action)
-        pending.append(parsed)
-        workspace.write_actions(pending, actions["completed"], actions["cancelled"])
+        workspace.append_pending_action(parsed)
         workspace.append_log(
             f"MCP proposed action `{parsed.id}`.",
             actor="mcp",
         )
         return {
             "ok": True,
-            "message": "Action proposed in Markdown workspace; watch must validate before execution.",
+            "message": "Action proposed in the action board; watch must validate before execution.",
             "action_id": parsed.id,
         }
 
@@ -113,7 +106,7 @@ class PhysicalAgentMCP:
                 "name": "physical_agent_submit_task",
                 "strict": True,
                 "description": (
-                    "Convert a human task into proposed actions in ACTIONS.md. "
+                    "Convert a human task into proposed actions in the action board. "
                     "Does not execute hardware; watch performs safety validation."
                 ),
                 "parameters": {
@@ -128,7 +121,7 @@ class PhysicalAgentMCP:
                 "name": "physical_agent_propose_action",
                 "strict": True,
                 "description": (
-                    "Append one structured action intent to ACTIONS.md. "
+                    "Append one structured action intent to the action board. "
                     "Does not execute hardware; watch performs safety validation."
                 ),
                 "parameters": {
@@ -150,7 +143,7 @@ class PhysicalAgentMCP:
                 "name": "physical_agent_get_state",
                 "strict": True,
                 "description": (
-                    "Read current Markdown workspace state for planning context. "
+                    "Read current workspace state for planning context. "
                     "Does not execute hardware."
                 ),
                 "parameters": {

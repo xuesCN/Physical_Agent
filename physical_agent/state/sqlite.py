@@ -200,6 +200,83 @@ class SqliteStateStore:
                 "cancelled": self._read_actions_by_status(conn, "cancelled"),
             }
 
+    def append_pending_action(self, action: Action | dict[str, Any]) -> Action:
+        parsed = _coerce_action(action)
+        timestamp = _now()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            revision = self._next_revision_conn(conn, "actions")
+            seq = self._next_action_seq_conn(conn)
+            conn.execute(
+                """
+                INSERT INTO actions(
+                    id, robot, capability, params, reason, depends_on,
+                    status, result, seq, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    parsed.id,
+                    parsed.robot,
+                    parsed.capability,
+                    _json_dumps(parsed.params),
+                    parsed.reason,
+                    _json_dumps(parsed.depends_on),
+                    "pending",
+                    _json_dumps({}),
+                    seq,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            self._upsert_document_conn(
+                conn,
+                "actions",
+                {"metadata": self._metadata("actions", revision)},
+                revision,
+            )
+        return parsed
+
+    def claim_next_ready_action(self) -> Action | None:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT id, robot, capability, params, reason, depends_on
+                FROM actions
+                WHERE status = 'pending'
+                ORDER BY seq, id
+                LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return None
+
+            revision = self._next_revision_conn(conn, "actions")
+            cursor = conn.execute(
+                """
+                UPDATE actions
+                SET status = 'in_progress', updated_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (_now(), row["id"]),
+            )
+            if cursor.rowcount != 1:
+                return None
+            self._upsert_document_conn(
+                conn,
+                "actions",
+                {"metadata": self._metadata("actions", revision)},
+                revision,
+            )
+            return _action_from_row(row)
+
+    def mark_action_completed(self, action: Action | dict[str, Any]) -> None:
+        self._mark_action_status(action, "completed")
+
+    def mark_action_cancelled(self, action: Action | dict[str, Any]) -> None:
+        self._mark_action_status(action, "cancelled")
+
     def write_feedback(
         self,
         latest: dict[str, Any] | None = None,
@@ -640,6 +717,76 @@ class SqliteStateStore:
                     ),
                 )
 
+    def _next_action_seq_conn(self, conn: sqlite3.Connection) -> int:
+        row = conn.execute("SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM actions").fetchone()
+        return int(row["next_seq"] or 1)
+
+    def _mark_action_status(self, action: Action | dict[str, Any], status: str) -> None:
+        if status not in {"completed", "cancelled"}:
+            raise ValueError(f"Unsupported action status: {status}")
+        parsed = _coerce_action(action)
+        timestamp = _now()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            revision = self._next_revision_conn(conn, "actions")
+            existing = conn.execute(
+                "SELECT seq, created_at FROM actions WHERE id = ?",
+                (parsed.id,),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO actions(
+                        id, robot, capability, params, reason, depends_on,
+                        status, result, seq, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        parsed.id,
+                        parsed.robot,
+                        parsed.capability,
+                        _json_dumps(parsed.params),
+                        parsed.reason,
+                        _json_dumps(parsed.depends_on),
+                        status,
+                        _json_dumps({}),
+                        self._next_action_seq_conn(conn),
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE actions
+                    SET robot = ?,
+                        capability = ?,
+                        params = ?,
+                        reason = ?,
+                        depends_on = ?,
+                        status = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        parsed.robot,
+                        parsed.capability,
+                        _json_dumps(parsed.params),
+                        parsed.reason,
+                        _json_dumps(parsed.depends_on),
+                        status,
+                        timestamp,
+                        parsed.id,
+                    ),
+                )
+            self._upsert_document_conn(
+                conn,
+                "actions",
+                {"metadata": self._metadata("actions", revision)},
+                revision,
+            )
+
     def _replace_actions_with_revision(
         self,
         pending: list[Action | dict[str, Any]],
@@ -783,17 +930,7 @@ class SqliteStateStore:
             """,
             (status,),
         ).fetchall()
-        return [
-            Action(
-                id=str(row["id"]),
-                robot=str(row["robot"]),
-                capability=str(row["capability"]),
-                params=_json_loads(row["params"], default={}),
-                reason=row["reason"],
-                depends_on=_json_loads(row["depends_on"], default=[]),
-            )
-            for row in rows
-        ]
+        return [_action_from_row(row) for row in rows]
 
     def _read_document(self, name: str) -> dict[str, Any]:
         with self._connect() as conn:
@@ -951,6 +1088,21 @@ def migrate_markdown_workspace_to_sqlite(
         "memory_notes": len(memory["notes"]),
         "log_entries": len(log_entries),
     }
+
+
+def _coerce_action(value: Action | dict[str, Any]) -> Action:
+    return value if isinstance(value, Action) else Action.model_validate(value)
+
+
+def _action_from_row(row: sqlite3.Row) -> Action:
+    return Action(
+        id=str(row["id"]),
+        robot=str(row["robot"]),
+        capability=str(row["capability"]),
+        params=_json_loads(row["params"], default={}),
+        reason=row["reason"],
+        depends_on=_json_loads(row["depends_on"], default=[]),
+    )
 
 
 def _coerce_observation(value: Observation | dict[str, Any]) -> Observation:

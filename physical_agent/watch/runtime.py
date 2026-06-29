@@ -80,22 +80,24 @@ class WatchRuntime:
             await self.setup()
         workspace = self._workspace()
         actions_doc = workspace.read_actions()
-        pending: list[Action] = actions_doc["pending"]
-        completed: list[Action] = actions_doc["completed"]
-        cancelled: list[Action] = actions_doc["cancelled"]
-
-        completed_ids = {action.id for action in completed}
-        executed_ids = {action.id for action in completed + cancelled}
-        for item in workspace.read_feedback().get("history", []):
-            action_id = item.get("action_id")
-            if action_id:
-                executed_ids.add(str(action_id))
         safety_rules = workspace.read_safety()["rules"]
         executed_count = 0
+        initial_pending_count = len(actions_doc["pending"])
 
-        index = 0
-        while index < len(pending):
-            action = pending[index]
+        for _ in range(initial_pending_count):
+            action = workspace.claim_next_ready_action()
+            if action is None:
+                break
+            latest_actions = workspace.read_actions()
+            completed_ids = {item.id for item in latest_actions["completed"]}
+            executed_ids = {
+                item.id
+                for item in latest_actions["completed"] + latest_actions["cancelled"]
+            }
+            for item in workspace.read_feedback().get("history", []):
+                action_id = item.get("action_id")
+                if action_id:
+                    executed_ids.add(str(action_id))
             gate = SafetyGate(
                 robots=self.profiles,
                 safety_rules=safety_rules,
@@ -105,25 +107,18 @@ class WatchRuntime:
             decision = gate.validate(action)
             if not decision.ok:
                 result = ActionResult(status="failed", message=decision.message)
-                cancelled.append(action)
-                pending.pop(index)
-                executed_ids.add(action.id)
+                workspace.mark_action_cancelled(action)
                 await self._record_action_result(action, result)
-                workspace.write_actions(pending, completed, cancelled)
                 continue
 
             loaded = self.loaded_drivers[action.robot]
             result = await loaded.driver.execute(action)
             if result.status == "completed":
-                completed.append(action)
-                completed_ids.add(action.id)
+                workspace.mark_action_completed(action)
             else:
-                cancelled.append(action)
-            pending.pop(index)
-            executed_ids.add(action.id)
+                workspace.mark_action_cancelled(action)
             executed_count += 1
             await self._record_action_result(action, result)
-            workspace.write_actions(pending, completed, cancelled)
             await self.update_world()
 
         if executed_count == 0:

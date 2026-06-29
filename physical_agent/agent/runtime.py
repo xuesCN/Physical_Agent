@@ -55,7 +55,8 @@ class AgentRuntime:
             return {"ok": False, "message": message, "actions": []}
         actions = self._renumber_actions(actions, workspace)
 
-        workspace.write_actions(actions, [], [])
+        for action in actions:
+            workspace.append_pending_action(action)
         workspace.append_log(
             f"`physical-agent run` submitted {len(actions)} action(s): "
             + ", ".join(f"`{action.id}`" for action in actions),

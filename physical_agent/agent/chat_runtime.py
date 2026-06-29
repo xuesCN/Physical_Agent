@@ -691,7 +691,8 @@ class ChatRuntime:
                 current_index=index,
             )
             actions.append(Action.model_validate(item))
-        workspace.write_actions(board["pending"] + actions, board["completed"], board["cancelled"])
+        for action in actions:
+            workspace.append_pending_action(action)
         return actions
 
     def _mode(self) -> str:

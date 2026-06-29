@@ -1,4 +1,5 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
 import sqlite3
 
@@ -133,6 +134,87 @@ def test_sqlite_state_store_protocol_roundtrip(tmp_path):
     with sqlite3.connect(store.db_path) as conn:
         count = conn.execute("SELECT count(*) FROM log_entries").fetchone()[0]
     assert count == 1
+
+
+def test_markdown_append_pending_action_preserves_action_board(tmp_path):
+    store = MarkdownStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.write_actions(
+        [Action(id="act_001", robot="arm_1", capability="observe")],
+        [Action(id="act_done", robot="arm_1", capability="pick")],
+        [Action(id="act_cancel", robot="arm_1", capability="place")],
+    )
+
+    appended = store.append_pending_action(
+        {
+            "id": "act_002",
+            "robot": "arm_1",
+            "capability": "move_to",
+            "params": {"x": 1, "y": 2, "z": 3},
+            "reason": "compatible append",
+        }
+    )
+
+    assert appended.id == "act_002"
+    actions = store.read_actions()
+    assert [action.id for action in actions["pending"]] == ["act_001", "act_002"]
+    assert [action.id for action in actions["completed"]] == ["act_done"]
+    assert [action.id for action in actions["cancelled"]] == ["act_cancel"]
+
+    claimed = store.claim_next_ready_action()
+    assert claimed is not None
+    assert claimed.id == "act_001"
+    store.mark_action_completed(claimed)
+    actions = store.read_actions()
+    assert [action.id for action in actions["pending"]] == ["act_002"]
+    assert [action.id for action in actions["completed"]] == ["act_done", "act_001"]
+
+
+def test_sqlite_append_pending_action_writes_pending(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+
+    action = store.append_pending_action(
+        Action(id="act_append", robot="arm_1", capability="observe")
+    )
+
+    assert action.id == "act_append"
+    assert [item.id for item in store.read_actions()["pending"]] == ["act_append"]
+    with sqlite3.connect(store.db_path) as conn:
+        row = conn.execute(
+            "SELECT status FROM actions WHERE id = ?",
+            ("act_append",),
+        ).fetchone()
+    assert row == ("pending",)
+
+
+def test_sqlite_claim_next_ready_action_is_not_duplicated(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.append_pending_action(Action(id="act_once", robot="arm_1", capability="observe"))
+
+    def claim_once():
+        return SqliteStateStore(store.path).claim_next_ready_action()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: claim_once(), range(2)))
+
+    claimed = [action for action in results if action is not None]
+    assert [action.id for action in claimed] == ["act_once"]
+    assert sum(action is None for action in results) == 1
+    actions = store.read_actions()
+    assert actions["pending"] == []
+    assert actions["completed"] == []
+    assert actions["cancelled"] == []
+    with sqlite3.connect(store.db_path) as conn:
+        status = conn.execute(
+            "SELECT status FROM actions WHERE id = ?",
+            ("act_once",),
+        ).fetchone()[0]
+    assert status == "in_progress"
+
+    store.mark_action_completed(claimed[0])
+    assert [action.id for action in store.read_actions()["completed"]] == ["act_once"]
 
 
 def test_sqlite_state_store_chat_rolling_summary(tmp_path):

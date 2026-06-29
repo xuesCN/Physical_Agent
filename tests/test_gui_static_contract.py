@@ -52,7 +52,7 @@ def test_gui_app_keeps_enter_to_send_contract():
 def test_gui_i18n_keeps_chinese_labels():
     i18n_js = _asset("i18n.js")
 
-    for text in ["硬件接入", "发送", "执行时间线", "世界状态", "生成驱动"]:
+    for text in ["硬件接入", "发送", "执行时间线", "世界状态", "生成驱动", "运行模式"]:
         assert text in i18n_js
 
 
@@ -64,6 +64,8 @@ def test_gui_renderer_keeps_major_render_entrypoints():
         "renderChat",
         "renderWorld",
         "renderTimeline",
+        "renderSystem",
         "renderIntegrationResult",
     ]:
         assert name in render_js
+    assert "state.runtime" in render_js

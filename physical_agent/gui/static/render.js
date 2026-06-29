@@ -345,13 +345,19 @@ function renderTimeline(state) {
 
 function renderSystem(state) {
       els.project.innerHTML = "";
+      const runtime = state.runtime || {};
+      const confirmationText = runtime.requires_confirmation
+        ? t("requiresConfirmation")
+        : t("noConfirmationRequired");
       els.project.appendChild(item(t("config"), state.config_path || t("notCreated")));
       els.project.appendChild(item(t("workspace"), state.workspace_path || t("notCreated")));
+      els.project.appendChild(item(t("runtimeMode"), `${runtime.mode || "unknown"} · ${confirmationText}`));
       els.project.appendChild(item(t("message"), state.message || ""));
       els.detailsJson.textContent = JSON.stringify({
         plan: state.plan,
         memory: state.memory,
-        doctor: state.doctor
+        doctor: state.doctor,
+        runtime: state.runtime
       }, null, 2);
     }
 

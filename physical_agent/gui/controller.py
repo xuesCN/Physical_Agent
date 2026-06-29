@@ -29,16 +29,19 @@ class GuiController:
                 "ready": False,
                 "watch_started": False,
                 "message": "Project is not initialized. Click Setup Project.",
+                "runtime": _unknown_runtime_info(),
                 "doctor": [check.as_dict() for check in run_doctor(self.config_path)],
             }
 
         config = load_config(self.config_path)
+        runtime_info = _runtime_info(config)
         workspace = Workspace(config.workspace_path(self.config_path.parent))
         if not workspace.exists():
             return {
                 "ready": False,
                 "watch_started": self._watch_started,
                 "message": "Workspace is missing. Click Setup Project.",
+                "runtime": runtime_info,
                 "doctor": [check.as_dict() for check in run_doctor(self.config_path)],
             }
 
@@ -55,6 +58,7 @@ class GuiController:
             "capabilities": workspace.read_capabilities(),
             "world": workspace.read_world(),
             "code_result": code_result,
+            "runtime": runtime_info,
             "actions": {
                 "pending": _dump_actions(actions["pending"]),
                 "completed": _dump_actions(actions["completed"]),
@@ -213,6 +217,33 @@ class GuiController:
 
 def _dump_actions(actions: list[Action]) -> list[dict[str, Any]]:
     return [action.model_dump(mode="json") for action in actions]
+
+
+def _unknown_runtime_info() -> dict[str, Any]:
+    return {"mode": "unknown", "requires_confirmation": False, "drivers": []}
+
+
+def _runtime_info(config: Any) -> dict[str, Any]:
+    drivers = [
+        {
+            "robot_id": robot_id,
+            "driver": robot.driver,
+            "mode": "mock" if _is_mock_driver(robot.driver) else "hardware",
+        }
+        for robot_id, robot in config.robots.items()
+    ]
+    has_hardware = any(driver["mode"] == "hardware" for driver in drivers)
+    mode = "hardware" if has_hardware else ("mock" if drivers else "unknown")
+    return {
+        "mode": mode,
+        "requires_confirmation": bool(config.watch.require_human_approval or has_hardware),
+        "drivers": drivers,
+    }
+
+
+def _is_mock_driver(driver_ref: str) -> bool:
+    name = str(driver_ref).strip().replace("\\", "/").rstrip("/").split("/")[-1].lower()
+    return name.startswith("mock_")
 
 
 def _json_safe(value: Any) -> Any:

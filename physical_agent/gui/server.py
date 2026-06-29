@@ -16,6 +16,7 @@ from physical_agent.agent.onboarding import HardwareIntegrationAssistant
 from physical_agent.agent.runtime import AgentRuntime
 from physical_agent.config import DEFAULT_CONFIG_NAME, load_config, write_default_config
 from physical_agent.doctor import doctor_ok, run_doctor
+from physical_agent.llm import OpenAICompatibleError, OpenAICompatibleSettings
 from physical_agent.protocol.schemas import Action
 from physical_agent.protocol.workspace import Workspace
 from physical_agent.quickstart import setup_project
@@ -69,6 +70,7 @@ class GuiController:
             "chat": workspace.read_chat(),
             "plan": workspace.read_plan(),
             "memory": workspace.read_memory(),
+            "openai": _openai_state(self.config_path),
             "doctor": [check.as_dict() for check in run_doctor(self.config_path)],
         }
 
@@ -394,6 +396,16 @@ def _latest_code_result(chat: dict[str, Any]) -> dict[str, Any] | None:
         if isinstance(metadata, dict) and metadata.get("code_result") is not None:
             return _json_safe(metadata["code_result"])
     return None
+
+
+def _openai_state(config_path: Path) -> dict[str, Any]:
+    try:
+        settings = OpenAICompatibleSettings.from_env(env_file=config_path.parent / ".env")
+    except OpenAICompatibleError as exc:
+        return {"configured": False, "message": str(exc)}
+    summary = settings.public_summary()
+    summary["configured"] = True
+    return summary
 
 
 INDEX_HTML = r"""<!doctype html>
@@ -951,6 +963,7 @@ INDEX_HTML = r"""<!doctype html>
       els.detailsJson.textContent = JSON.stringify({
         plan: state.plan,
         memory: state.memory,
+        openai: state.openai,
         doctor: state.doctor
       }, null, 2);
     }

@@ -12,11 +12,43 @@ from physical_agent.agent.llm_planner import _json_safe, _normalize_depends_on
 from physical_agent.agent.onboarding import HardwareIntegrationAssistant
 from physical_agent.agent.rule_based import RuleBasedPlanner
 from physical_agent.agent.skills import SkillRouter
+from physical_agent.agent.tool_loop import OpenAIToolLoop
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config, write_default_config
 from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, CodeTaskResult
 from physical_agent.protocol.workspace import Workspace
 from physical_agent.watch.runtime import WatchRuntime
+
+
+CHAT_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["reply", "intent", "steps", "actions", "memory"],
+    "properties": {
+        "reply": {"type": "string"},
+        "intent": {"type": "string", "enum": ["chat", "inspect", "act", "remember"]},
+        "steps": {"type": "array", "items": {"type": "string"}},
+        "actions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["robot", "capability", "params", "reason", "depends_on"],
+                "properties": {
+                    "robot": {"type": "string"},
+                    "capability": {"type": "string"},
+                    "params": {"type": "object", "additionalProperties": True},
+                    "reason": {"type": "string"},
+                    "depends_on": {
+                        "type": "array",
+                        "items": {"type": ["string", "integer"]},
+                    },
+                },
+            },
+        },
+        "memory": {"type": "array", "items": {"type": "string"}},
+    },
+}
 
 
 class ChatRuntime:
@@ -165,6 +197,16 @@ class ChatRuntime:
         memory = workspace.read_memory()
 
         mode = self._mode()
+        if mode == "tool_loop":
+            return self._respond_with_tool_loop(
+                message=message,
+                chat_messages=chat["messages"],
+                capabilities=capabilities,
+                world=world,
+                feedback=feedback,
+                memory=memory,
+                auto_step=auto_step,
+            )
         if mode == "llm":
             try:
                 response = self._respond_with_llm(
@@ -365,6 +407,130 @@ class ChatRuntime:
         self.setup()
         return self._workspace().read_chat()["messages"]
 
+    def _respond_with_tool_loop(
+        self,
+        *,
+        message: str,
+        chat_messages: list[ChatMessage],
+        capabilities: dict[str, Any],
+        world: dict[str, Any],
+        feedback: dict[str, Any],
+        memory: dict[str, Any],
+        auto_step: bool,
+    ) -> dict[str, Any]:
+        workspace = self._workspace()
+        before = workspace.read_actions()
+        known_ids = {
+            action.id
+            for action in before["pending"] + before["completed"] + before["cancelled"]
+        }
+        loop = OpenAIToolLoop(self.config_path)
+
+        import asyncio
+
+        result = asyncio.run(
+            loop.run(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are the proposal-only tool loop for Physical Agent. "
+                            "Use only the provided tools. These tools may inspect workspace "
+                            "state or write pending action proposals, but they must not execute "
+                            "hardware. Never claim an action executed unless feedback says it completed."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "latest_user_message": message,
+                                "chat_history": [
+                                    item.model_dump(mode="json") for item in chat_messages[-12:]
+                                ],
+                                "memory": memory.get("notes", [])[-20:],
+                                "capabilities": _json_safe(capabilities),
+                                "world": _json_safe(world),
+                                "feedback": _json_safe(feedback),
+                            },
+                            ensure_ascii=True,
+                        ),
+                    },
+                ],
+                temperature=0.0,
+                max_tokens=1500,
+                metadata={"physical_agent_surface": "chat_tool_loop"},
+            )
+        )
+
+        after = workspace.read_actions()
+        proposed_actions = [
+            action for action in after["pending"] if action.id not in known_ids
+        ]
+        executed = 0
+        if auto_step and proposed_actions:
+            watch = WatchRuntime(self.config_path)
+            asyncio.run(watch.setup())
+            executed = asyncio.run(watch.step(setup=False))
+            asyncio.run(watch.shutdown())
+            feedback = workspace.read_feedback()
+
+        step_summaries = [f"Called {step.name}." for step in result.steps]
+        reply = result.content.strip() or (
+            f"Tool loop completed with {len(result.steps)} tool call(s)."
+        )
+        plan = ChatPlan(
+            status="proposed_actions" if proposed_actions else "answered",
+            intent="act" if proposed_actions else "inspect",
+            summary=reply,
+            steps=step_summaries,
+            actions=proposed_actions,
+            needs_watch=bool(proposed_actions and not auto_step),
+        )
+        workspace.write_plan(plan)
+        assistant = workspace.append_chat_message(
+            "assistant",
+            reply,
+            metadata={
+                "intent": plan.intent,
+                "actions": [action.model_dump(mode="json") for action in proposed_actions],
+                "tool_steps": [
+                    {
+                        "name": step.name,
+                        "arguments": step.arguments,
+                        "result": step.result,
+                        "call_id": step.call_id,
+                    }
+                    for step in result.steps
+                ],
+                "needs_watch": plan.needs_watch,
+                "executed": executed,
+            },
+        )
+        workspace.append_log("Chat tool loop replied.", actor="agent")
+
+        return {
+            "ok": True,
+            "mode": "tool_loop",
+            "reply": assistant.content,
+            "actions": [action.model_dump(mode="json") for action in proposed_actions],
+            "memory": [],
+            "plan": plan.model_dump(mode="json"),
+            "executed": executed,
+            "feedback": feedback if auto_step else workspace.read_feedback(),
+            "code_result": None,
+            "skills": [skill.as_dict() for skill in self._skill_router().list_skills()],
+            "tool_steps": [
+                {
+                    "name": step.name,
+                    "arguments": step.arguments,
+                    "result": step.result,
+                    "call_id": step.call_id,
+                }
+                for step in result.steps
+            ],
+        }
+
     def _respond_with_llm(
         self,
         *,
@@ -376,7 +542,7 @@ class ChatRuntime:
         memory: dict[str, Any],
     ) -> dict[str, Any]:
         client = self._llm_client()
-        content = client.chat(
+        payload = client.structured_json(
             [
                 {
                     "role": "system",
@@ -410,10 +576,12 @@ class ChatRuntime:
                     ),
                 },
             ],
+            schema=CHAT_RESPONSE_SCHEMA,
+            schema_name="physical_agent_chat_response",
             temperature=0.2,
             max_tokens=1500,
+            metadata={"physical_agent_surface": "chat"},
         )
-        payload = _extract_json_object(content)
         return _normalize_chat_payload(payload)
 
     def _respond_with_rules(
@@ -526,6 +694,8 @@ class ChatRuntime:
                 return "llm"
             except Exception:
                 return "rule_based"
+        if mode in {"tool_loop", "openai_tool_loop", "openai-tool-loop"}:
+            return "tool_loop"
         if mode in {"llm", "openai", "openai_compatible", "openai-compatible"}:
             return "llm"
         return "rule_based"

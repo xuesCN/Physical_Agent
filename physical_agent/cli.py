@@ -140,7 +140,11 @@ def chat(
     ),
     message: Optional[str] = typer.Option(None, "--message", "-m", help="Send one chat message and exit."),
     config: Path = typer.Option(Path(DEFAULT_CONFIG_NAME), "--config", "-c", help="Config path."),
-    planner: Optional[str] = typer.Option("auto", "--planner", help="Chat brain: auto, llm, or rule_based."),
+    planner: Optional[str] = typer.Option(
+        "auto",
+        "--planner",
+        help="Chat brain: auto, llm, rule_based, tool_loop, or openai_tool_loop.",
+    ),
     model: Optional[str] = typer.Option(None, "--model", help="LLM model override for --planner llm."),
     auto_step: bool = typer.Option(
         False,

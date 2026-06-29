@@ -42,3 +42,13 @@ class PhysicalDriver(ABC):
     async def execute(self, action: Action) -> ActionResult:
         raise NotImplementedError
 
+    async def heartbeat(self) -> None:
+        """Optional hardware keepalive hook; no-op unless a driver overrides it."""
+
+        return None
+
+    async def halt(self) -> None:
+        """Optional emergency stop hook; no-op unless a driver overrides it."""
+
+        return None
+

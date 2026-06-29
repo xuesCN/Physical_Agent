@@ -18,16 +18,31 @@ class _ChatHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length).decode("utf-8"))
         self.__class__.requests.append(payload)
-        response = {
-            "choices": [
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": self.__class__.content,
+        if self.path.endswith("/responses"):
+            response = {
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": self.__class__.content,
+                            }
+                        ],
                     }
-                }
-            ]
-        }
+                ]
+            }
+        else:
+            response = {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": self.__class__.content,
+                        }
+                    }
+                ]
+            }
         body = json.dumps(response).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -69,12 +84,38 @@ def test_openai_settings_prefers_project_env_file(tmp_path, monkeypatch):
     monkeypatch.setenv("GPT_URL", "http://global.test/v1")
     monkeypatch.setenv("GPT_KEY", "global-key")
     monkeypatch.setenv("GPT_MODEL", "global-model")
+    monkeypatch.delenv("OPENAI_API_MODE", raising=False)
+    monkeypatch.delenv("GPT_API_MODE", raising=False)
+    monkeypatch.delenv("API_MODE", raising=False)
 
     settings = OpenAICompatibleSettings.from_env(env_file=env_file)
 
     assert settings.base_url == "http://project.test/v1"
     assert settings.api_key == "project-key"
     assert settings.model == "project-model"
+    assert settings.api_mode == "chat_completions"
+    assert settings.responses_url == "http://project.test/v1/responses"
+
+
+def test_openai_settings_can_select_responses_mode(tmp_path, monkeypatch):
+    import os
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "GPT_URL=http://project.test/v1\n"
+        "GPT_KEY=project-key\n"
+        "GPT_MODEL=project-model\n"
+        "OPENAI_API_MODE=responses\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENAI_API_MODE", raising=False)
+
+    settings = OpenAICompatibleSettings.from_env(env_file=env_file)
+
+    assert settings.api_mode == "responses"
+    assert settings.responses_url == "http://project.test/v1/responses"
+    for key in ("OPENAI_API_MODE", "GPT_API_MODE", "API_MODE"):
+        os.environ.pop(key, None)
 
 
 def test_openai_compatible_client_posts_chat_completion():
@@ -90,6 +131,44 @@ def test_openai_compatible_client_posts_chat_completion():
         assert result["content"] == "pong"
         assert _ChatHandler.requests[0]["model"] == "test-model"
         assert _ChatHandler.requests[0]["messages"][0]["role"] == "system"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_openai_compatible_client_posts_responses_structured_json():
+    server = _server()
+    _ChatHandler.content = json.dumps({"answer": "pong"})
+    try:
+        settings = OpenAICompatibleSettings(
+            api_key="test-key",
+            base_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
+            model="test-model",
+            api_mode="responses",
+        )
+        result = OpenAICompatibleClient(settings).structured_json(
+            [
+                {"role": "system", "content": "Return JSON."},
+                {"role": "user", "content": "ping"},
+            ],
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+            },
+            schema_name="ping_response",
+            metadata={"physical_agent_surface": "test"},
+        )
+
+        assert result == {"answer": "pong"}
+        request = _ChatHandler.requests[0]
+        assert request["model"] == "test-model"
+        assert request["instructions"] == "Return JSON."
+        assert request["input"][0]["role"] == "user"
+        assert request["text"]["format"]["type"] == "json_schema"
+        assert request["text"]["format"]["name"] == "ping_response"
+        assert request["metadata"]["physical_agent_surface"] == "test"
     finally:
         server.shutdown()
         server.server_close()
@@ -144,6 +223,45 @@ def test_llm_planner_parses_actions_from_chat_completion():
         assert [action.capability for action in actions] == ["pick", "place"]
         assert actions[0].id == "act_001"
         assert actions[1].depends_on == ["act_001"]
+        assert _ChatHandler.requests[0]["response_format"]["type"] == "json_schema"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_llm_planner_parses_actions_from_responses_api():
+    server = _server()
+    _ChatHandler.content = json.dumps(
+        {
+            "actions": [
+                {
+                    "robot": "arm_1",
+                    "capability": "observe",
+                    "params": {},
+                    "reason": "Inspect world state.",
+                    "depends_on": [],
+                }
+            ]
+        }
+    )
+    try:
+        settings = OpenAICompatibleSettings(
+            api_key="test-key",
+            base_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
+            model="test-model",
+            api_mode="responses",
+        )
+        planner = LLMPlanner(settings=settings)
+        actions = planner.plan(
+            task="look around",
+            capabilities={"robots": {"arm_1": {"capabilities": [{"name": "observe"}]}}},
+            world={"state": {}, "observation": Observation(summary="")},
+        )
+
+        assert [action.capability for action in actions] == ["observe"]
+        assert "JSON action intents" in _ChatHandler.requests[0]["instructions"]
+        assert _ChatHandler.requests[0]["text"]["format"]["type"] == "json_schema"
+        assert _ChatHandler.requests[0]["metadata"]["physical_agent_surface"] == "planner"
     finally:
         server.shutdown()
         server.server_close()

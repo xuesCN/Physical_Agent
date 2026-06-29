@@ -10,6 +10,33 @@ from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
 from physical_agent.protocol.schemas import Action
 
 
+ACTION_PLAN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["actions"],
+    "properties": {
+        "actions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["robot", "capability", "params", "reason", "depends_on"],
+                "properties": {
+                    "robot": {"type": "string"},
+                    "capability": {"type": "string"},
+                    "params": {"type": "object", "additionalProperties": True},
+                    "reason": {"type": "string"},
+                    "depends_on": {
+                        "type": "array",
+                        "items": {"type": ["string", "integer"]},
+                    },
+                },
+            },
+        }
+    },
+}
+
+
 class LLMPlanner(Planner):
     def __init__(
         self,
@@ -32,7 +59,7 @@ class LLMPlanner(Planner):
         capabilities: dict[str, Any],
         world: dict[str, Any],
     ) -> list[Action]:
-        content = self.client.chat(
+        payload = self.client.structured_json(
             [
                 {
                     "role": "system",
@@ -57,10 +84,12 @@ class LLMPlanner(Planner):
                     ),
                 },
             ],
+            schema=ACTION_PLAN_SCHEMA,
+            schema_name="physical_action_plan",
             temperature=0.0,
             max_tokens=1200,
+            metadata={"physical_agent_surface": "planner"},
         )
-        payload = _extract_json(content)
         actions_data = payload.get("actions", [])
         if not isinstance(actions_data, list):
             raise ValueError("LLM planner response must contain an actions list.")

@@ -9,6 +9,7 @@ from physical_agent.config import PhysicalAgentConfig
 from physical_agent.state.factory import open_state_store
 from physical_agent.state.sqlite import (
     ACTION_CLAIM_COLUMNS,
+    MEMORY_CHUNK_COLUMNS,
     MEMORY_NOTE_COLUMNS,
     SQLITE_SCHEMA_TABLES,
     SqliteStateStore,
@@ -33,6 +34,9 @@ def run_state_check(
         "backend": backend,
         "workspace_path": str(workspace.path),
         "workspace_initialized": initialized,
+        "retrieval_enabled": bool(config.memory.retrieval.enabled),
+        "retrieval_max_chunks": config.memory.retrieval.max_chunks,
+        "retrieval_max_chars_per_chunk": config.memory.retrieval.max_chars_per_chunk,
         "audit_dir": str(audit_dir),
         "audit_export_writable": _path_writable(audit_parent),
         "sqlite_schema_complete": None,
@@ -40,6 +44,8 @@ def run_state_check(
         "sqlite_missing_action_columns": [],
         "sqlite_missing_memory_columns": [],
         "sqlite_missing_upload_columns": [],
+        "sqlite_missing_chunk_columns": [],
+        "sqlite_chunk_schema_complete": None,
     }
     if isinstance(workspace, SqliteStateStore):
         result.update(_sqlite_schema_status(workspace.db_path))
@@ -65,6 +71,8 @@ def _sqlite_schema_status(db_path: Path) -> dict[str, Any]:
             "sqlite_missing_action_columns": sorted(ACTION_CLAIM_COLUMNS),
             "sqlite_missing_memory_columns": sorted(MEMORY_NOTE_COLUMNS),
             "sqlite_missing_upload_columns": sorted(UPLOAD_METADATA_COLUMNS),
+            "sqlite_missing_chunk_columns": sorted(MEMORY_CHUNK_COLUMNS),
+            "sqlite_chunk_schema_complete": False,
         }
     try:
         with sqlite3.connect(db_path) as conn:
@@ -90,6 +98,12 @@ def _sqlite_schema_status(db_path: Path) -> dict[str, Any]:
                     str(row[1])
                     for row in conn.execute("PRAGMA table_info(upload_metadata)").fetchall()
                 }
+            chunk_columns: set[str] = set()
+            if "memory_chunks" in tables:
+                chunk_columns = {
+                    str(row[1])
+                    for row in conn.execute("PRAGMA table_info(memory_chunks)").fetchall()
+                }
     except sqlite3.Error:
         return {
             "sqlite_schema_complete": False,
@@ -97,21 +111,28 @@ def _sqlite_schema_status(db_path: Path) -> dict[str, Any]:
             "sqlite_missing_action_columns": sorted(ACTION_CLAIM_COLUMNS),
             "sqlite_missing_memory_columns": sorted(MEMORY_NOTE_COLUMNS),
             "sqlite_missing_upload_columns": sorted(UPLOAD_METADATA_COLUMNS),
+            "sqlite_missing_chunk_columns": sorted(MEMORY_CHUNK_COLUMNS),
+            "sqlite_chunk_schema_complete": False,
         }
 
     missing_tables = sorted(SQLITE_SCHEMA_TABLES - tables)
     missing_action_columns = sorted(set(ACTION_CLAIM_COLUMNS) - action_columns)
     missing_memory_columns = sorted(set(MEMORY_NOTE_COLUMNS) - memory_columns)
     missing_upload_columns = sorted(set(UPLOAD_METADATA_COLUMNS) - upload_columns)
+    missing_chunk_columns = sorted(set(MEMORY_CHUNK_COLUMNS) - chunk_columns)
+    chunk_table_present = "memory_chunks" in tables
     return {
         "sqlite_schema_complete": not missing_tables
         and not missing_action_columns
         and not missing_memory_columns
-        and not missing_upload_columns,
+        and not missing_upload_columns
+        and not missing_chunk_columns,
         "sqlite_missing_tables": missing_tables,
         "sqlite_missing_action_columns": missing_action_columns,
         "sqlite_missing_memory_columns": missing_memory_columns,
         "sqlite_missing_upload_columns": missing_upload_columns,
+        "sqlite_missing_chunk_columns": missing_chunk_columns,
+        "sqlite_chunk_schema_complete": chunk_table_present and not missing_chunk_columns,
     }
 
 

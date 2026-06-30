@@ -188,6 +188,27 @@ class MarkdownStateStore:
     def append_upload_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
         return self.workspace.append_upload_metadata(metadata)
 
+    def read_memory_chunks(self) -> dict[str, Any]:
+        return self.workspace.read_memory_chunks()
+
+    def append_memory_chunk(self, chunk: dict[str, Any]) -> dict[str, Any]:
+        return self.workspace.append_memory_chunk(chunk)
+
+    def query_memory_chunks(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        tags: list[str] | str | None = None,
+        source_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.workspace.query_memory_chunks(
+            query,
+            limit=limit,
+            tags=tags,
+            source_type=source_type,
+        )
+
     def append_log(self, message: str, *, actor: str | None = None) -> None:
         self.workspace.append_log(message, actor=actor)
 
@@ -202,6 +223,7 @@ class MarkdownStateStore:
             "plan": self.read_plan(),
             "memory": self.read_memory(),
             "uploads": self.read_uploads(),
+            "chunks": self.read_memory_chunks(),
             "log": read_markdown_log_document(self.file("log")),
         }
         return export_audit_documents(

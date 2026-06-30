@@ -13,6 +13,12 @@ from physical_agent.protocol.memory import (
     normalize_memory_note,
     normalize_memory_tags,
 )
+from physical_agent.protocol.retrieval import (
+    chunk_source_id_for_memory_note,
+    make_chunks_for_text,
+    normalize_memory_chunk,
+    query_memory_chunks as score_memory_chunks,
+)
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, Observation
 from physical_agent.protocol.workspace import Workspace
 from physical_agent.state.audit import export_audit_documents, read_markdown_log_entries
@@ -52,7 +58,7 @@ REQUIRED_TABLES = {
     "memory_notes",
 }
 
-SQLITE_SCHEMA_TABLES = REQUIRED_TABLES | {"upload_metadata"}
+SQLITE_SCHEMA_TABLES = REQUIRED_TABLES | {"upload_metadata", "memory_chunks"}
 
 DEFAULT_ACTION_LEASE_SECONDS = 300
 DEFAULT_CLAIM_OWNER = "watch"
@@ -89,6 +95,17 @@ UPLOAD_METADATA_COLUMNS = {
     "tags": "TEXT DEFAULT '[]'",
     "importance": "INTEGER DEFAULT 0",
     "error": "TEXT",
+}
+
+MEMORY_CHUNK_COLUMNS = {
+    "source_type": "TEXT",
+    "source_id": "TEXT",
+    "sha256": "TEXT",
+    "chunk_index": "INTEGER DEFAULT 0",
+    "content": "TEXT",
+    "tags": "TEXT DEFAULT '[]'",
+    "trust_level": "TEXT DEFAULT 'untrusted'",
+    "created_at": "TEXT",
 }
 
 
@@ -493,8 +510,10 @@ class SqliteStateStore:
         with self._connect() as conn:
             revision = self._next_revision_conn(conn, "memory")
             conn.execute("DELETE FROM memory_notes")
+            conn.execute("DELETE FROM memory_chunks WHERE source_type = 'memory'")
             for note in notes:
-                self._insert_memory_note_conn(conn, note)
+                normalized = self._insert_memory_note_conn(conn, note)
+                self._insert_memory_note_chunks_conn(conn, normalized)
             self._upsert_document_conn(
                 conn,
                 "memory",
@@ -552,7 +571,8 @@ class SqliteStateStore:
         )
         with self._connect() as conn:
             revision = self._next_revision_conn(conn, "memory")
-            self._insert_memory_note_conn(conn, note)
+            normalized = self._insert_memory_note_conn(conn, note)
+            self._insert_memory_note_chunks_conn(conn, normalized)
             self._upsert_document_conn(
                 conn,
                 "memory",
@@ -593,6 +613,57 @@ class SqliteStateStore:
             )
         return upload
 
+    def read_memory_chunks(self) -> dict[str, Any]:
+        with self._connect() as conn:
+            metadata = {
+                "schema": "physical-agent/retrieval-chunks/v1",
+                "owner": "agent",
+                "revision": 1,
+            }
+            tables = {
+                str(row["name"])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            if "memory_chunks" not in tables:
+                return {"metadata": metadata, "chunks": []}
+            rows = conn.execute(
+                """
+                SELECT
+                    id, source_type, source_id, sha256, chunk_index,
+                    content, tags, trust_level, created_at
+                FROM memory_chunks
+                ORDER BY id
+                """
+            ).fetchall()
+        return {
+            "metadata": metadata,
+            "chunks": [_memory_chunk_from_row(row) for row in rows],
+        }
+
+    def append_memory_chunk(self, chunk: dict[str, Any]) -> dict[str, Any]:
+        normalized = normalize_memory_chunk(chunk)
+        with self._connect() as conn:
+            self._insert_memory_chunk_conn(conn, normalized)
+        return normalized
+
+    def query_memory_chunks(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        tags: list[str] | str | None = None,
+        source_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return score_memory_chunks(
+            self.read_memory_chunks().get("chunks", []),
+            query,
+            limit=limit,
+            tags=tags,
+            source_type=source_type,
+        )
+
     def append_log(self, message: str, *, actor: str | None = None) -> None:
         timestamp = _now()
         with self._connect() as conn:
@@ -623,6 +694,7 @@ class SqliteStateStore:
             "plan": self.read_plan(),
             "memory": self.read_memory(),
             "uploads": self.read_uploads(),
+            "chunks": self.read_memory_chunks(),
             "log": self._read_log_document(),
         }
         return export_audit_documents(
@@ -749,6 +821,28 @@ class SqliteStateStore:
         self._ensure_upload_metadata_columns(conn)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_upload_metadata_sha256 ON upload_metadata(sha256)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_type TEXT,
+                source_id TEXT,
+                sha256 TEXT,
+                chunk_index INTEGER DEFAULT 0,
+                content TEXT,
+                tags TEXT DEFAULT '[]',
+                trust_level TEXT DEFAULT 'untrusted',
+                created_at TEXT
+            )
+            """
+        )
+        self._ensure_memory_chunk_columns(conn)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memory_chunks_source_type ON memory_chunks(source_type, source_id)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_chunks_identity ON memory_chunks(source_type, source_id, chunk_index)"
         )
 
     def _unlink_database_files(self) -> None:
@@ -1002,11 +1096,35 @@ class SqliteStateStore:
             "UPDATE upload_metadata SET importance = 0 WHERE importance IS NULL"
         )
 
+    def _ensure_memory_chunk_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(memory_chunks)").fetchall()
+        }
+        for name, definition in MEMORY_CHUNK_COLUMNS.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE memory_chunks ADD COLUMN {name} {definition}")
+        conn.execute(
+            "UPDATE memory_chunks SET source_type = 'memory' WHERE source_type IS NULL OR TRIM(source_type) = ''"
+        )
+        conn.execute(
+            "UPDATE memory_chunks SET source_id = COALESCE(NULLIF(source_id, ''), sha256, '') WHERE source_id IS NULL OR TRIM(source_id) = ''"
+        )
+        conn.execute(
+            "UPDATE memory_chunks SET chunk_index = 0 WHERE chunk_index IS NULL"
+        )
+        conn.execute(
+            "UPDATE memory_chunks SET tags = '[]' WHERE tags IS NULL OR tags = ''"
+        )
+        conn.execute(
+            "UPDATE memory_chunks SET trust_level = 'untrusted' WHERE trust_level IS NULL OR TRIM(trust_level) = ''"
+        )
+
     def _insert_memory_note_conn(
         self,
         conn: sqlite3.Connection,
         note: dict[str, Any],
-    ) -> None:
+    ) -> dict[str, Any]:
         normalized = normalize_memory_note(note)
         conn.execute(
             """
@@ -1019,6 +1137,58 @@ class SqliteStateStore:
                 normalized["source"],
                 _json_dumps(normalized["tags"]),
                 normalized["importance"],
+                normalized["created_at"],
+            ),
+        )
+        return normalized
+
+    def _insert_memory_note_chunks_conn(
+        self,
+        conn: sqlite3.Connection,
+        note: dict[str, Any],
+    ) -> None:
+        if note.get("source") == "upload":
+            return
+        source_id = chunk_source_id_for_memory_note(note)
+        chunks = make_chunks_for_text(
+            note["content"],
+            source_type="memory",
+            source_id=source_id,
+            tags=note["tags"],
+            trust_level="trusted",
+            created_at=note["created_at"],
+        )
+        for chunk in chunks:
+            self._insert_memory_chunk_conn(conn, chunk)
+
+    def _insert_memory_chunk_conn(
+        self,
+        conn: sqlite3.Connection,
+        chunk: dict[str, Any],
+    ) -> None:
+        normalized = normalize_memory_chunk(chunk)
+        conn.execute(
+            """
+            INSERT INTO memory_chunks(
+                source_type, source_id, sha256, chunk_index,
+                content, tags, trust_level, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_type, source_id, chunk_index) DO UPDATE SET
+                sha256 = excluded.sha256,
+                content = excluded.content,
+                tags = excluded.tags,
+                trust_level = excluded.trust_level,
+                created_at = excluded.created_at
+            """,
+            (
+                normalized["source_type"],
+                normalized["source_id"],
+                normalized["sha256"],
+                normalized["chunk_index"],
+                normalized["content"],
+                _json_dumps(normalized["tags"]),
+                normalized["trust_level"],
                 normalized["created_at"],
             ),
         )
@@ -1160,8 +1330,10 @@ class SqliteStateStore:
     ) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM memory_notes")
+            conn.execute("DELETE FROM memory_chunks WHERE source_type = 'memory'")
             for note in notes:
-                self._insert_memory_note_conn(conn, note)
+                normalized = self._insert_memory_note_conn(conn, note)
+                self._insert_memory_note_chunks_conn(conn, normalized)
             self._upsert_document_conn(
                 conn,
                 "memory",
@@ -1464,6 +1636,22 @@ def _upload_metadata_from_row(row: sqlite3.Row) -> dict[str, Any]:
             "tags": tags,
             "importance": row["importance"],
             "error": row["error"],
+        }
+    )
+
+
+def _memory_chunk_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    tags = _json_loads(row["tags"], default=[])
+    return normalize_memory_chunk(
+        {
+            "source_type": row["source_type"],
+            "source_id": row["source_id"],
+            "sha256": row["sha256"],
+            "chunk_index": row["chunk_index"],
+            "content": row["content"],
+            "tags": tags,
+            "trust_level": row["trust_level"],
+            "created_at": row["created_at"],
         }
     )
 

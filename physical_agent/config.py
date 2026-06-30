@@ -31,6 +31,16 @@ class AgentConfig(BaseModel):
     feedback_timeout_s: int = 30
 
 
+class RetrievalConfig(BaseModel):
+    enabled: bool = False
+    max_chunks: int = 5
+    max_chars_per_chunk: int = 2000
+
+
+class MemoryConfig(BaseModel):
+    retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
+
+
 class RobotConfig(BaseModel):
     driver: str
     config: dict[str, Any] = Field(default_factory=dict)
@@ -41,6 +51,7 @@ class PhysicalAgentConfig(BaseModel):
     workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
     watch: WatchConfig = Field(default_factory=WatchConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
     robots: dict[str, RobotConfig] = Field(default_factory=dict)
 
     def workspace_path(self, base_dir: Path) -> Path:
@@ -60,6 +71,13 @@ def default_config_dict() -> dict[str, Any]:
             "model": "fake/local",
             "max_steps": 8,
             "feedback_timeout_s": 30,
+        },
+        "memory": {
+            "retrieval": {
+                "enabled": False,
+                "max_chunks": 5,
+                "max_chars_per_chunk": 2000,
+            }
         },
         "robots": {
             "arm_1": {

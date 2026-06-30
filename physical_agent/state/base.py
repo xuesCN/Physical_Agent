@@ -121,6 +121,19 @@ class StateStore(Protocol):
 
     def append_upload_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]: ...
 
+    def read_memory_chunks(self) -> dict[str, Any]: ...
+
+    def append_memory_chunk(self, chunk: dict[str, Any]) -> dict[str, Any]: ...
+
+    def query_memory_chunks(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        tags: list[str] | str | None = None,
+        source_type: str | None = None,
+    ) -> list[dict[str, Any]]: ...
+
     def append_log(self, message: str, *, actor: str | None = None) -> None: ...
 
     def export_human_view(self, out_dir: Path | None = None) -> dict[str, Any]: ...

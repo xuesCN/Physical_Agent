@@ -8,6 +8,10 @@ import shutil
 from typing import Any
 import unicodedata
 
+from physical_agent.protocol.retrieval import (
+    DEFAULT_MAX_CHARS_PER_CHUNK,
+    make_chunks_for_text,
+)
 from physical_agent.state.base import StateStore
 
 
@@ -56,6 +60,7 @@ def ingest_file(
     importance: int = 0,
     max_inline_bytes: int = MAX_INLINE_BYTES,
     preview_chars: int = PREVIEW_CHARS,
+    max_chars_per_chunk: int = DEFAULT_MAX_CHARS_PER_CHUNK,
 ) -> dict[str, Any]:
     source = Path(source_path).expanduser().resolve()
     if not source.exists() or not source.is_file():
@@ -160,6 +165,21 @@ def ingest_file(
         )
         memory_note_created = True
 
+    chunks_written = 0
+    if text:
+        for chunk in make_chunks_for_text(
+            text,
+            source_type="upload",
+            source_id=sha256,
+            sha256=sha256,
+            tags=_memory_tags(suffix, tags),
+            trust_level="untrusted",
+            created_at=created_at,
+            max_chars_per_chunk=max_chars_per_chunk,
+        ):
+            store.append_memory_chunk(chunk)
+            chunks_written += 1
+
     metadata = _metadata(
         source=source,
         stored_path=stored_path,
@@ -181,6 +201,7 @@ def ingest_file(
         "memory_note": memory_note,
         "memory_written": memory_note_created,
         "truncated": truncated,
+        "chunks_written": chunks_written,
     }
 
 

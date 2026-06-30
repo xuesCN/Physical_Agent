@@ -95,19 +95,34 @@ def state_check(
         "Workspace initialized: "
         f"{'yes' if result['workspace_initialized'] else 'no'}"
     )
+    typer.echo(
+        "Retrieval enabled: "
+        f"{'yes' if result['retrieval_enabled'] else 'no'}"
+    )
+    typer.echo(f"Retrieval max chunks: {result['retrieval_max_chunks']}")
+    typer.echo(
+        "Retrieval max chars per chunk: "
+        f"{result['retrieval_max_chars_per_chunk']}"
+    )
     sqlite_schema_complete = result["sqlite_schema_complete"]
     if sqlite_schema_complete is None:
         typer.echo("SQLite schema complete: n/a")
+        typer.echo("SQLite chunk schema complete: n/a")
     else:
         typer.echo(
             "SQLite schema complete: "
             f"{'yes' if sqlite_schema_complete else 'no'}"
+        )
+        typer.echo(
+            "SQLite chunk schema complete: "
+            f"{'yes' if result['sqlite_chunk_schema_complete'] else 'no'}"
         )
         missing = (
             result["sqlite_missing_tables"]
             + result["sqlite_missing_action_columns"]
             + result["sqlite_missing_memory_columns"]
             + result["sqlite_missing_upload_columns"]
+            + result["sqlite_missing_chunk_columns"]
         )
         if missing:
             typer.echo(f"SQLite missing: {', '.join(missing)}")
@@ -256,6 +271,7 @@ def ingest_file_command(
             workspace,
             tags=tag,
             importance=importance,
+            max_chars_per_chunk=cfg.memory.retrieval.max_chars_per_chunk,
         )
     except FileIngestionError as exc:
         if exc.metadata:
@@ -269,7 +285,49 @@ def ingest_file_command(
     typer.echo(f"Stored path: {metadata['stored_path']}")
     typer.echo(f"SHA256: {metadata['sha256']}")
     typer.echo(f"Memory written: {'yes' if result['memory_written'] else 'no'}")
+    typer.echo(f"Chunks written: {result['chunks_written']}")
     typer.echo(f"Truncated: {'yes' if result['truncated'] else 'no'}")
+
+
+@app.command("search-memory")
+def search_memory(
+    query: str = typer.Argument(..., help="Local keyword query for indexed memory/upload chunks."),
+    config: Path = typer.Option(Path(DEFAULT_CONFIG_NAME), "--config", "-c", help="Config path."),
+    limit: int = typer.Option(5, "--limit", "-n", help="Maximum chunks to return."),
+    tag: Optional[list[str]] = typer.Option(
+        None,
+        "--tag",
+        help="Require a tag on returned chunks. May be repeated.",
+    ),
+    source_type: Optional[str] = typer.Option(
+        None,
+        "--source-type",
+        help="Restrict to upload or memory chunks.",
+    ),
+) -> None:
+    config_root = config.resolve().parent
+    cfg = load_config(config)
+    workspace = open_state_store(cfg, base_dir=config_root)
+    if not workspace.exists():
+        typer.echo("Workspace is not initialized. Run `physical-agent init` first.")
+        raise typer.Exit(code=1)
+
+    results = workspace.query_memory_chunks(
+        query,
+        limit=limit,
+        tags=tag,
+        source_type=source_type,
+    )
+    typer.echo(f"Found {len(results)} chunk(s).")
+    for item in results:
+        tags = ", ".join(item.get("tags", [])) or "-"
+        typer.echo(
+            f"- score={item.get('score', 0)} "
+            f"{item.get('source_type')}:{item.get('source_id')}#"
+            f"{item.get('chunk_index')} "
+            f"trust={item.get('trust_level')} tags={tags}"
+        )
+        typer.echo(_indent_text(_truncate_text(item.get("content", ""), 320)))
 
 
 def _echo_code_result(code_result: dict[str, Any], *, prefix: str = "") -> None:
@@ -283,6 +341,17 @@ def _echo_code_result(code_result: dict[str, Any], *, prefix: str = "") -> None:
         text = yaml.safe_dump(code_result, sort_keys=False).strip()
         for line in text.splitlines():
             typer.echo(f"{prefix}{line}")
+
+
+def _truncate_text(text: Any, limit: int) -> str:
+    value = " ".join(str(text or "").split())
+    if len(value) <= limit:
+        return value
+    return value[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _indent_text(text: str) -> str:
+    return "\n".join(f"  {line}" for line in (text or "").splitlines() or [""])
 
 
 @app.command("llm-test")

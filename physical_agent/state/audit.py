@@ -19,6 +19,7 @@ AUDIT_DOCUMENTS = (
     "plan",
     "memory",
     "uploads",
+    "chunks",
     "log",
 )
 

@@ -10,3 +10,6 @@ workspace/
 .physical-agent/
 /physical-agent.yaml
 .env
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/

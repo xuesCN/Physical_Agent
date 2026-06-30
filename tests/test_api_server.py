@@ -6,9 +6,11 @@ import pytest
 from typer.testing import CliRunner
 
 import physical_agent.cli as cli_module
+import physical_agent.api.server as api_server_module
 from physical_agent.api.server import (
     ActionProposalRequest,
     ApiController,
+    BROWSER_UPLOAD_MAX_BYTES,
     ChatRequest,
     ExportAuditRequest,
     IngestFileRequest,
@@ -278,6 +280,115 @@ def test_api_endpoints_cover_state_proposals_memory_ingest_search_and_audit(tmp_
     assert board["cancelled"] == []
 
 
+def test_api_browser_upload_records_untrusted_metadata_chunks_and_audit(tmp_path):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    client = TestClient(create_app(config_path))
+
+    response = client.post(
+        "/api/upload",
+        files={"file": ("browser.md", b"# Browser Upload\n\nUse this as context only.", "text/markdown")},
+        data={"tags": "browser, dragger", "importance": "3"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["result"]["chunks_written"] == 1
+    metadata = body["result"]["metadata"]
+    assert metadata["original_name"] == "browser.md"
+    assert metadata["stored_name"].endswith("-browser.md")
+    assert metadata["status"] == "stored"
+    assert metadata["tags"] == ["browser", "dragger"]
+    assert metadata["importance"] == 3
+    stored_path = Path(metadata["stored_path"])
+    assert stored_path.parent == store.uploads_path
+    assert stored_path.exists()
+
+    uploads = store.read_uploads()["uploads"]
+    assert uploads[0]["sha256"] == metadata["sha256"]
+    memory = store.read_memory(source="upload")["notes"][0]
+    assert memory["kind"] == "upload_excerpt"
+    assert memory["tags"] == ["upload", ".md", "browser", "dragger"]
+    assert memory["content"].startswith("UNTRUSTED UPLOAD EXCERPT")
+    chunks = store.read_memory_chunks()["chunks"]
+    assert chunks[0]["source_type"] == "upload"
+    assert chunks[0]["source_id"] == metadata["sha256"]
+    assert chunks[0]["trust_level"] == "untrusted"
+    assert "Browser Upload" in chunks[0]["content"]
+
+    audit_dir = tmp_path / "browser-upload-audit"
+    exported = client.post("/api/export-audit", json={"out": str(audit_dir)})
+    assert exported.status_code == 200
+    assert Path(exported.json()["result"]["manifest"]).exists()
+    assert (audit_dir / "uploads.json").exists()
+    assert (audit_dir / "chunks.json").exists()
+
+
+def test_api_browser_upload_rejects_unsupported_type_with_clear_error(tmp_path):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    client = TestClient(create_app(config_path))
+
+    response = client.post(
+        "/api/upload",
+        files={"file": ("manual.pdf", b"%PDF-1.7\n", "application/pdf")},
+    )
+
+    assert response.status_code == 400
+    assert "Unsupported upload type" in response.json()["message"]
+    assert "PDF, OCR, and image ingestion are not implemented" in response.json()["message"]
+    assert store.read_uploads()["uploads"] == []
+    assert store.read_memory(source="upload")["notes"] == []
+
+
+def test_api_browser_upload_rejects_oversize_without_ingesting(tmp_path):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    client = TestClient(create_app(config_path))
+    oversized = b"a" * (BROWSER_UPLOAD_MAX_BYTES + 1)
+
+    response = client.post(
+        "/api/upload",
+        files={"file": ("huge.txt", oversized, "text/plain")},
+    )
+
+    assert response.status_code == 413
+    assert "exceeds the 5MB limit" in response.json()["message"]
+    assert store.read_uploads()["uploads"] == []
+    assert store.read_memory(source="upload")["notes"] == []
+    assert store.read_memory_chunks()["chunks"] == []
+
+
+def test_api_homepage_serves_gui_or_clear_build_prompt(tmp_path, monkeypatch):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    empty_dist = tmp_path / "empty-dist"
+    monkeypatch.setattr(api_server_module, "_frontend_dist_path", lambda: empty_dist)
+
+    client = TestClient(create_app(config_path))
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "GUI build not found" in response.text
+    assert "npm run build" in response.text
+
+    gui_dist = tmp_path / "gui-dist"
+    (gui_dist / "assets").mkdir(parents=True)
+    (gui_dist / "index.html").write_text("<!doctype html><title>Physical Agent GUI</title>", encoding="utf-8")
+    monkeypatch.setattr(api_server_module, "_frontend_dist_path", lambda: gui_dist)
+
+    client = TestClient(create_app(config_path))
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Physical Agent GUI" in response.text
+
+
 def test_api_requests_do_not_instantiate_watch_or_execute_driver(tmp_path, monkeypatch):
     TestClient = _client_or_skip()
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
@@ -315,6 +426,10 @@ def test_api_requests_do_not_instantiate_watch_or_execute_driver(tmp_path, monke
     assert client.post(
         "/api/chat",
         json={"message": "look around", "auto_step": True},
+    ).status_code == 200
+    assert client.post(
+        "/api/upload",
+        files={"file": ("safe.md", b"upload text remains untrusted", "text/markdown")},
     ).status_code == 200
 
     store = open_state_store(config_path=config_path)

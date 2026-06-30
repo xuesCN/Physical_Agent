@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 import re
+import tempfile
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,10 +17,18 @@ from physical_agent.api.watch_service import (
     summarize_state,
 )
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config
-from physical_agent.ingest.files import FileIngestionError, ingest_file
+from physical_agent.ingest.files import (
+    ALLOWED_TEXT_SUFFIXES,
+    FileIngestionError,
+    ingest_file,
+    sanitize_filename,
+)
 from physical_agent.protocol.schemas import Action, ChatPlan
 from physical_agent.state import StateStore, open_state_store
 
+
+BROWSER_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
+UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
 
 SERVER_EXTRA_HINT = (
     "FastAPI backend dependencies are not installed. "
@@ -91,8 +100,15 @@ def create_app(
 
     fastapi = _load_fastapi()
     FastAPI = fastapi["FastAPI"]
+    File = fastapi["File"]
+    Form = fastapi["Form"]
     JSONResponse = fastapi["JSONResponse"]
+    PlainTextResponse = fastapi["PlainTextResponse"]
     StreamingResponse = fastapi["StreamingResponse"]
+    UploadFile = fastapi["UploadFile"]
+
+    # FastAPI resolves postponed annotations from module globals.
+    globals()["UploadFile"] = UploadFile
 
     events = ApiEventBroker()
     controller = ApiController(config_path, events=events)
@@ -228,12 +244,34 @@ def create_app(
         except ApiRequestError as exc:
             return handle_error(exc)
 
+    @app.post("/api/upload")
+    async def upload_endpoint(
+        file: UploadFile = File(...),
+        tags: str | None = Form(None),
+        importance: int = Form(0),
+    ) -> dict[str, Any] | Any:
+        try:
+            return await controller.upload_file(
+                file,
+                tags=tags,
+                importance=importance,
+            )
+        except ApiRequestError as exc:
+            return handle_error(exc)
+        finally:
+            try:
+                await file.close()
+            except Exception:
+                pass
+
     @app.post("/api/export-audit")
     def export_audit(payload: ExportAuditRequest) -> dict[str, Any]:
         try:
             return controller.export_audit(payload)
         except ApiRequestError as exc:
             return handle_error(exc)
+
+    _install_frontend_routes(app, fastapi, PlainTextResponse)
 
     return app
 
@@ -428,6 +466,73 @@ class ApiController:
         return {
             "ok": True,
             "message": "File ingested.",
+            "result": _json_safe(result),
+            "state": state,
+        }
+
+    async def upload_file(
+        self,
+        upload: Any,
+        *,
+        tags: str | None = None,
+        importance: int = 0,
+    ) -> dict[str, Any]:
+        filename = _browser_upload_filename(getattr(upload, "filename", None))
+        suffix = Path(filename).suffix.lower()
+        if suffix not in ALLOWED_TEXT_SUFFIXES:
+            allowed = ", ".join(sorted(ALLOWED_TEXT_SUFFIXES))
+            raise ApiRequestError(
+                (
+                    f"Unsupported upload type: {suffix or '<none>'}. "
+                    f"Supported text suffixes: {allowed}. PDF, OCR, and image ingestion "
+                    "are not implemented in this phase."
+                ),
+                status_code=400,
+            )
+
+        config, store = self._store(initialize=True)
+        incoming_root = store.uploads_path / ".incoming"
+        incoming_root.mkdir(parents=True, exist_ok=True)
+
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="browser-upload-",
+                dir=incoming_root,
+            ) as temp_dir:
+                temp_path = Path(temp_dir) / filename
+                size_bytes = await _write_browser_upload(upload, temp_path)
+                try:
+                    result = ingest_file(
+                        temp_path,
+                        store,
+                        tags=_parse_upload_tags(tags),
+                        importance=importance,
+                        max_chars_per_chunk=config.memory.retrieval.max_chars_per_chunk,
+                    )
+                except FileIngestionError as exc:
+                    raise ApiRequestError(
+                        str(exc),
+                        status_code=400,
+                        details={"metadata": exc.metadata},
+                    ) from exc
+        except ApiRequestError:
+            raise
+        except OSError as exc:
+            raise ApiRequestError(
+                f"Could not store browser upload: {exc}",
+                status_code=500,
+            ) from exc
+
+        state = self._state(config, store)
+        self._publish_state("browser_file_uploaded", state)
+        return {
+            "ok": True,
+            "message": (
+                "File uploaded and ingested as untrusted proposal context; "
+                "watch must validate any derived action before execution."
+            ),
+            "filename": filename,
+            "size_bytes": size_bytes,
             "result": _json_safe(result),
             "state": state,
         }
@@ -770,15 +875,58 @@ class SafeProposalPlanner:
 
 def _load_fastapi() -> dict[str, Any]:
     try:
-        from fastapi import FastAPI
-        from fastapi.responses import JSONResponse, StreamingResponse
+        from fastapi import FastAPI, File, Form, UploadFile
+        from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+        from fastapi.staticfiles import StaticFiles
     except ImportError as exc:
         raise MissingServerDependencyError(SERVER_EXTRA_HINT) from exc
     return {
         "FastAPI": FastAPI,
+        "File": File,
+        "Form": Form,
+        "HTMLResponse": HTMLResponse,
         "JSONResponse": JSONResponse,
+        "PlainTextResponse": PlainTextResponse,
         "StreamingResponse": StreamingResponse,
+        "StaticFiles": StaticFiles,
+        "UploadFile": UploadFile,
     }
+
+
+def _install_frontend_routes(
+    app: Any,
+    fastapi: dict[str, Any],
+    PlainTextResponse: Any,
+) -> None:
+    dist = _frontend_dist_path()
+    index = dist / "index.html"
+    assets = dist / "assets"
+    HTMLResponse = fastapi["HTMLResponse"]
+    StaticFiles = fastapi["StaticFiles"]
+
+    if assets.exists():
+        app.mount("/assets", StaticFiles(directory=assets), name="frontend-assets")
+
+    @app.get("/", include_in_schema=False)
+    def frontend_home() -> Any:
+        if index.exists():
+            return HTMLResponse(index.read_text(encoding="utf-8"))
+        return PlainTextResponse(
+            "Physical Agent API is running. GUI build not found; run "
+            "`cd frontend && npm install && npm run build` to serve the React dashboard.",
+            status_code=200,
+        )
+
+
+def _frontend_dist_path() -> Path:
+    candidates = [
+        Path.cwd() / "frontend" / "dist",
+        Path(__file__).resolve().parents[2] / "frontend" / "dist",
+    ]
+    for candidate in candidates:
+        if (candidate / "index.html").exists():
+            return candidate
+    return candidates[0]
 
 
 def _state_event_payload(controller: ApiController, reason: str) -> dict[str, Any]:
@@ -838,6 +986,45 @@ def _renumber_actions(actions: list[Action], store: StateStore) -> list[Action]:
         ]
         result.append(Action.model_validate(data))
     return result
+
+
+async def _write_browser_upload(upload: Any, destination: Path) -> int:
+    total = 0
+    with destination.open("wb") as handle:
+        while True:
+            chunk = await upload.read(UPLOAD_READ_CHUNK_BYTES)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > BROWSER_UPLOAD_MAX_BYTES:
+                limit_mb = BROWSER_UPLOAD_MAX_BYTES // (1024 * 1024)
+                raise ApiRequestError(
+                    f"Uploaded file exceeds the {limit_mb}MB limit.",
+                    status_code=413,
+                    details={
+                        "max_bytes": BROWSER_UPLOAD_MAX_BYTES,
+                        "received_bytes": total,
+                    },
+                )
+            handle.write(chunk)
+    return total
+
+
+def _browser_upload_filename(filename: str | None) -> str:
+    safe_name = sanitize_filename(filename or "upload.txt")
+    if not safe_name:
+        raise ApiRequestError("Upload filename cannot be empty.")
+    return safe_name
+
+
+def _parse_upload_tags(tags: str | None) -> list[str]:
+    if not tags:
+        return []
+    return [
+        item.strip()
+        for item in re.split(r"[,;\n]+", tags)
+        if item.strip()
+    ]
 
 
 def _known_action_ids(store: StateStore) -> set[str]:

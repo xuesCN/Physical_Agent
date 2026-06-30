@@ -1,0 +1,106 @@
+import type {
+  ActionItem,
+  AgentState,
+  HealthState,
+  SearchResponse,
+  UploadResponse
+} from "./types";
+
+async function apiJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(path, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(init.headers ?? {})
+    },
+    ...init
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.message || `Request failed: ${response.status}`);
+  }
+  return data as T;
+}
+
+export function fetchHealth(): Promise<HealthState> {
+  return apiJson<HealthState>("/api/health");
+}
+
+export function fetchState(): Promise<AgentState> {
+  return apiJson<AgentState>("/api/state");
+}
+
+export function sendChat(message: string): Promise<{
+  ok: boolean;
+  reply: string;
+  executed: number;
+  state: AgentState;
+}> {
+  return apiJson("/api/chat", {
+    method: "POST",
+    body: JSON.stringify({ message })
+  });
+}
+
+export function submitTask(task: string): Promise<{
+  ok: boolean;
+  message: string;
+  actions: ActionItem[];
+  state: AgentState;
+}> {
+  return apiJson("/api/tasks/submit", {
+    method: "POST",
+    body: JSON.stringify({ task })
+  });
+}
+
+export function proposeAction(action: ActionItem): Promise<{
+  ok: boolean;
+  message: string;
+  action: ActionItem;
+  state: AgentState;
+}> {
+  return apiJson("/api/actions/propose", {
+    method: "POST",
+    body: JSON.stringify(action)
+  });
+}
+
+export function searchMemory(
+  query: string,
+  limit: number,
+  tags?: string,
+  sourceType?: string
+): Promise<SearchResponse> {
+  return apiJson("/api/search-memory", {
+    method: "POST",
+    body: JSON.stringify({
+      query,
+      limit,
+      tags: tags ? tags.split(",").map((item) => item.trim()).filter(Boolean) : null,
+      source_type: sourceType || null
+    })
+  });
+}
+
+export async function uploadBrowserFile(
+  file: File,
+  tags: string,
+  importance: number
+): Promise<UploadResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  if (tags.trim()) {
+    form.append("tags", tags);
+  }
+  form.append("importance", String(importance));
+
+  const response = await fetch("/api/upload", {
+    method: "POST",
+    body: form
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.message || `Upload failed: ${response.status}`);
+  }
+  return data as UploadResponse;
+}

@@ -146,6 +146,25 @@ def gui(
     run_gui(config, host=host, port=port, open_browser=not no_open)
 
 
+@app.command("api")
+def api(
+    config: Path = typer.Option(Path(DEFAULT_CONFIG_NAME), "--config", "-c", help="Config path."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Host to bind."),
+    port: int = typer.Option(8766, "--port", "-p", help="Port to bind."),
+) -> None:
+    try:
+        create_app, uvicorn = _load_api_server()
+        api_app = create_app(config)
+    except Exception as exc:
+        from physical_agent.api.server import MissingServerDependencyError
+
+        if isinstance(exc, MissingServerDependencyError):
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        raise
+    uvicorn.run(api_app, host=host, port=port)
+
+
 @app.command("watch")
 def watch(
     config: Path = typer.Option(Path(DEFAULT_CONFIG_NAME), "--config", "-c", help="Config path."),
@@ -352,6 +371,20 @@ def _truncate_text(text: Any, limit: int) -> str:
 
 def _indent_text(text: str) -> str:
     return "\n".join(f"  {line}" for line in (text or "").splitlines() or [""])
+
+
+def _load_api_server():
+    from physical_agent.api.server import (
+        MissingServerDependencyError,
+        SERVER_EXTRA_HINT,
+        create_app,
+    )
+
+    try:
+        import uvicorn
+    except ImportError as exc:
+        raise MissingServerDependencyError(SERVER_EXTRA_HINT) from exc
+    return create_app, uvicorn
 
 
 @app.command("llm-test")

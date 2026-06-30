@@ -9,6 +9,7 @@ SCAN_DIRS = [
     ROOT / "physical_agent" / "agent",
     ROOT / "physical_agent" / "llm",
     ROOT / "physical_agent" / "gui",
+    ROOT / "physical_agent" / "api",
 ]
 
 ALLOWLIST_REASONS = {
@@ -85,7 +86,7 @@ def _format_boundary_failure(findings: list[tuple[str, str, str]]) -> str:
     if not findings:
         return ""
     lines = [
-        "Agent/LLM/GUI code must not directly import physical_agent.drivers or call driver.execute.",
+        "Agent/LLM/GUI/API code must not directly import physical_agent.drivers or call driver.execute.",
         "Move execution to watch-side code or add a narrow documented allowlist entry if it is validation-only.",
         "Unexpected findings:",
     ]

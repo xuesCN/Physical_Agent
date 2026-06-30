@@ -24,8 +24,12 @@ from physical_agent.state import open_state_store
 
 
 def _client_or_skip():
-    testclient = pytest.importorskip("fastapi.testclient")
-    return testclient.TestClient
+    pytest.importorskip("fastapi")
+    try:
+        from fastapi.testclient import TestClient
+    except (ImportError, RuntimeError) as exc:
+        pytest.skip(f"fastapi.testclient is unavailable; install .[dev,server]: {exc}")
+    return TestClient
 
 
 def _prepare_store(config_path: Path):

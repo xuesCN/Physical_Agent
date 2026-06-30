@@ -1,4 +1,4 @@
-import { App as AntApp, ConfigProvider, Layout, theme } from "antd";
+import { App as AntApp, ConfigProvider, Drawer, Layout, theme } from "antd";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchHealth,
@@ -9,14 +9,25 @@ import {
 } from "./api";
 import { ActionBoard } from "./components/ActionBoard";
 import { ChatPanel } from "./components/ChatPanel";
+import { ContextTabs } from "./components/ContextTabs";
 import { EventsPanel } from "./components/EventsPanel";
 import { MemorySearchPanel } from "./components/MemorySearchPanel";
 import { ProposalPanel } from "./components/ProposalPanel";
 import { RawDebug } from "./components/RawDebug";
-import { StateSummary } from "./components/StateSummary";
+import { RobotsPanel } from "./components/RobotsPanel";
+import { SettingsPanel } from "./components/SettingsPanel";
+import { PAGE_LABELS, SidebarNav } from "./components/SidebarNav";
+import type { PageKey } from "./components/SidebarNav";
 import { StatusBar } from "./components/StatusBar";
 import { UploadPanel } from "./components/UploadPanel";
-import type { ActionItem, AgentState, ApiEvent, HealthState, UploadResponse } from "./types";
+import type {
+  ActionItem,
+  AgentState,
+  ApiEvent,
+  ChatMessage,
+  HealthState,
+  UploadResponse
+} from "./types";
 
 type BusyKey = "refresh" | "chat" | "proposal" | null;
 
@@ -26,7 +37,7 @@ export default function App() {
       theme={{
         algorithm: theme.defaultAlgorithm,
         token: {
-          borderRadius: 8,
+          borderRadius: 6,
           colorPrimary: "#2563eb",
           fontFamily:
             "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
@@ -58,6 +69,9 @@ function Dashboard() {
   const [sseConnected, setSseConnected] = useState(false);
   const [watchEnabled, setWatchEnabled] = useState<boolean | null>(null);
   const [busy, setBusy] = useState<BusyKey>("refresh");
+  const [activePage, setActivePage] = useState<PageKey>("overview");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
 
   const chatMessages = useMemo(
     () => state?.chat?.messages ?? [],
@@ -170,41 +184,163 @@ function Dashboard() {
   }
 
   return (
-    <Layout className="app-shell">
-      <Layout.Header className="app-header">
-        <StatusBar
-          health={health}
-          state={state}
-          sseConnected={sseConnected}
-          watchEnabled={watchEnabled}
-          loading={busy === "refresh"}
-          onRefresh={() => void loadSnapshot()}
-        />
-      </Layout.Header>
-      <Layout.Content className="app-content">
-        <div className="dashboard-grid">
-          <div className="main-column">
-            <ActionBoard actions={state?.actions} />
-            <ChatPanel messages={chatMessages} loading={busy === "chat"} onSend={handleChat} />
+    <Layout className="app-shell" data-testid="dashboard-shell">
+      <SidebarNav
+        activePage={activePage}
+        collapsed={sidebarCollapsed}
+        onChange={setActivePage}
+        onCollapse={setSidebarCollapsed}
+      />
+      <Layout className="workspace-layout">
+        <Layout.Header className="app-header">
+          <StatusBar
+            health={health}
+            state={state}
+            sseConnected={sseConnected}
+            watchEnabled={watchEnabled}
+            loading={busy === "refresh"}
+            activePageLabel={PAGE_LABELS[activePage]}
+            onRefresh={() => void loadSnapshot()}
+            onOpenInspector={() => setInspectorOpen(true)}
+          />
+        </Layout.Header>
+        <Layout.Content className="app-content">
+          <div className="workspace-frame">
+            <main className="workspace-main" data-testid={`page-${activePage}`}>
+              {renderPageContent({
+                activePage,
+                state,
+                health,
+                events,
+                chatMessages,
+                busy,
+                onChat: handleChat,
+                onUploaded: handleUploaded,
+                onError: (error) => showError(message, error)
+              })}
+            </main>
+            <aside className="inspector-column">
+              <ProposalPanel
+                state={state}
+                loading={busy === "proposal"}
+                onSubmitTask={handleTask}
+                onProposeAction={handleAction}
+              />
+            </aside>
           </div>
-          <div className="side-column">
-            <StateSummary state={state} />
-          </div>
-          <div className="tool-column">
-            <ProposalPanel
-              state={state}
-              loading={busy === "proposal"}
-              onSubmitTask={handleTask}
-              onProposeAction={handleAction}
-            />
-            <UploadPanel onUploaded={handleUploaded} onError={(error) => showError(message, error)} />
-            <MemorySearchPanel onError={(error) => showError(message, error)} />
-            <EventsPanel events={events} />
-            <RawDebug state={state} />
-          </div>
-        </div>
-      </Layout.Content>
+        </Layout.Content>
+      </Layout>
+      <Drawer
+        title="Task / Action Proposal"
+        className="proposal-drawer"
+        width={420}
+        placement="right"
+        open={inspectorOpen}
+        onClose={() => setInspectorOpen(false)}
+      >
+        {inspectorOpen && (
+          <ProposalPanel
+            state={state}
+            loading={busy === "proposal"}
+            onSubmitTask={handleTask}
+            onProposeAction={handleAction}
+          />
+        )}
+      </Drawer>
     </Layout>
+  );
+}
+
+interface RenderPageProps {
+  activePage: PageKey;
+  state: AgentState | null;
+  health: HealthState | null;
+  events: ApiEvent[];
+  chatMessages: ChatMessage[];
+  busy: BusyKey;
+  onChat: (message: string) => Promise<void>;
+  onUploaded: (state: AgentState, response: UploadResponse) => void;
+  onError: (error: Error) => void;
+}
+
+function renderPageContent({
+  activePage,
+  state,
+  health,
+  events,
+  chatMessages,
+  busy,
+  onChat,
+  onUploaded,
+  onError
+}: RenderPageProps) {
+  if (activePage === "actions") {
+    return (
+      <div className="page-stack">
+        <ActionBoard actions={state?.actions} />
+        <ContextTabs state={state} defaultActiveKey="feedback" />
+      </div>
+    );
+  }
+
+  if (activePage === "world") {
+    return (
+      <div className="page-stack">
+        <ContextTabs state={state} defaultActiveKey="world" />
+      </div>
+    );
+  }
+
+  if (activePage === "robots") {
+    return <RobotsPanel state={state} />;
+  }
+
+  if (activePage === "memory") {
+    return (
+      <div className="two-panel-page">
+        <UploadPanel onUploaded={onUploaded} onError={onError} />
+        <MemorySearchPanel onError={onError} />
+      </div>
+    );
+  }
+
+  if (activePage === "safety") {
+    return (
+      <div className="page-stack">
+        <ContextTabs state={state} defaultActiveKey="safety" />
+      </div>
+    );
+  }
+
+  if (activePage === "events") {
+    return (
+      <div className="two-panel-page events-page">
+        <EventsPanel events={events} />
+        <RawDebug state={state} />
+      </div>
+    );
+  }
+
+  if (activePage === "settings") {
+    return (
+      <div className="two-panel-page">
+        <SettingsPanel health={health} state={state} />
+        <RawDebug state={state} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="overview-grid">
+      <div className="main-column">
+        <ActionBoard actions={state?.actions} />
+        <ChatPanel messages={chatMessages} loading={busy === "chat"} onSend={onChat} />
+      </div>
+      <div className="context-column">
+        <ContextTabs state={state} />
+        <RobotsPanel state={state} />
+      </div>
+    </div>
   );
 }
 

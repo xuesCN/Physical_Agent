@@ -33,6 +33,7 @@ export function ActionBoard({ actions }: ActionBoardProps) {
   return (
     <Card
       className="panel action-board"
+      data-testid="action-board"
       title={
         <Space>
           <Typography.Text strong>Action Board</Typography.Text>
@@ -58,7 +59,9 @@ export function ActionBoard({ actions }: ActionBoardProps) {
         size="small"
         pagination={false}
         dataSource={data}
-        scroll={{ x: true, y: 280 }}
+        tableLayout="fixed"
+        scroll={{ x: 720, y: 260 }}
+        locale={{ emptyText: `No ${active} actions` }}
         columns={[
           {
             title: "ID",
@@ -70,11 +73,13 @@ export function ActionBoard({ actions }: ActionBoardProps) {
             title: "Target",
             key: "target",
             width: 180,
+            ellipsis: true,
             render: (_, record) => `${record.robot}.${record.capability}`
           },
           {
             title: "Params",
             dataIndex: "params",
+            width: 300,
             render: (value) => (
               <Typography.Text className="mono-cell">
                 {compactJson(value, "{}")}
@@ -85,6 +90,7 @@ export function ActionBoard({ actions }: ActionBoardProps) {
             title: "Depends",
             dataIndex: "depends_on",
             width: 120,
+            ellipsis: true,
             render: (value?: string[]) => value?.join(", ") || "-"
           }
         ]}

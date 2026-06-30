@@ -11,6 +11,7 @@ export function RawDebug({ state }: RawDebugProps) {
   return (
     <Card
       className="panel"
+      data-testid="raw-debug-panel"
       title={
         <Space>
           <CodeOutlined />

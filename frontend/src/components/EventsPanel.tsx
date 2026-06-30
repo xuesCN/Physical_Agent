@@ -11,6 +11,7 @@ export function EventsPanel({ events }: EventsPanelProps) {
   return (
     <Card
       className="panel events-panel"
+      data-testid="events-panel"
       title={
         <Space>
           <ThunderboltOutlined />

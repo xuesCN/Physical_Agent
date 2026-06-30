@@ -2,10 +2,11 @@ import {
   ApiOutlined,
   CloudSyncOutlined,
   DatabaseOutlined,
+  FormOutlined,
   ReloadOutlined,
   SafetyOutlined
 } from "@ant-design/icons";
-import { Badge, Button, Space, Tag, Typography } from "antd";
+import { Badge, Breadcrumb, Button, Space, Tag, Typography } from "antd";
 import type { AgentState, HealthState } from "../types";
 
 interface StatusBarProps {
@@ -14,7 +15,9 @@ interface StatusBarProps {
   sseConnected: boolean;
   watchEnabled: boolean | null;
   loading: boolean;
+  activePageLabel: string;
   onRefresh: () => void;
+  onOpenInspector: () => void;
 }
 
 export function StatusBar({
@@ -23,16 +26,26 @@ export function StatusBar({
   sseConnected,
   watchEnabled,
   loading,
-  onRefresh
+  activePageLabel,
+  onRefresh,
+  onOpenInspector
 }: StatusBarProps) {
   const backend = state?.backend || health?.backend || "-";
   const ready = Boolean(state?.ready ?? health?.ready);
 
   return (
-    <div className="status-bar">
+    <div className="status-bar" data-testid="status-bar">
       <div className="status-title">
-        <Typography.Title level={1}>Physical Agent</Typography.Title>
-        <Tag icon={<SafetyOutlined />} color="blue">
+        <div>
+          <Typography.Title level={1}>Physical Agent</Typography.Title>
+          <Breadcrumb
+            items={[
+              { title: "Workbench" },
+              { title: activePageLabel }
+            ]}
+          />
+        </div>
+        <Tag icon={<SafetyOutlined />} color="blue" className="proposal-tag">
           Proposal only
         </Tag>
       </div>
@@ -50,6 +63,14 @@ export function StatusBar({
           status={sseConnected ? "processing" : "default"}
           text={sseConnected ? "SSE connected" : "SSE disconnected"}
         />
+        <Button
+          className="mobile-inspector-button"
+          icon={<FormOutlined />}
+          size="small"
+          onClick={onOpenInspector}
+        >
+          Propose
+        </Button>
         <Button
           icon={<ReloadOutlined />}
           loading={loading}

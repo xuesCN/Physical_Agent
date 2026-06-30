@@ -35,6 +35,7 @@ export function MemorySearchPanel({ onError }: MemorySearchPanelProps) {
   return (
     <Card
       className="panel memory-search"
+      data-testid="memory-search-panel"
       title={
         <Space>
           <SearchOutlined />

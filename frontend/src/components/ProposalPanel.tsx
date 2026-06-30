@@ -60,7 +60,18 @@ export function ProposalPanel({
     if (!values.robot || !values.capability) {
       throw new Error("Robot and capability are required.");
     }
-    const parsedParams = parseParams(values.params);
+    let parsedParams: Record<string, unknown>;
+    try {
+      parsedParams = parseParams(values.params);
+    } catch (error) {
+      actionForm.setFields([
+        {
+          name: "params",
+          errors: [error instanceof Error ? error.message : String(error)]
+        }
+      ]);
+      return;
+    }
     await onProposeAction({
       id: values.id?.trim() || `act_gui_${Date.now()}`,
       robot: values.robot,
@@ -75,6 +86,7 @@ export function ProposalPanel({
   return (
     <Card
       className="panel"
+      data-testid="proposal-panel"
       title={
         <Space>
           <FormOutlined />

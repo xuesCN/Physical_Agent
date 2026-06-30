@@ -38,6 +38,7 @@ export function UploadPanel({ onUploaded, onError }: UploadPanelProps) {
   return (
     <Card
       className="panel"
+      data-testid="upload-panel"
       title={
         <Space>
           <InboxOutlined />

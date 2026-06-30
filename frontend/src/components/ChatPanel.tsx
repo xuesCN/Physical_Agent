@@ -39,6 +39,7 @@ export function ChatPanel({ messages, loading, onSend }: ChatPanelProps) {
   return (
     <Card
       className="panel chat-panel"
+      data-testid="chat-panel"
       title={
         <Space>
           <RobotOutlined />
@@ -70,6 +71,7 @@ export function ChatPanel({ messages, loading, onSend }: ChatPanelProps) {
         value={draft}
         loading={loading}
         placeholder="Message the agent"
+        submitType="enter"
         onChange={setDraft}
         onSubmit={submit}
       />

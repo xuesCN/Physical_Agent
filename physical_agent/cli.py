@@ -151,10 +151,20 @@ def api(
     config: Path = typer.Option(Path(DEFAULT_CONFIG_NAME), "--config", "-c", help="Config path."),
     host: str = typer.Option("127.0.0.1", "--host", help="Host to bind."),
     port: int = typer.Option(8766, "--port", "-p", help="Port to bind."),
+    watch: bool = typer.Option(False, "--watch", help="Run the watch loop in the API process."),
+    watch_interval_s: Optional[float] = typer.Option(
+        None,
+        "--watch-interval-s",
+        help="Override the API watch loop interval in seconds.",
+    ),
 ) -> None:
     try:
         create_app, uvicorn = _load_api_server()
-        api_app = create_app(config)
+        api_app = create_app(
+            config,
+            enable_watch=watch,
+            watch_interval_s=watch_interval_s,
+        )
     except Exception as exc:
         from physical_agent.api.server import MissingServerDependencyError
 

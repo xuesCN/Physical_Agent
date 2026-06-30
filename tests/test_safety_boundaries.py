@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
+import subprocess
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +48,34 @@ def test_agent_llm_gui_do_not_cross_driver_execution_boundary():
         "Safety boundary allowlist is stale; remove obsolete entries or update the "
         f"reason list: {sorted(missing_allowlist)!r}"
     )
+
+
+def test_api_server_top_level_import_does_not_load_watch_or_drivers():
+    code = """
+import json
+import sys
+
+import physical_agent.api.server
+
+names = [
+    "physical_agent.watch.runtime",
+    "physical_agent.drivers.loader",
+]
+print(json.dumps({name: name in sys.modules for name in names}, sort_keys=True))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    loaded = json.loads(result.stdout)
+    assert loaded == {
+        "physical_agent.watch.runtime": False,
+        "physical_agent.drivers.loader": False,
+    }
 
 
 def _boundary_findings(path: Path) -> list[tuple[str, str, str]]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 import re
@@ -7,6 +8,13 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from physical_agent.api.watch_service import (
+    ApiEventBroker,
+    ApiWatchService,
+    error_payload,
+    format_sse_event,
+    summarize_state,
+)
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config
 from physical_agent.ingest.files import FileIngestionError, ingest_file
 from physical_agent.protocol.schemas import Action, ChatPlan
@@ -73,18 +81,49 @@ class ExportAuditRequest(BaseModel):
     out: str | None = None
 
 
-def create_app(config_path: str | Path = DEFAULT_CONFIG_NAME) -> Any:
-    """Create the optional FastAPI app without starting watch or loading drivers."""
+def create_app(
+    config_path: str | Path = DEFAULT_CONFIG_NAME,
+    *,
+    enable_watch: bool = False,
+    watch_interval_s: float | None = None,
+) -> Any:
+    """Create the optional FastAPI app; watch is disabled unless explicitly enabled."""
 
     fastapi = _load_fastapi()
     FastAPI = fastapi["FastAPI"]
     JSONResponse = fastapi["JSONResponse"]
+    StreamingResponse = fastapi["StreamingResponse"]
 
-    controller = ApiController(config_path)
+    events = ApiEventBroker()
+    controller = ApiController(config_path, events=events)
+
+    @asynccontextmanager
+    async def lifespan(app: Any) -> Any:
+        app.state.events = events
+        app.state.controller = controller
+        app.state.watch_enabled = bool(enable_watch)
+        app.state.watch_service = None
+        if enable_watch:
+            service = ApiWatchService(
+                config_path,
+                events=events,
+                interval_s=watch_interval_s,
+                state_provider=controller.state,
+            )
+            app.state.watch_service = service
+            await service.start()
+        try:
+            yield
+        finally:
+            service = getattr(app.state, "watch_service", None)
+            if service is not None:
+                await service.stop()
+
     app = FastAPI(
         title="Physical Agent API",
         version="0.1.0",
         description="Proposal-only HTTP API for Physical Agent state.",
+        lifespan=lifespan,
     )
 
     def handle_error(exc: ApiRequestError) -> Any:
@@ -100,6 +139,59 @@ def create_app(config_path: str | Path = DEFAULT_CONFIG_NAME) -> Any:
     @app.get("/api/state")
     def state() -> dict[str, Any]:
         return controller.state()
+
+    @app.get("/api/events")
+    def event_stream(limit: int | None = None) -> Any:
+        subscription = events.subscribe(replay=True)
+        max_events = limit if limit is not None and limit > 0 else None
+
+        def stream() -> Any:
+            sent = 0
+
+            def emit(event: dict[str, Any]) -> str:
+                nonlocal sent
+                sent += 1
+                return format_sse_event(event)
+
+            def should_stop() -> bool:
+                return max_events is not None and sent >= max_events
+
+            try:
+                yield emit(
+                    events.make_event(
+                        "hello",
+                        {
+                            "version": "0.1.0",
+                            "watch_enabled": bool(enable_watch),
+                        },
+                    )
+                )
+                if should_stop():
+                    return
+                yield emit(events.make_event("state", _state_event_payload(controller, "connect")))
+                if should_stop():
+                    return
+                while True:
+                    event = subscription.get(timeout_s=15.0)
+                    if event is None:
+                        if max_events is not None:
+                            return
+                        yield ": keepalive\n\n"
+                        continue
+                    yield emit(event)
+                    if should_stop():
+                        return
+            finally:
+                subscription.close()
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.post("/api/actions/propose")
     def propose_action(payload: ActionProposalRequest) -> dict[str, Any]:
@@ -147,9 +239,15 @@ def create_app(config_path: str | Path = DEFAULT_CONFIG_NAME) -> Any:
 
 
 class ApiController:
-    def __init__(self, config_path: str | Path = DEFAULT_CONFIG_NAME):
+    def __init__(
+        self,
+        config_path: str | Path = DEFAULT_CONFIG_NAME,
+        *,
+        events: ApiEventBroker | None = None,
+    ):
         self.config_path = Path(config_path).resolve()
         self.base_dir = self.config_path.parent
+        self.events = events
         self.planner = SafeProposalPlanner()
 
     def health(self) -> dict[str, Any]:
@@ -210,11 +308,13 @@ class ApiController:
         action = _validate_action(payload.action_payload())
         appended = store.append_pending_action(action)
         store.append_log(f"API proposed action `{appended.id}`.", actor="api")
+        state = self.state()
+        self._publish_state("action_proposed", state)
         return {
             "ok": True,
             "message": "Action proposed in the action board; watch must validate before execution.",
             "action": _json_safe(appended),
-            "state": self.state(),
+            "state": state,
         }
 
     def submit_task(self, payload: SubmitTaskRequest) -> dict[str, Any]:
@@ -232,6 +332,8 @@ class ApiController:
             )
         else:
             store.append_log(f"API submitted task `{task}` with no action proposal.", actor="api")
+        state = self._state(config, store)
+        self._publish_state("task_submitted", state)
         return {
             "ok": True,
             "message": (
@@ -240,7 +342,7 @@ class ApiController:
                 else "Task recorded. No action proposal was created from current capabilities."
             ),
             "actions": _json_safe(actions),
-            "state": self._state(config, store),
+            "state": state,
         }
 
     def chat(self, payload: ChatRequest) -> dict[str, Any]:
@@ -276,6 +378,8 @@ class ApiController:
             },
         )
         store.append_log("API chat replied without executing watch.", actor="api")
+        state = self._state(config, store)
+        self._publish_state("chat", state)
         return {
             "ok": True,
             "mode": "rule_based",
@@ -284,7 +388,7 @@ class ApiController:
             "memory": _json_safe(notes),
             "plan": plan.model_dump(mode="json"),
             "executed": 0,
-            "state": self._state(config, store),
+            "state": state,
         }
 
     def search_memory(self, payload: SearchMemoryRequest) -> dict[str, Any]:
@@ -319,11 +423,13 @@ class ApiController:
                 status_code=400,
                 details={"metadata": exc.metadata},
             ) from exc
+        state = self._state(config, store)
+        self._publish_state("file_ingested", state)
         return {
             "ok": True,
             "message": "File ingested.",
             "result": _json_safe(result),
-            "state": self._state(config, store),
+            "state": state,
         }
 
     def export_audit(self, payload: ExportAuditRequest) -> dict[str, Any]:
@@ -333,6 +439,7 @@ class ApiController:
             out_path = Path(payload.out)
             out_dir = out_path if out_path.is_absolute() else self.base_dir / out_path
         result = store.export_human_view(out_dir)
+        self._publish_state("audit_exported")
         return {
             "ok": True,
             "message": "Exported audit view.",
@@ -386,6 +493,24 @@ class ApiController:
             "uploads": _json_safe(store.read_uploads()),
             "chunks": _json_safe(store.read_memory_chunks()),
         }
+
+    def _publish_state(self, reason: str, state: dict[str, Any] | None = None) -> None:
+        if self.events is None:
+            return
+        try:
+            snapshot = state if state is not None else self.state()
+            self.events.publish(
+                "state",
+                {
+                    "reason": reason,
+                    "state": summarize_state(snapshot),
+                },
+            )
+        except Exception as exc:
+            try:
+                self.events.publish("error", error_payload(exc, phase="state_publish"))
+            except Exception:
+                pass
 
     def _plan_actions(self, task: str, store: StateStore) -> list[Action]:
         actions = self.planner.plan(
@@ -646,10 +771,31 @@ class SafeProposalPlanner:
 def _load_fastapi() -> dict[str, Any]:
     try:
         from fastapi import FastAPI
-        from fastapi.responses import JSONResponse
+        from fastapi.responses import JSONResponse, StreamingResponse
     except ImportError as exc:
         raise MissingServerDependencyError(SERVER_EXTRA_HINT) from exc
-    return {"FastAPI": FastAPI, "JSONResponse": JSONResponse}
+    return {
+        "FastAPI": FastAPI,
+        "JSONResponse": JSONResponse,
+        "StreamingResponse": StreamingResponse,
+    }
+
+
+def _state_event_payload(controller: ApiController, reason: str) -> dict[str, Any]:
+    try:
+        return {
+            "reason": reason,
+            "state": summarize_state(controller.state()),
+        }
+    except Exception as exc:
+        return {
+            "reason": reason,
+            "state": {
+                "ok": False,
+                "ready": False,
+                "message": f"State snapshot failed: {type(exc).__name__}: {exc}",
+            },
+        }
 
 
 def _validate_action(payload: dict[str, Any]) -> Action:

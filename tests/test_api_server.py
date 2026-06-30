@@ -90,6 +90,59 @@ def test_api_cli_missing_server_extra_has_clear_message(tmp_path, monkeypatch):
     assert ".[server]" in result.output
 
 
+def test_api_cli_watch_flag_is_explicit(tmp_path, monkeypatch):
+    calls = {}
+    app_object = object()
+
+    def fake_create_app(config, *, enable_watch=False, watch_interval_s=None):
+        calls["create_app"] = {
+            "config": Path(config),
+            "enable_watch": enable_watch,
+            "watch_interval_s": watch_interval_s,
+        }
+        return app_object
+
+    class FakeUvicorn:
+        @staticmethod
+        def run(app, *, host, port):
+            calls["uvicorn"] = {"app": app, "host": host, "port": port}
+
+    monkeypatch.setattr(
+        cli_module,
+        "_load_api_server",
+        lambda: (fake_create_app, FakeUvicorn),
+    )
+
+    config_path = tmp_path / "physical-agent.yaml"
+    result = CliRunner().invoke(
+        cli_module.app,
+        [
+            "api",
+            "--config",
+            str(config_path),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8766",
+            "--watch",
+            "--watch-interval-s",
+            "0.25",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls["create_app"] == {
+        "config": config_path,
+        "enable_watch": True,
+        "watch_interval_s": 0.25,
+    }
+    assert calls["uvicorn"] == {
+        "app": app_object,
+        "host": "127.0.0.1",
+        "port": 8766,
+    }
+
+
 def test_api_controller_contract_runs_without_fastapi(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     store = _prepare_store(config_path)

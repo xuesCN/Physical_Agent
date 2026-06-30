@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 import json
 from pathlib import Path
+import threading
 from typing import Any
 
 from physical_agent.protocol.markdown import parse_front_matter, render_front_matter
@@ -38,6 +39,20 @@ from physical_agent.protocol.retrieval import (
     normalize_memory_chunk,
     query_memory_chunks,
 )
+
+
+_LOG_LOCKS: dict[Path, threading.Lock] = {}
+_LOG_LOCKS_GUARD = threading.Lock()
+
+
+def _log_lock(path: Path) -> threading.Lock:
+    key = path.resolve()
+    with _LOG_LOCKS_GUARD:
+        lock = _LOG_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _LOG_LOCKS[key] = lock
+        return lock
 
 
 class Workspace:
@@ -424,18 +439,19 @@ class Workspace:
 
     def append_log(self, message: str, *, actor: str | None = None) -> None:
         target = self.file("log")
-        if target.exists():
-            doc = parse_front_matter(target.read_text(encoding="utf-8"))
-            metadata = dict(doc.metadata)
-            body = doc.body.rstrip() + "\n\n"
-            metadata["revision"] = doc.revision + 1
-        else:
-            metadata = {"schema": "physical-agent/log/v1", "owner": "system", "revision": 1}
-            body = "# Physical Agent Log\n\n"
-        timestamp = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-        prefix = f"**{actor}**: " if actor else ""
-        body += f"## {timestamp}\n\n{prefix}{message}\n"
-        target.write_text(render_front_matter(metadata, body), encoding="utf-8")
+        with _log_lock(target):
+            if target.exists():
+                doc = parse_front_matter(target.read_text(encoding="utf-8"))
+                metadata = dict(doc.metadata)
+                body = doc.body.rstrip() + "\n\n"
+                metadata["revision"] = doc.revision + 1
+            else:
+                metadata = {"schema": "physical-agent/log/v1", "owner": "system", "revision": 1}
+                body = "# Physical Agent Log\n\n"
+            timestamp = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+            prefix = f"**{actor}**: " if actor else ""
+            body += f"## {timestamp}\n\n{prefix}{message}\n"
+            target.write_text(render_front_matter(metadata, body), encoding="utf-8")
 
     def _replace_memory_note_chunks(self, notes: list[dict[str, Any]]) -> None:
         current = self.read_memory_chunks()

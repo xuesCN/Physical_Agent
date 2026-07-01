@@ -10,6 +10,7 @@ import {
 } from "@ant-design/icons";
 import { Layout, Menu, Typography } from "antd";
 import type { MenuProps } from "antd";
+import type { ReactNode } from "react";
 
 export type PageKey =
   | "overview"
@@ -33,18 +34,42 @@ export const PAGE_LABELS: Record<PageKey, string> = {
 };
 
 function navLabel(key: PageKey) {
-  return <span data-testid={`nav-${key}`}>{PAGE_LABELS[key]}</span>;
+  return <span>{PAGE_LABELS[key]}</span>;
+}
+
+function navIcon(key: PageKey, icon: ReactNode) {
+  return <span data-testid={`nav-${key}`}>{icon}</span>;
 }
 
 const NAV_ITEMS: MenuProps["items"] = [
-  { key: "overview", icon: <DashboardOutlined />, label: navLabel("overview") },
-  { key: "actions", icon: <DeploymentUnitOutlined />, label: navLabel("actions") },
-  { key: "world", icon: <GlobalOutlined />, label: navLabel("world") },
-  { key: "robots", icon: <RobotOutlined />, label: navLabel("robots") },
-  { key: "memory", icon: <DatabaseOutlined />, label: navLabel("memory") },
-  { key: "safety", icon: <SafetyCertificateOutlined />, label: navLabel("safety") },
-  { key: "events", icon: <ThunderboltOutlined />, label: navLabel("events") },
-  { key: "settings", icon: <SettingOutlined />, label: navLabel("settings") }
+  {
+    key: "overview",
+    icon: navIcon("overview", <DashboardOutlined />),
+    label: navLabel("overview")
+  },
+  {
+    key: "actions",
+    icon: navIcon("actions", <DeploymentUnitOutlined />),
+    label: navLabel("actions")
+  },
+  { key: "world", icon: navIcon("world", <GlobalOutlined />), label: navLabel("world") },
+  { key: "robots", icon: navIcon("robots", <RobotOutlined />), label: navLabel("robots") },
+  { key: "memory", icon: navIcon("memory", <DatabaseOutlined />), label: navLabel("memory") },
+  {
+    key: "safety",
+    icon: navIcon("safety", <SafetyCertificateOutlined />),
+    label: navLabel("safety")
+  },
+  {
+    key: "events",
+    icon: navIcon("events", <ThunderboltOutlined />),
+    label: navLabel("events")
+  },
+  {
+    key: "settings",
+    icon: navIcon("settings", <SettingOutlined />),
+    label: navLabel("settings")
+  }
 ];
 
 interface SidebarNavProps {

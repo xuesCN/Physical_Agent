@@ -123,17 +123,28 @@ export function ProposalPanel({
       >
         <div className="two-col">
           <Form.Item name="robot" label="Robot" rules={[{ required: true }]}>
-            <Select options={robotOptions} placeholder="robot" />
+            <Select
+              data-testid="proposal-robot-select"
+              options={robotOptions}
+              placeholder="robot"
+            />
           </Form.Item>
           <Form.Item name="capability" label="Capability" rules={[{ required: true }]}>
-            <Select options={capabilityOptions} placeholder="capability" />
+            <Select
+              data-testid="proposal-capability-select"
+              options={capabilityOptions}
+              placeholder="capability"
+            />
           </Form.Item>
         </div>
         <Form.Item name="id" label="Action ID">
           <Input placeholder="auto" />
         </Form.Item>
         <Form.Item name="params" label="Params JSON">
-          <Input.TextArea autoSize={{ minRows: 3, maxRows: 6 }} />
+          <Input.TextArea
+            data-testid="proposal-params-input"
+            autoSize={{ minRows: 3, maxRows: 6 }}
+          />
         </Form.Item>
         <Form.Item name="reason" label="Reason">
           <Input />
@@ -141,7 +152,12 @@ export function ProposalPanel({
         <Form.Item name="depends_on" label="Depends on">
           <Input placeholder="act_001, act_002" />
         </Form.Item>
-        <Button htmlType="submit" icon={<PlusOutlined />} loading={loading}>
+        <Button
+          data-testid="propose-action-button"
+          htmlType="submit"
+          icon={<PlusOutlined />}
+          loading={loading}
+        >
           Propose Action
         </Button>
       </Form>
@@ -153,7 +169,12 @@ function parseParams(value?: string): Record<string, unknown> {
   if (!value?.trim()) {
     return {};
   }
-  const parsed = JSON.parse(value);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error('Params JSON is invalid. Enter an object such as {"key":"value"}.');
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("Params JSON must be an object.");
   }

@@ -1,4 +1,4 @@
-import { App as AntApp, ConfigProvider, Drawer, Layout, theme } from "antd";
+import { Alert, App as AntApp, ConfigProvider, Drawer, Layout, theme } from "antd";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchHealth,
@@ -68,6 +68,7 @@ function Dashboard() {
   const [events, setEvents] = useState<ApiEvent[]>([]);
   const [sseConnected, setSseConnected] = useState(false);
   const [watchEnabled, setWatchEnabled] = useState<boolean | null>(null);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [busy, setBusy] = useState<BusyKey>("refresh");
   const [activePage, setActivePage] = useState<PageKey>("overview");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -84,7 +85,9 @@ function Dashboard() {
       const [nextHealth, nextState] = await Promise.all([fetchHealth(), fetchState()]);
       setHealth(nextHealth);
       setState(nextState);
+      setSnapshotError(null);
     } catch (error) {
+      setSnapshotError(error instanceof Error ? error.message : String(error));
       showError(message, error);
     } finally {
       setBusy((current) => (current === "refresh" ? null : current));
@@ -207,6 +210,12 @@ function Dashboard() {
         <Layout.Content className="app-content">
           <div className="workspace-frame">
             <main className="workspace-main" data-testid={`page-${activePage}`}>
+              <WorkspaceNotice
+                error={snapshotError}
+                loading={busy === "refresh"}
+                health={health}
+                state={state}
+              />
               {renderPageContent({
                 activePage,
                 state,
@@ -261,6 +270,57 @@ interface RenderPageProps {
   onChat: (message: string) => Promise<void>;
   onUploaded: (state: AgentState, response: UploadResponse) => void;
   onError: (error: Error) => void;
+}
+
+interface WorkspaceNoticeProps {
+  error: string | null;
+  loading: boolean;
+  health: HealthState | null;
+  state: AgentState | null;
+}
+
+function WorkspaceNotice({ error, loading, health, state }: WorkspaceNoticeProps) {
+  if (error) {
+    return (
+      <Alert
+        className="workspace-notice"
+        data-testid="workspace-notice"
+        type="error"
+        showIcon
+        message="API snapshot unavailable"
+        description={error}
+      />
+    );
+  }
+
+  if (loading && !health && !state) {
+    return (
+      <Alert
+        className="workspace-notice"
+        data-testid="workspace-notice"
+        type="info"
+        showIcon
+        message="Loading workspace status"
+        description="Connecting to the Physical Agent API."
+      />
+    );
+  }
+
+  const snapshot = state ?? health;
+  if (snapshot && !snapshot.ready) {
+    return (
+      <Alert
+        className="workspace-notice"
+        data-testid="workspace-notice"
+        type="warning"
+        showIcon
+        message="Workspace is not ready"
+        description={snapshot.message || "Initialize the workspace before proposing work."}
+      />
+    );
+  }
+
+  return null;
 }
 
 function renderPageContent({

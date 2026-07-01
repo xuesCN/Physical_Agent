@@ -6,7 +6,15 @@ import type {
   UploadResponse
 } from "./types";
 
-async function apiJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+interface ApiJsonOptions {
+  allowNotReadyBody?: boolean;
+}
+
+async function apiJson<T>(
+  path: string,
+  init: RequestInit = {},
+  options: ApiJsonOptions = {}
+): Promise<T> {
   const response = await fetch(path, {
     headers: {
       "Content-Type": "application/json",
@@ -15,18 +23,18 @@ async function apiJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...init
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.ok === false) {
+  if (!response.ok || (!options.allowNotReadyBody && data.ok === false)) {
     throw new Error(data.message || `Request failed: ${response.status}`);
   }
   return data as T;
 }
 
 export function fetchHealth(): Promise<HealthState> {
-  return apiJson<HealthState>("/api/health");
+  return apiJson<HealthState>("/api/health", {}, { allowNotReadyBody: true });
 }
 
 export function fetchState(): Promise<AgentState> {
-  return apiJson<AgentState>("/api/state");
+  return apiJson<AgentState>("/api/state", {}, { allowNotReadyBody: true });
 }
 
 export function sendChat(message: string): Promise<{

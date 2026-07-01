@@ -59,12 +59,15 @@ export function StatusBar({
         <Tag icon={<CloudSyncOutlined />} color={watchEnabled ? "cyan" : "default"}>
           watch {watchEnabled ? "enabled" : "off"}
         </Tag>
-        <Badge
-          status={sseConnected ? "processing" : "default"}
-          text={sseConnected ? "SSE connected" : "SSE disconnected"}
-        />
+        <span data-testid="sse-status">
+          <Badge
+            status={sseConnected ? "processing" : "warning"}
+            text={sseConnected ? "SSE connected" : "SSE disconnected; polling fallback active"}
+          />
+        </span>
         <Button
           className="mobile-inspector-button"
+          data-testid="open-proposal-drawer"
           icon={<FormOutlined />}
           size="small"
           onClick={onOpenInspector}

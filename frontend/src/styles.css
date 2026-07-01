@@ -173,6 +173,10 @@ body {
   min-width: 0;
 }
 
+.workspace-notice {
+  margin-bottom: 12px;
+}
+
 .overview-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -377,6 +381,10 @@ body {
   margin-top: 10px;
 }
 
+.upload-feedback {
+  margin-top: 10px;
+}
+
 .search-line {
   width: 100%;
 }
@@ -458,6 +466,10 @@ body {
 
   .status-bar > .ant-space {
     justify-content: flex-start;
+  }
+
+  .status-bar .ant-badge-status-text {
+    white-space: normal;
   }
 
   .status-title {

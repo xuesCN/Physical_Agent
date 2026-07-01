@@ -17,6 +17,8 @@ watch           ->  写 capabilities / world / feedback / log
 
 核心边界是：agent 可以提出动作意图，但不能直接触碰硬件或 driver；只有 watch 进程会加载 driver 并执行动作。当前默认 quickstart 使用内置 `mock_arm` 和 SQLite backend，不需要真实硬件，也不需要 LLM API key。
 
+真实硬件 bring-up 前请先读：[`docs/hardware-bringup-checklist.zh-CN.md`](docs/hardware-bringup-checklist.zh-CN.md)。
+
 本次已完成：
 
 - 已拉取仓库并安装依赖到 `.venv/`。

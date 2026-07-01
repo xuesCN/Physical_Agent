@@ -14,6 +14,8 @@ Agent can propose actions. Watch decides whether and how they touch the physical
 
 也就是说，agent 可以提出动作意图，但只有 watch 进程可以决定这些动作是否以及如何触达真实物理世界。
 
+准备接真实硬件前，请先读：[`docs/hardware-bringup-checklist.zh-CN.md`](docs/hardware-bringup-checklist.zh-CN.md)。
+
 ## 核心架构
 
 Physical Agent v1 采用双进程架构：

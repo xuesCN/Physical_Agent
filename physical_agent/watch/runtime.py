@@ -23,6 +23,8 @@ class WatchRuntime:
         self.workspace: StateStore | None = None
         self.loaded_drivers: dict[str, LoadedDriver] = {}
         self.profiles: dict[str, RobotRuntimeProfile] = {}
+        self._heartbeat_failure_counts: dict[str, int] = {}
+        self._watchdog_halted_robots: set[str] = set()
         self.started = False
 
     async def setup(self) -> None:
@@ -45,6 +47,8 @@ class WatchRuntime:
             await loaded.driver.connect()
             capabilities = loaded.driver.capabilities()
             self.loaded_drivers[robot_id] = loaded
+            self._heartbeat_failure_counts[robot_id] = 0
+            self._watchdog_halted_robots.discard(robot_id)
             self.profiles[robot_id] = RobotRuntimeProfile(
                 robot_id=robot_id,
                 kind=loaded.manifest.robot.kind,
@@ -191,7 +195,26 @@ class WatchRuntime:
             try:
                 await loaded.driver.heartbeat()
             except Exception as exc:
-                self._record_driver_hook_failure(robot_id, "heartbeat", exc)
+                failure_count = self._heartbeat_failure_counts.get(robot_id, 0) + 1
+                self._heartbeat_failure_counts[robot_id] = failure_count
+                self._record_driver_hook_failure(
+                    robot_id,
+                    "heartbeat",
+                    exc,
+                    extra_result={"failure_count": failure_count},
+                )
+                await self._maybe_halt_for_heartbeat_failure(
+                    robot_id,
+                    loaded,
+                    failure_count,
+                    exc,
+                )
+            else:
+                previous_failure_count = self._heartbeat_failure_counts.get(robot_id, 0)
+                self._heartbeat_failure_counts[robot_id] = 0
+                self._watchdog_halted_robots.discard(robot_id)
+                if previous_failure_count > 0:
+                    self._record_heartbeat_recovered(robot_id, previous_failure_count)
 
     async def _halt_loaded_drivers(self) -> None:
         if self.config is None or not self.config.watch.halt_on_shutdown:
@@ -202,27 +225,155 @@ class WatchRuntime:
             except Exception as exc:
                 self._record_driver_hook_failure(robot_id, "halt", exc)
 
-    def _record_driver_hook_failure(self, robot_id: str, hook: str, exc: Exception) -> None:
-        workspace = self._workspace()
+    async def _maybe_halt_for_heartbeat_failure(
+        self,
+        robot_id: str,
+        loaded: LoadedDriver,
+        failure_count: int,
+        heartbeat_exc: Exception,
+    ) -> None:
+        if self.config is None:
+            return
+        threshold = self.config.watch.heartbeat_failure_threshold
+        if failure_count < threshold or robot_id in self._watchdog_halted_robots:
+            return
+
+        self._watchdog_halted_robots.add(robot_id)
+        if not self.config.watch.halt_on_heartbeat_failure:
+            self._record_watchdog_halt(
+                robot_id=robot_id,
+                failure_count=failure_count,
+                threshold=threshold,
+                halt_status="disabled",
+                heartbeat_exc=heartbeat_exc,
+            )
+            return
+
+        try:
+            await loaded.driver.halt()
+        except Exception as halt_exc:
+            self._record_watchdog_halt(
+                robot_id=robot_id,
+                failure_count=failure_count,
+                threshold=threshold,
+                halt_status="failed",
+                heartbeat_exc=heartbeat_exc,
+                halt_exc=halt_exc,
+            )
+        else:
+            self._record_watchdog_halt(
+                robot_id=robot_id,
+                failure_count=failure_count,
+                threshold=threshold,
+                halt_status="completed",
+                heartbeat_exc=heartbeat_exc,
+            )
+
+    def _record_driver_hook_failure(
+        self,
+        robot_id: str,
+        hook: str,
+        exc: Exception,
+        *,
+        extra_result: dict[str, Any] | None = None,
+    ) -> None:
         error_type = type(exc).__name__
         error_message = str(exc)
         message = (
             f"Driver {hook} failed for robot `{robot_id}`: "
             f"{error_type}: {error_message}"
         )
+        result = {
+            "hook": hook,
+            "error_type": error_type,
+            "error_message": error_message,
+        }
+        if extra_result is not None:
+            result.update(extra_result)
         latest = {
             "status": "failed",
             "event": f"driver_{hook}",
             "robot": robot_id,
             "robot_id": robot_id,
             "message": message,
+            "result": result,
+            "artifacts": [],
+        }
+        self._record_driver_feedback(latest, message)
+
+    def _record_heartbeat_recovered(
+        self,
+        robot_id: str,
+        previous_failure_count: int,
+    ) -> None:
+        message = (
+            f"Driver heartbeat recovered for robot `{robot_id}` "
+            f"after {previous_failure_count} consecutive failure(s)."
+        )
+        latest = {
+            "status": "completed",
+            "event": "driver_heartbeat_recovered",
+            "robot": robot_id,
+            "robot_id": robot_id,
+            "failure_count": previous_failure_count,
+            "message": message,
             "result": {
-                "hook": hook,
+                "hook": "heartbeat",
+                "failure_count": previous_failure_count,
+            },
+            "artifacts": [],
+        }
+        self._record_driver_feedback(latest, message)
+
+    def _record_watchdog_halt(
+        self,
+        *,
+        robot_id: str,
+        failure_count: int,
+        threshold: int,
+        halt_status: str,
+        heartbeat_exc: Exception,
+        halt_exc: Exception | None = None,
+    ) -> None:
+        heartbeat_error_type = type(heartbeat_exc).__name__
+        heartbeat_error_message = str(heartbeat_exc)
+        error_type = type(halt_exc).__name__ if halt_exc is not None else heartbeat_error_type
+        error_message = str(halt_exc) if halt_exc is not None else heartbeat_error_message
+        message = (
+            f"Heartbeat watchdog threshold reached for robot `{robot_id}` "
+            f"after {failure_count} consecutive failure(s); "
+            f"threshold={threshold}; halt_status={halt_status}."
+        )
+        if halt_exc is not None:
+            message = (
+                f"{message} Halt failed: "
+                f"{type(halt_exc).__name__}: {halt_exc}"
+            )
+        latest = {
+            "status": "failed",
+            "event": "driver_watchdog_halt",
+            "robot": robot_id,
+            "robot_id": robot_id,
+            "failure_count": failure_count,
+            "threshold": threshold,
+            "halt_status": halt_status,
+            "message": message,
+            "result": {
+                "hook": "halt",
+                "failure_count": failure_count,
+                "threshold": threshold,
+                "halt_status": halt_status,
+                "heartbeat_error_type": heartbeat_error_type,
+                "heartbeat_error_message": heartbeat_error_message,
                 "error_type": error_type,
                 "error_message": error_message,
             },
             "artifacts": [],
         }
+        self._record_driver_feedback(latest, message)
+
+    def _record_driver_feedback(self, latest: dict[str, Any], message: str) -> None:
+        workspace = self._workspace()
         feedback = workspace.read_feedback()
         history = list(feedback["history"])
         history.append(latest)

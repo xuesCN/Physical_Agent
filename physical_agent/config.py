@@ -24,6 +24,8 @@ class WatchConfig(BaseModel):
     require_human_approval: bool = False
     heartbeat_enabled: bool = True
     halt_on_shutdown: bool = True
+    heartbeat_failure_threshold: int = Field(default=3, ge=1)
+    halt_on_heartbeat_failure: bool = True
 
 
 class AgentConfig(BaseModel):
@@ -72,6 +74,8 @@ def default_config_dict() -> dict[str, Any]:
             "require_human_approval": False,
             "heartbeat_enabled": True,
             "halt_on_shutdown": True,
+            "heartbeat_failure_threshold": 3,
+            "halt_on_heartbeat_failure": True,
         },
         "agent": {
             "planner": "rule_based",

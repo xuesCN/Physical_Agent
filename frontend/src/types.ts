@@ -132,3 +132,26 @@ export interface UploadResponse {
   result: Record<string, unknown>;
   state: AgentState;
 }
+
+export interface LLMSettingsSummary {
+  base_url: string;
+  model: string;
+  api_mode: string;
+  has_api_key: boolean;
+  masked_api_key: string;
+  settings_path?: string;
+}
+
+export interface LLMSettingsResponse extends LLMSettingsSummary {
+  ok: boolean;
+  message?: string;
+  result?: Record<string, unknown>;
+  settings?: LLMSettingsSummary;
+}
+
+export interface LLMSettingsPayload {
+  base_url?: string;
+  api_key?: string;
+  model?: string;
+  api_mode?: string;
+}

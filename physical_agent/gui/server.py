@@ -400,7 +400,11 @@ def _latest_code_result(chat: dict[str, Any]) -> dict[str, Any] | None:
 
 def _openai_state(config_path: Path) -> dict[str, Any]:
     try:
-        settings = OpenAICompatibleSettings.from_env(env_file=config_path.parent / ".env")
+        config = load_config(config_path)
+        settings = OpenAICompatibleSettings.from_env(
+            env_file=config_path.parent / ".env",
+            workspace_path=config.workspace_path(config_path.parent),
+        )
     except OpenAICompatibleError as exc:
         return {"configured": False, "message": str(exc)}
     summary = settings.public_summary()

@@ -21,6 +21,7 @@ from physical_agent.api.server import (
     create_app,
 )
 from physical_agent.config import write_default_config
+from physical_agent.llm import OpenAICompatibleError, llm_settings_path
 from physical_agent.protocol.schemas import Observation
 from physical_agent.state import open_state_store
 
@@ -280,6 +281,181 @@ def test_api_endpoints_cover_state_proposals_memory_ingest_search_and_audit(tmp_
     assert board["cancelled"] == []
 
 
+def test_api_llm_settings_endpoints_do_not_leak_key(tmp_path):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    client = TestClient(create_app(config_path))
+
+    saved = client.post(
+        "/api/settings/llm",
+        json={
+            "base_url": "http://local-llm.test/v1",
+            "api_key": "sk-local-secret-7890",
+            "model": "local-model",
+            "api_mode": "chat_completions",
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["has_api_key"] is True
+    assert saved.json()["masked_api_key"] == "****7890"
+    assert "sk-local-secret-7890" not in saved.text
+
+    settings_file = llm_settings_path(tmp_path / "workspace")
+    assert settings_file.exists()
+    assert "sk-local-secret-7890" in settings_file.read_text(encoding="utf-8")
+
+    fetched = client.get("/api/settings/llm")
+    assert fetched.status_code == 200
+    assert fetched.json()["base_url"] == "http://local-llm.test/v1"
+    assert fetched.json()["model"] == "local-model"
+    assert fetched.json()["api_mode"] == "chat_completions"
+    assert "sk-local-secret-7890" not in fetched.text
+
+
+def test_api_llm_settings_test_uses_mocked_client_success_and_failure(tmp_path, monkeypatch):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    client = TestClient(create_app(config_path))
+    client.post(
+        "/api/settings/llm",
+        json={
+            "base_url": "http://local-llm.test/v1",
+            "api_key": "sk-local-secret-7890",
+            "model": "local-model",
+            "api_mode": "chat_completions",
+        },
+    )
+
+    class PassingClient:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def test_connection(self):
+            return {
+                "ok": True,
+                "model": self.settings.model,
+                "endpoint": self.settings.chat_completions_url,
+                "api_mode": self.settings.api_mode,
+                "content": "pong",
+            }
+
+    monkeypatch.setattr(api_server_module, "OpenAICompatibleClient", PassingClient)
+    passed = client.post("/api/settings/llm/test")
+    assert passed.status_code == 200
+    assert passed.json()["ok"] is True
+    assert passed.json()["model"] == "local-model"
+    assert "sk-local-secret-7890" not in passed.text
+
+    class FailingClient:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def test_connection(self):
+            raise OpenAICompatibleError("Bearer sk-local-secret-7890 failed")
+
+    monkeypatch.setattr(api_server_module, "OpenAICompatibleClient", FailingClient)
+    failed = client.post("/api/settings/llm/test")
+    assert failed.status_code == 200
+    assert failed.json()["ok"] is False
+    assert "<redacted>" in failed.json()["message"]
+    assert "sk-local-secret-7890" not in failed.text
+
+
+def test_api_chat_uses_chat_runtime_llm_when_settings_exist(tmp_path, monkeypatch):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    client = TestClient(create_app(config_path))
+    client.post(
+        "/api/settings/llm",
+        json={
+            "base_url": "http://local-llm.test/v1",
+            "api_key": "sk-local-secret-7890",
+            "model": "local-model",
+            "api_mode": "chat_completions",
+        },
+    )
+
+    from physical_agent.agent.chat_runtime import ChatRuntime
+
+    class FakeChatClient:
+        def structured_json(self, messages, **kwargs):
+            return {
+                "reply": "LLM bridge response.",
+                "intent": "chat",
+                "steps": [],
+                "actions": [],
+                "memory": [],
+            }
+
+    monkeypatch.setattr(ChatRuntime, "_llm_client", lambda self: FakeChatClient())
+
+    response = client.post("/api/chat", json={"message": "hello from API"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "llm"
+    assert body["reply"] == "LLM bridge response."
+    assert body["executed"] == 0
+    messages = body["state"]["chat"]["messages"]
+    assert [item["role"] for item in messages] == ["user", "assistant"]
+    assert messages[0]["content"] == "hello from API"
+
+
+def test_api_chat_falls_back_to_rule_based_without_llm_settings(tmp_path, monkeypatch):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    for key in ("OPENAI_API_KEY", "GPT_KEY", "API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+
+    client = TestClient(create_app(config_path))
+    response = client.post("/api/chat", json={"message": "what is the world status?"})
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "rule_based"
+    assert "API test world" in response.json()["reply"]
+
+
+def test_api_chat_constructs_api_safe_chat_runtime(tmp_path, monkeypatch):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    calls = {}
+
+    class FakeRuntime:
+        def respond(self, message, *, auto_step=False):
+            calls["respond"] = {"message": message, "auto_step": auto_step}
+            return {
+                "ok": True,
+                "mode": "rule_based",
+                "reply": "safe bridge",
+                "actions": [],
+                "memory": [],
+                "plan": None,
+            }
+
+    def fake_new_runtime(config, **kwargs):
+        calls["runtime"] = {"config": Path(config), **kwargs}
+        return FakeRuntime()
+
+    monkeypatch.setattr(api_server_module, "_new_chat_runtime", fake_new_runtime)
+
+    client = TestClient(create_app(config_path))
+    response = client.post("/api/chat", json={"message": "hello", "auto_step": True})
+
+    assert response.status_code == 200
+    assert calls["runtime"] == {
+        "config": config_path.resolve(),
+        "planner_name": "auto",
+        "enable_code_skills": False,
+        "enable_hardware_integration": False,
+    }
+    assert calls["respond"] == {"message": "hello", "auto_step": False}
+
+
 def test_api_browser_upload_records_untrusted_metadata_chunks_and_audit(tmp_path):
     TestClient = _client_or_skip()
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
@@ -393,6 +569,8 @@ def test_api_requests_do_not_instantiate_watch_or_execute_driver(tmp_path, monke
     TestClient = _client_or_skip()
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     _prepare_store(config_path)
+    for key in ("OPENAI_API_KEY", "GPT_KEY", "API_KEY"):
+        monkeypatch.delenv(key, raising=False)
 
     import physical_agent.watch.runtime as watch_runtime
     from physical_agent.drivers.mock_arm import MockArmDriver

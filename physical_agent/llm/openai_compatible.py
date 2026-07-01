@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,7 +8,11 @@ from typing import Any
 
 from jsonschema import SchemaError, ValidationError, validate as validate_json_schema
 
-from physical_agent.env import load_dotenv
+from physical_agent.llm.settings import (
+    DEFAULT_API_MODE,
+    SUPPORTED_API_MODES,
+    resolve_llm_settings_values,
+)
 
 try:  # Keep the base package lightweight; the SDK is installed via .[llm].
     import openai  # type: ignore[import-not-found]
@@ -18,7 +21,6 @@ except ImportError:  # pragma: no cover - exercised when users omit the llm extr
 
 
 DEFAULT_MODEL = "gpt-5.4"
-SUPPORTED_API_MODES = {"chat_completions", "responses"}
 UNSUPPORTED_ENDPOINT_SUFFIXES = ("/chat/completions", "/responses")
 
 
@@ -76,39 +78,21 @@ class OpenAICompatibleSettings:
         env_file: str | Path = ".env",
         model: str | None = None,
         timeout_s: int = 60,
+        settings_file: str | Path | None = None,
+        workspace_path: str | Path | None = None,
     ) -> "OpenAICompatibleSettings":
-        load_dotenv(env_file, override=True)
-        api_key = (
-            os.getenv("OPENAI_API_KEY")
-            or os.getenv("GPT_KEY")
-            or os.getenv("API_KEY")
-            or ""
-        ).strip()
-        base_url = (
-            os.getenv("OPENAI_BASE_URL")
-            or os.getenv("GPT_URL")
-            or os.getenv("BASE_URL")
-            or "https://api.openai.com/v1"
-        ).strip()
-        resolved_model = (
-            model
-            or os.getenv("OPENAI_MODEL")
-            or os.getenv("GPT_MODEL")
-            or os.getenv("MODEL")
-            or DEFAULT_MODEL
-        ).strip()
-        api_mode = (
-            os.getenv("OPENAI_API_MODE")
-            or os.getenv("GPT_API_MODE")
-            or os.getenv("API_MODE")
-            or "chat_completions"
-        ).strip()
+        values = resolve_llm_settings_values(
+            env_file=env_file,
+            model=model,
+            settings_file=settings_file,
+            workspace_path=workspace_path,
+        )
         return cls(
-            api_key=api_key,
-            base_url=base_url,
-            model=resolved_model,
+            api_key=values["api_key"],
+            base_url=values["base_url"],
+            model=values["model"],
             timeout_s=timeout_s,
-            api_mode=api_mode,
+            api_mode=values["api_mode"],
         )
 
     @property

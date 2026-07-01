@@ -188,6 +188,29 @@ test("proposal params validation stays visible in the form", async ({ page }) =>
   expectNoConsoleErrors(consoleErrors);
 });
 
+test("settings panel saves and tests LLM settings with mocked API", async ({ page }) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await mockReadyApiWithRobot(page);
+
+  await page.goto("/");
+  await page.getByTestId("nav-settings").click();
+  await expect(page.getByTestId("settings-panel")).toContainText("key ****7890");
+
+  await page.getByLabel("Base URL").fill("http://local-llm.test/v1");
+  await page.getByLabel("API key").fill("sk-local-00007890");
+  await page.getByLabel("Model").fill("local-model");
+  await page.getByTestId("save-llm-settings").click();
+
+  await expect(page.getByTestId("llm-settings-feedback")).toContainText("LLM settings saved");
+  await expect(page.getByTestId("settings-panel")).toContainText("key ****7890");
+
+  await page.getByTestId("test-llm-settings").click();
+  await expect(page.getByTestId("llm-settings-feedback")).toContainText(
+    "LLM connection test passed"
+  );
+  expectNoConsoleErrors(consoleErrors);
+});
+
 async function mockReadyApiWithRobot(page: Page) {
   const snapshot = {
     ok: true,
@@ -273,6 +296,15 @@ async function mockNotReadyApi(
 }
 
 async function mockApiSnapshot(page: Page, snapshot: Record<string, unknown>) {
+  let llmSettings = {
+    base_url: "http://mock-llm.test/v1",
+    model: "mock-model",
+    api_mode: "chat_completions",
+    has_api_key: true,
+    masked_api_key: "****7890",
+    settings_path: "C:/tmp/workspace/.llm.json"
+  };
+
   await page.route("**/api/health", async (route) => {
     await route.fulfill({
       status: 200,
@@ -295,6 +327,52 @@ async function mockApiSnapshot(page: Page, snapshot: Record<string, unknown>) {
         sseEvent(1, "hello", { version: "0.1.0", watch_enabled: false }),
         sseEvent(2, "state", { reason: "connect", state: snapshot })
       ].join("")
+    });
+  });
+  await page.route("**/api/settings/llm", async (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postDataJSON() as {
+        base_url?: string;
+        api_key?: string;
+        model?: string;
+        api_mode?: string;
+      };
+      llmSettings = {
+        ...llmSettings,
+        base_url: body.base_url ?? llmSettings.base_url,
+        model: body.model ?? llmSettings.model,
+        api_mode: body.api_mode ?? llmSettings.api_mode,
+        has_api_key: Boolean(body.api_key) || llmSettings.has_api_key,
+        masked_api_key: body.api_key ? `****${body.api_key.slice(-4)}` : llmSettings.masked_api_key
+      };
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          message: "LLM settings saved.",
+          ...llmSettings,
+          settings: llmSettings
+        })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, ...llmSettings, settings: llmSettings })
+    });
+  });
+  await page.route("**/api/settings/llm/test", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        message: "LLM connection test passed.",
+        ...llmSettings,
+        settings: llmSettings
+      })
     });
   });
 }

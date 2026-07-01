@@ -81,6 +81,49 @@ def test_chat_runtime_auto_falls_back_when_llm_fails(tmp_path, monkeypatch):
     assert "LLM chat was unavailable" in result["reply"]
 
 
+def test_chat_runtime_api_safe_flags_disable_code_skills(tmp_path, monkeypatch):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="rule_based",
+        enable_code_skills=False,
+    )
+
+    def fail_skill_router():
+        raise AssertionError("API-safe chat must not expose code skills")
+
+    monkeypatch.setattr(runtime, "_skill_router", fail_skill_router)
+
+    result = runtime.respond("write a test file and run pytest")
+
+    assert result["mode"] == "rule_based"
+    assert result["skills"] == []
+    store = open_state_store(config_path=config_path)
+    assert store.read_actions()["pending"] == []
+
+
+def test_chat_runtime_api_safe_flags_disable_hardware_integration(tmp_path, monkeypatch):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="rule_based",
+        enable_hardware_integration=False,
+    )
+
+    def fail_integration(message):
+        raise AssertionError("API-safe chat must not run hardware integration")
+
+    monkeypatch.setattr(runtime, "_respond_with_integration", fail_integration)
+
+    result = runtime.respond("integrate https://github.com/example/device-sdk")
+
+    assert result["mode"] == "rule_based"
+    assert result["actions"] == []
+    assert result["code_result"] is None
+
+
 def test_chat_runtime_llm_context_uses_summary_and_live_workspace_state(
     tmp_path,
     monkeypatch,

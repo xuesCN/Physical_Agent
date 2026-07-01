@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import re
 from typing import Any
 
@@ -44,10 +45,12 @@ class LLMPlanner(Planner):
         settings: OpenAICompatibleSettings | None = None,
         env_file: str = ".env",
         model: str | None = None,
+        workspace_path: str | Path | None = None,
     ):
         self.settings = settings or OpenAICompatibleSettings.from_env(
             env_file=env_file,
             model=model,
+            workspace_path=workspace_path,
         )
         self.client = OpenAICompatibleClient(self.settings)
         self.fallback = RuleBasedPlanner()

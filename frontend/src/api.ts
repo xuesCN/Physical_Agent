@@ -2,6 +2,8 @@ import type {
   ActionItem,
   AgentState,
   HealthState,
+  LLMSettingsPayload,
+  LLMSettingsResponse,
   SearchResponse,
   UploadResponse
 } from "./types";
@@ -39,6 +41,7 @@ export function fetchState(): Promise<AgentState> {
 
 export function sendChat(message: string): Promise<{
   ok: boolean;
+  mode?: string;
   reply: string;
   executed: number;
   state: AgentState;
@@ -47,6 +50,27 @@ export function sendChat(message: string): Promise<{
     method: "POST",
     body: JSON.stringify({ message })
   });
+}
+
+export function fetchLLMSettings(): Promise<LLMSettingsResponse> {
+  return apiJson<LLMSettingsResponse>("/api/settings/llm");
+}
+
+export function saveLLMSettings(
+  payload: LLMSettingsPayload
+): Promise<LLMSettingsResponse> {
+  return apiJson<LLMSettingsResponse>("/api/settings/llm", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function testLLMSettings(): Promise<LLMSettingsResponse> {
+  return apiJson<LLMSettingsResponse>(
+    "/api/settings/llm/test",
+    { method: "POST", body: JSON.stringify({}) },
+    { allowNotReadyBody: true }
+  );
 }
 
 export function submitTask(task: string): Promise<{

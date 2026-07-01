@@ -60,11 +60,15 @@ class ChatRuntime:
         *,
         planner_name: str | None = None,
         model: str | None = None,
+        enable_code_skills: bool = True,
+        enable_hardware_integration: bool = True,
     ):
         self.config_path = Path(config_path).resolve()
         self.base_dir = self.config_path.parent
         self.planner_name = planner_name
         self.model = model
+        self.enable_code_skills = enable_code_skills
+        self.enable_hardware_integration = enable_hardware_integration
         self.config: PhysicalAgentConfig | None = None
         self.workspace: StateStore | None = None
         self.rule_planner = RuleBasedPlanner()
@@ -125,7 +129,7 @@ class ChatRuntime:
                     "executed": 0,
                     "feedback": workspace.read_feedback(),
                     "code_result": code_result_data,
-                    "skills": [skill.as_dict() for skill in self._skill_router().list_skills()],
+                    "skills": self._skills_summary(),
                     "integration": integration,
                 }
 
@@ -151,10 +155,10 @@ class ChatRuntime:
                 "executed": 0,
                 "feedback": workspace.read_feedback(),
                 "code_result": code_result_data,
-                "skills": [skill.as_dict() for skill in self._skill_router().list_skills()],
+                "skills": self._skills_summary(),
             }
 
-        if self._looks_like_integration_request(message):
+        if self.enable_hardware_integration and self._looks_like_integration_request(message):
             response = self._respond_with_integration(message)
             actions: list[Action] = []
             notes: list[str] = []
@@ -189,7 +193,7 @@ class ChatRuntime:
                 "executed": executed,
                 "feedback": workspace.read_feedback(),
                 "integration": response.get("integration", {}),
-                "skills": [skill.as_dict() for skill in self._skill_router().list_skills()],
+                "skills": self._skills_summary(),
             }
 
         capabilities = workspace.read_capabilities()
@@ -295,12 +299,16 @@ class ChatRuntime:
             "executed": executed,
             "feedback": feedback if auto_step else workspace.read_feedback(),
             "code_result": None,
-            "skills": [skill.as_dict() for skill in self._skill_router().list_skills()],
+            "skills": self._skills_summary(),
         }
 
     def _maybe_handle_code_task(self, message: str):
+        if not self.enable_code_skills:
+            return None
         match = self._skill_router().match(message)
         if match is None:
+            return None
+        if match.intent.kind == "sdk_integration" and not self.enable_hardware_integration:
             return None
         try:
             return self._skill_router().run(message)
@@ -319,6 +327,8 @@ class ChatRuntime:
             )
 
     def _code_continuation_message(self, message: str) -> str | None:
+        if not self.enable_code_skills:
+            return None
         text = message.strip()
         if not _looks_like_code_followup(text):
             return None
@@ -547,7 +557,7 @@ class ChatRuntime:
             "executed": executed,
             "feedback": feedback if auto_step else workspace.read_feedback(),
             "code_result": None,
-            "skills": [skill.as_dict() for skill in self._skill_router().list_skills()],
+            "skills": self._skills_summary(),
             "tool_steps": [
                 {
                     "name": step.name,
@@ -836,6 +846,7 @@ class ChatRuntime:
             settings = OpenAICompatibleSettings.from_env(
                 env_file=self.base_dir / ".env",
                 model=model,
+                workspace_path=config.workspace_path(self.base_dir),
             )
             self.llm_client = OpenAICompatibleClient(settings)
         return self.llm_client
@@ -856,6 +867,8 @@ class ChatRuntime:
         return self.code_runtime
 
     def _skill_router(self) -> SkillRouter:
+        if not self.enable_code_skills:
+            raise RuntimeError("Code skills are disabled for this ChatRuntime.")
         if self.skill_router is None:
             config = self._config()
             self.skill_router = SkillRouter(
@@ -865,6 +878,11 @@ class ChatRuntime:
                 code_runtime=self._code_runtime(),
             )
         return self.skill_router
+
+    def _skills_summary(self) -> list[dict[str, Any]]:
+        if not self.enable_code_skills:
+            return []
+        return [skill.as_dict() for skill in self._skill_router().list_skills()]
 
     def _format_code_result(self, result: Any, *, user_message: str = "") -> str:
         zh = _looks_like_chinese(user_message)

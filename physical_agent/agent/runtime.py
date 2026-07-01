@@ -124,7 +124,11 @@ class AgentRuntime:
             model = self.model
             if model is None and config.agent.model != "fake/local":
                 model = config.agent.model
-            self.planner = LLMPlanner(env_file=str(self.base_dir / ".env"), model=model)
+            self.planner = LLMPlanner(
+                env_file=str(self.base_dir / ".env"),
+                model=model,
+                workspace_path=config.workspace_path(self.base_dir),
+            )
             return self.planner
         raise ValueError(f"Unsupported planner: {planner_name}")
 

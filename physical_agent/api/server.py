@@ -23,6 +23,15 @@ from physical_agent.ingest.files import (
     ingest_file,
     sanitize_filename,
 )
+from physical_agent.llm import (
+    LLMSettingsError,
+    OpenAICompatibleClient,
+    OpenAICompatibleSettings,
+    llm_settings_path,
+    public_llm_settings_summary,
+    resolve_llm_settings_values,
+    write_llm_settings_file,
+)
 from physical_agent.protocol.schemas import Action, ChatPlan
 from physical_agent.state import StateStore, open_state_store
 
@@ -71,6 +80,16 @@ class SubmitTaskRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    planner: str | None = None
+    auto_step: bool = False
+
+
+class LLMSettingsRequest(BaseModel):
+    base_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+    api_mode: str | None = None
+    clear_api_key: bool = False
 
 
 class SearchMemoryRequest(BaseModel):
@@ -227,6 +246,27 @@ def create_app(
     def chat(payload: ChatRequest) -> dict[str, Any]:
         try:
             return controller.chat(payload)
+        except ApiRequestError as exc:
+            return handle_error(exc)
+
+    @app.get("/api/settings/llm")
+    def get_llm_settings() -> dict[str, Any]:
+        try:
+            return controller.get_llm_settings()
+        except ApiRequestError as exc:
+            return handle_error(exc)
+
+    @app.post("/api/settings/llm")
+    def update_llm_settings(payload: LLMSettingsRequest) -> dict[str, Any]:
+        try:
+            return controller.update_llm_settings(payload)
+        except ApiRequestError as exc:
+            return handle_error(exc)
+
+    @app.post("/api/settings/llm/test")
+    def test_llm_settings() -> dict[str, Any]:
+        try:
+            return controller.test_llm_settings()
         except ApiRequestError as exc:
             return handle_error(exc)
 
@@ -387,46 +427,104 @@ class ApiController:
         message = payload.message.strip()
         if not message:
             raise ApiRequestError("Chat message cannot be empty.")
-        config, store = self._store(initialize=True)
-        store.append_chat_message("user", message)
-        response = self._rule_chat(message, store)
-        actions = self._append_planned_actions(response["actions"], store)
-        notes = []
-        for note in response["memory"]:
-            if str(note).strip():
-                notes.append(store.append_memory_note(str(note).strip()))
-        plan = ChatPlan(
-            status="proposed_actions" if actions else "answered",
-            intent=response["intent"],
-            summary=response["reply"],
-            steps=response["steps"],
-            actions=actions,
-            needs_watch=bool(actions),
+        self._store(initialize=True)
+        runtime = _new_chat_runtime(
+            self.config_path,
+            planner_name=_api_chat_planner(payload.planner),
+            enable_code_skills=False,
+            enable_hardware_integration=False,
         )
-        store.write_plan(plan)
-        assistant = store.append_chat_message(
-            "assistant",
-            response["reply"],
-            metadata={
-                "intent": plan.intent,
-                "actions": [action.model_dump(mode="json") for action in actions],
-                "needs_watch": plan.needs_watch,
-                "executed": 0,
-                "surface": "api",
-            },
-        )
+        response = runtime.respond(message, auto_step=False)
+        config, store = self._store(require_exists=True)
         store.append_log("API chat replied without executing watch.", actor="api")
         state = self._state(config, store)
         self._publish_state("chat", state)
         return {
             "ok": True,
-            "mode": "rule_based",
-            "reply": assistant.content,
-            "actions": _json_safe(actions),
-            "memory": _json_safe(notes),
-            "plan": plan.model_dump(mode="json"),
+            "mode": response.get("mode", "rule_based"),
+            "reply": response.get("reply", ""),
+            "actions": _json_safe(response.get("actions", [])),
+            "memory": _json_safe(response.get("memory", [])),
+            "plan": _json_safe(response.get("plan")),
             "executed": 0,
             "state": state,
+        }
+
+    def get_llm_settings(self) -> dict[str, Any]:
+        values = self._resolved_llm_settings_values()
+        summary = public_llm_settings_summary(
+            values,
+            settings_path=self._llm_settings_path(),
+        )
+        return {
+            "ok": True,
+            **summary,
+            "settings": summary,
+        }
+
+    def update_llm_settings(self, payload: LLMSettingsRequest) -> dict[str, Any]:
+        settings_path = self._llm_settings_path()
+        data = payload.model_dump(exclude_unset=True)
+        if payload.clear_api_key and "api_key" not in data:
+            data["api_key"] = ""
+        try:
+            written = write_llm_settings_file(
+                settings_path,
+                data,
+                preserve_existing_api_key=not payload.clear_api_key,
+            )
+        except LLMSettingsError as exc:
+            raise ApiRequestError(str(exc), status_code=400) from exc
+        summary = public_llm_settings_summary(
+            written,
+            settings_path=settings_path,
+        )
+        return {
+            "ok": True,
+            "message": "LLM settings saved.",
+            **summary,
+            "settings": summary,
+        }
+
+    def test_llm_settings(self) -> dict[str, Any]:
+        settings_path = self._llm_settings_path()
+        try:
+            settings = OpenAICompatibleSettings.from_env(
+                env_file=self.base_dir / ".env",
+                workspace_path=settings_path.parent,
+            )
+            result = OpenAICompatibleClient(settings).test_connection()
+        except Exception as exc:
+            message = _sanitize_api_message(str(exc), self._resolved_llm_settings_values())
+            summary = public_llm_settings_summary(
+                self._resolved_llm_settings_values(),
+                settings_path=settings_path,
+            )
+            return {
+                "ok": False,
+                "message": message,
+                **summary,
+                "settings": summary,
+            }
+        summary = public_llm_settings_summary(
+            {
+                "base_url": settings.base_url,
+                "model": settings.model,
+                "api_mode": settings.api_mode,
+                "api_key": settings.api_key,
+            },
+            settings_path=settings_path,
+        )
+        return {
+            "ok": True,
+            "message": "LLM connection test passed.",
+            "result": {
+                key: value
+                for key, value in result.items()
+                if key != "content"
+            },
+            **summary,
+            "settings": summary,
         }
 
     def search_memory(self, payload: SearchMemoryRequest) -> dict[str, Any]:
@@ -572,6 +670,25 @@ class ApiController:
                 status_code=404,
             )
         return config, store
+
+    def _llm_settings_path(self) -> Path:
+        if not self.config_path.exists():
+            raise ApiRequestError(
+                f"Could not find {self.config_path}. Run `physical-agent init` first.",
+                status_code=404,
+            )
+        config = load_config(self.config_path)
+        return llm_settings_path(config.workspace_path(self.base_dir))
+
+    def _resolved_llm_settings_values(self) -> dict[str, str]:
+        settings_path = self._llm_settings_path()
+        try:
+            return resolve_llm_settings_values(
+                env_file=self.base_dir / ".env",
+                workspace_path=settings_path.parent,
+            )
+        except LLMSettingsError as exc:
+            raise ApiRequestError(str(exc), status_code=400) from exc
 
     def _state(self, config: PhysicalAgentConfig, store: StateStore) -> dict[str, Any]:
         actions = store.read_actions()
@@ -951,6 +1068,52 @@ def _validate_action(payload: dict[str, Any]) -> Action:
         return Action.model_validate(payload)
     except Exception as exc:
         raise ApiRequestError(f"Invalid action proposal: {exc}") from exc
+
+
+def _new_chat_runtime(
+    config_path: str | Path,
+    *,
+    planner_name: str,
+    enable_code_skills: bool,
+    enable_hardware_integration: bool,
+) -> Any:
+    from physical_agent.agent.chat_runtime import ChatRuntime
+
+    return ChatRuntime(
+        config_path,
+        planner_name=planner_name,
+        enable_code_skills=enable_code_skills,
+        enable_hardware_integration=enable_hardware_integration,
+    )
+
+
+def _api_chat_planner(value: str | None) -> str:
+    planner = (value or "auto").strip().lower()
+    if planner in {"llm", "openai", "openai_compatible", "openai-compatible"}:
+        return "llm"
+    if planner in {"rule_based", "rules", "offline"}:
+        return "rule_based"
+    return "auto"
+
+
+def _sanitize_api_message(message: str, settings: dict[str, str]) -> str:
+    sanitized = message
+    api_key = settings.get("api_key") or ""
+    if api_key:
+        sanitized = sanitized.replace(api_key, "<redacted>")
+    sanitized = re.sub(
+        r"Bearer\s+[A-Za-z0-9._~+/=-]+",
+        "Bearer <redacted>",
+        sanitized,
+        flags=re.IGNORECASE,
+    )
+    sanitized = re.sub(
+        r"(api[_-]?key=)[^&\s]+",
+        r"\1<redacted>",
+        sanitized,
+        flags=re.IGNORECASE,
+    )
+    return sanitized
 
 
 def _write_plan(store: StateStore, summary: str, actions: list[Action], *, intent: str) -> None:

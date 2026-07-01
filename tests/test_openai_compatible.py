@@ -13,6 +13,10 @@ from physical_agent.llm import (
     OpenAICompatibleClient,
     OpenAICompatibleError,
     OpenAICompatibleSettings,
+    llm_settings_path,
+    public_llm_settings_summary,
+    read_llm_settings_file,
+    write_llm_settings_file,
 )
 from physical_agent.protocol.schemas import Observation
 
@@ -140,6 +144,88 @@ def test_openai_settings_reads_gpt_env_names(tmp_path, monkeypatch):
         "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
     )
     assert settings.responses_url == "https://ark.cn-beijing.volces.com/api/v3/responses"
+
+
+def test_llm_settings_file_round_trips_and_public_summary_masks_key(tmp_path):
+    workspace = tmp_path / "workspace"
+    settings_path = llm_settings_path(workspace)
+
+    written = write_llm_settings_file(
+        settings_path,
+        {
+            "base_url": "http://local.test/v1",
+            "api_key": "sk-local-secret-1234",
+            "model": "local-model",
+            "api_mode": "chat_completions",
+        },
+    )
+
+    assert read_llm_settings_file(settings_path) == written
+    summary = public_llm_settings_summary(written, settings_path=settings_path)
+    summary_text = json.dumps(summary)
+    assert summary["has_api_key"] is True
+    assert summary["masked_api_key"] == "****1234"
+    assert "sk-local-secret-1234" not in summary_text
+    assert settings_path.exists()
+
+
+def test_llm_settings_file_takes_priority_over_env(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "GPT_URL=http://env.test/v1\n"
+        "GPT_KEY=env-key\n"
+        "GPT_MODEL=env-model\n"
+        "OPENAI_API_MODE=responses\n",
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "workspace"
+    write_llm_settings_file(
+        llm_settings_path(workspace),
+        {
+            "base_url": "http://settings.test/v1",
+            "api_key": "settings-key",
+            "model": "settings-model",
+            "api_mode": "chat_completions",
+        },
+    )
+    for key in (
+        "GPT_URL",
+        "GPT_KEY",
+        "GPT_MODEL",
+        "OPENAI_API_MODE",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_KEY",
+        "OPENAI_MODEL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    settings = OpenAICompatibleSettings.from_env(
+        env_file=env_file,
+        workspace_path=workspace,
+    )
+    override = OpenAICompatibleSettings.from_env(
+        env_file=env_file,
+        workspace_path=workspace,
+        model="override-model",
+    )
+
+    assert settings.base_url == "http://settings.test/v1"
+    assert settings.api_key == "settings-key"
+    assert settings.model == "settings-model"
+    assert settings.api_mode == "chat_completions"
+    assert override.model == "override-model"
+    for key in (
+        "GPT_URL",
+        "GPT_KEY",
+        "GPT_MODEL",
+        "OPENAI_API_MODE",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_KEY",
+        "OPENAI_MODEL",
+        "GPT_API_MODE",
+        "API_MODE",
+    ):
+        os.environ.pop(key, None)
 
 
 def test_openai_settings_can_select_responses_mode(tmp_path, monkeypatch):

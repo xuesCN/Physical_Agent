@@ -8,6 +8,18 @@ from pydantic import BaseModel, Field
 
 
 DEFAULT_CONFIG_NAME = "physical-agent.yaml"
+LEGACY_MARKDOWN_WORKSPACE_FILES = (
+    "TASK.md",
+    "CAPABILITIES.md",
+    "WORLD.md",
+    "ACTIONS.md",
+    "FEEDBACK.md",
+    "SAFETY.md",
+    "LOG.md",
+    "CHAT.md",
+    "PLAN.md",
+    "MEMORY.md",
+)
 
 
 class ProjectConfig(BaseModel):
@@ -126,6 +138,7 @@ def load_config(path: str | Path = DEFAULT_CONFIG_NAME) -> PhysicalAgentConfig:
         )
     with config_path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
+    _apply_legacy_markdown_backend(data, config_path)
     return PhysicalAgentConfig.model_validate(data)
 
 
@@ -137,4 +150,31 @@ def write_default_config(path: str | Path = DEFAULT_CONFIG_NAME, *, overwrite: b
     with config_path.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(default_config_dict(), handle, sort_keys=False)
     return config_path.resolve()
+
+
+def _apply_legacy_markdown_backend(data: Any, config_path: Path) -> None:
+    if not isinstance(data, dict):
+        return
+    workspace_data = data.get("workspace")
+    if workspace_data is not None and not isinstance(workspace_data, dict):
+        return
+    if workspace_data is not None and "backend" in workspace_data:
+        return
+
+    workspace_path = Path(
+        (workspace_data or {}).get("path", WorkspaceConfig().path)
+    )
+    if not workspace_path.is_absolute():
+        workspace_path = config_path.resolve().parent / workspace_path
+    workspace_path = workspace_path.resolve()
+    if not workspace_path.exists():
+        return
+    if not all(
+        (workspace_path / filename).exists()
+        for filename in LEGACY_MARKDOWN_WORKSPACE_FILES
+    ):
+        return
+
+    data.setdefault("workspace", {})
+    data["workspace"]["backend"] = "markdown"
 

@@ -458,6 +458,8 @@ Supported variable names:
 - Base URL: `GPT_URL` or `OPENAI_BASE_URL`
 - Model: `GPT_MODEL` or `OPENAI_MODEL`
 
+LLM calls default to reasoning / deep-thinking when the provider supports it. OpenAI Responses API uses the official `reasoning` parameter; Chat Completions-compatible providers receive provider-specific thinking options only when `GPT_REASONING_EXTRA_BODY` / `OPENAI_REASONING_EXTRA_BODY` is configured, with automatic compatibility fallback when unsupported.
+
 Test the API connection:
 
 ```bash

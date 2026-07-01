@@ -350,6 +350,8 @@ GPT_MODEL=gpt-5.4
 - Base URL：`GPT_URL` 或 `OPENAI_BASE_URL`
 - Model：`GPT_MODEL` 或 `OPENAI_MODEL`
 
+LLM 调用默认启用 reasoning / deep-thinking：OpenAI Responses API 会使用官方 `reasoning` 参数；Chat Completions 兼容服务只有在配置 `GPT_REASONING_EXTRA_BODY` / `OPENAI_REASONING_EXTRA_BODY` 时才会透传 provider-specific thinking 参数。不支持时会自动兼容降级并保持普通 chat 可用。
+
 测试 API 连接：
 
 ```bash

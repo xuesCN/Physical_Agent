@@ -226,8 +226,10 @@ class OpenAIToolLoop:
     def _client(self) -> OpenAICompatibleClient:
         if self.client is not None:
             return self.client
+        config = load_config(self.config_path)
         settings = self.settings or OpenAICompatibleSettings.from_env(
             env_file=self.base_dir / ".env",
+            workspace_path=config.workspace_path(self.base_dir),
         )
         self.client = OpenAICompatibleClient(settings)
         return self.client

@@ -96,6 +96,10 @@ class LLMSettingsRequest(BaseModel):
     api_key: str | None = None
     model: str | None = None
     api_mode: str | None = None
+    reasoning_enabled: bool | None = None
+    reasoning_effort: str | None = None
+    reasoning_summary: str | None = None
+    reasoning_extra_body: dict[str, Any] | None = None
     clear_api_key: bool = False
 
 
@@ -744,6 +748,10 @@ class ApiController:
                 "base_url": settings.base_url,
                 "model": settings.model,
                 "api_mode": settings.api_mode,
+                "reasoning_enabled": settings.reasoning_enabled,
+                "reasoning_effort": settings.reasoning_effort,
+                "reasoning_summary": settings.reasoning_summary,
+                "reasoning_extra_body": settings.reasoning_extra_body,
                 "api_key": settings.api_key,
             },
             settings_path=settings_path,

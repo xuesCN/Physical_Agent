@@ -165,6 +165,7 @@ def test_llm_settings_file_round_trips_and_public_summary_masks_key(tmp_path):
             "api_key": "sk-local-secret-1234",
             "model": "local-model",
             "api_mode": "chat_completions",
+            "reasoning_extra_body": {"thinking": {"type": "enabled"}},
         },
     )
 
@@ -173,6 +174,10 @@ def test_llm_settings_file_round_trips_and_public_summary_masks_key(tmp_path):
     summary_text = json.dumps(summary)
     assert summary["has_api_key"] is True
     assert summary["masked_api_key"] == "****1234"
+    assert summary["reasoning_enabled"] is True
+    assert summary["reasoning_effort"] == "medium"
+    assert summary["reasoning_summary"] == "auto"
+    assert summary["has_reasoning_extra_body"] is True
     assert "sk-local-secret-1234" not in summary_text
     assert settings_path.exists()
 
@@ -221,6 +226,10 @@ def test_llm_settings_file_takes_priority_over_env(tmp_path, monkeypatch):
     assert settings.api_key == "settings-key"
     assert settings.model == "settings-model"
     assert settings.api_mode == "chat_completions"
+    assert settings.reasoning_enabled is True
+    assert settings.reasoning_effort == "medium"
+    assert settings.reasoning_summary == "auto"
+    assert settings.reasoning_extra_body == {}
     assert override.model == "override-model"
     for key in (
         "GPT_URL",
@@ -232,6 +241,53 @@ def test_llm_settings_file_takes_priority_over_env(tmp_path, monkeypatch):
         "OPENAI_MODEL",
         "GPT_API_MODE",
         "API_MODE",
+        "OPENAI_REASONING_ENABLED",
+        "GPT_REASONING_ENABLED",
+        "OPENAI_REASONING_EFFORT",
+        "GPT_REASONING_EFFORT",
+        "OPENAI_REASONING_SUMMARY",
+        "GPT_REASONING_SUMMARY",
+        "OPENAI_REASONING_EXTRA_BODY",
+        "GPT_REASONING_EXTRA_BODY",
+    ):
+        os.environ.pop(key, None)
+
+
+def test_openai_settings_reads_reasoning_env_names(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "GPT_URL=http://project.test/v1\n"
+        "GPT_KEY=project-key\n"
+        "GPT_MODEL=project-model\n"
+        "GPT_REASONING_ENABLED=false\n"
+        "GPT_REASONING_EFFORT=high\n"
+        "GPT_REASONING_SUMMARY=none\n"
+        'GPT_REASONING_EXTRA_BODY={"thinking":{"type":"enabled"}}\n',
+        encoding="utf-8",
+    )
+    for key in (
+        "GPT_REASONING_ENABLED",
+        "GPT_REASONING_EFFORT",
+        "GPT_REASONING_SUMMARY",
+        "GPT_REASONING_EXTRA_BODY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    settings = OpenAICompatibleSettings.from_env(env_file=env_file)
+
+    assert settings.reasoning_enabled is False
+    assert settings.reasoning_effort == "high"
+    assert settings.reasoning_summary == "none"
+    assert settings.reasoning_extra_body == {"thinking": {"type": "enabled"}}
+    for key in (
+        "OPENAI_REASONING_ENABLED",
+        "GPT_REASONING_ENABLED",
+        "OPENAI_REASONING_EFFORT",
+        "GPT_REASONING_EFFORT",
+        "OPENAI_REASONING_SUMMARY",
+        "GPT_REASONING_SUMMARY",
+        "OPENAI_REASONING_EXTRA_BODY",
+        "GPT_REASONING_EXTRA_BODY",
     ):
         os.environ.pop(key, None)
 
@@ -297,6 +353,24 @@ def test_chat_completion_create_calls_openai_sdk(fake_openai):
     assert payload["model"] == "test-model"
     assert payload["messages"][0]["role"] == "user"
     assert payload["metadata"]["physical_agent_surface"] == "test"
+    assert "extra_body" not in payload
+
+
+def test_chat_completion_create_passes_reasoning_extra_body_when_configured(fake_openai):
+    fake_openai.chat_outputs = [_chat_text("pong")]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        reasoning_extra_body={"thinking": {"type": "enabled"}},
+    )
+
+    OpenAICompatibleClient(settings).chat_completion_create(
+        [{"role": "user", "content": "ping"}]
+    )
+
+    payload = fake_openai.instances[0].calls[0]["payload"]
+    assert payload["extra_body"] == {"thinking": {"type": "enabled"}}
 
 
 def test_stream_chat_text_aggregates_chat_completion_deltas(fake_openai):
@@ -326,6 +400,28 @@ def test_stream_chat_text_aggregates_chat_completion_deltas(fake_openai):
     assert call["method"] == "chat.completions.create"
     assert call["payload"]["stream"] is True
     assert call["payload"]["metadata"]["physical_agent_surface"] == "test_stream"
+    assert "extra_body" not in call["payload"]
+
+
+def test_stream_chat_text_passes_chat_reasoning_extra_body_when_configured(fake_openai):
+    fake_openai.chat_outputs = [[_chat_delta("pong")]]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        reasoning_extra_body={"thinking": {"type": "enabled"}},
+    )
+
+    chunks = list(
+        OpenAICompatibleClient(settings).stream_chat_text(
+            [{"role": "user", "content": "ping"}]
+        )
+    )
+
+    assert chunks == ["pong"]
+    payload = fake_openai.instances[0].calls[0]["payload"]
+    assert payload["stream"] is True
+    assert payload["extra_body"] == {"thinking": {"type": "enabled"}}
 
 
 def test_stream_chat_text_aggregates_responses_deltas(fake_openai):
@@ -360,6 +456,7 @@ def test_stream_chat_text_aggregates_responses_deltas(fake_openai):
     assert call["payload"]["stream"] is True
     assert call["payload"]["instructions"] == "Return text."
     assert call["payload"]["metadata"]["physical_agent_surface"] == "test_stream"
+    assert call["payload"]["reasoning"] == {"effort": "medium", "summary": "auto"}
 
 
 def test_stream_chat_text_error_redacts_api_key(fake_openai):
@@ -414,6 +511,143 @@ def test_responses_create_input_calls_openai_sdk(fake_openai):
     assert payload["instructions"] == "Return text."
     assert payload["text"]["format"]["type"] == "json_object"
     assert payload["metadata"]["physical_agent_surface"] == "test"
+    assert payload["reasoning"] == {"effort": "medium", "summary": "auto"}
+
+
+def test_responses_create_input_passes_configured_reasoning(fake_openai):
+    fake_openai.responses_outputs = [_responses_text("pong")]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+        reasoning_effort="high",
+        reasoning_summary="detailed",
+    )
+
+    OpenAICompatibleClient(settings).responses_create_input(
+        [{"role": "user", "content": "ping"}]
+    )
+
+    payload = fake_openai.instances[0].calls[0]["payload"]
+    assert payload["reasoning"] == {"effort": "high", "summary": "detailed"}
+
+
+def test_responses_create_input_omits_reasoning_when_disabled(fake_openai):
+    fake_openai.responses_outputs = [_responses_text("pong")]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+        reasoning_enabled=False,
+    )
+
+    OpenAICompatibleClient(settings).responses_create_input(
+        [{"role": "user", "content": "ping"}]
+    )
+
+    assert "reasoning" not in fake_openai.instances[0].calls[0]["payload"]
+
+
+def test_chat_completion_reasoning_400_falls_back_without_extra_body(fake_openai):
+    fake_openai.chat_outputs = [
+        FakeBadRequestError("unknown parameter: thinking"),
+        _chat_text("pong"),
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        reasoning_extra_body={"thinking": {"type": "enabled"}},
+    )
+
+    result = OpenAICompatibleClient(settings).chat_completion_create(
+        [{"role": "user", "content": "ping"}],
+        metadata={"physical_agent_surface": "test"},
+    )
+
+    assert result["choices"][0]["message"]["content"] == "pong"
+    assert result["physical_agent_metadata"]["reasoning_fallback"] is True
+    calls = fake_openai.instances[0].calls
+    assert calls[0]["payload"]["extra_body"] == {"thinking": {"type": "enabled"}}
+    assert "extra_body" not in calls[1]["payload"]
+    assert calls[1]["payload"]["metadata"]["reasoning_fallback"] == "true"
+
+
+def test_responses_reasoning_400_falls_back_without_reasoning(fake_openai):
+    fake_openai.responses_outputs = [
+        FakeBadRequestError("unsupported parameter: reasoning"),
+        _responses_text("pong"),
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+
+    result = OpenAICompatibleClient(settings).responses_create_input(
+        [{"role": "user", "content": "ping"}],
+        metadata={"physical_agent_surface": "test"},
+    )
+
+    assert result["output"][0]["content"][0]["text"] == "pong"
+    assert result["physical_agent_metadata"]["reasoning_fallback"] is True
+    calls = fake_openai.instances[0].calls
+    assert calls[0]["payload"]["reasoning"] == {"effort": "medium", "summary": "auto"}
+    assert "reasoning" not in calls[1]["payload"]
+    assert calls[1]["payload"]["metadata"]["reasoning_fallback"] == "true"
+
+
+def test_stream_chat_reasoning_400_falls_back_without_extra_body(fake_openai):
+    fake_openai.chat_outputs = [
+        FakeBadRequestError("invalid thinking field"),
+        [_chat_delta("pong")],
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        reasoning_extra_body={"thinking": {"type": "enabled"}},
+    )
+
+    chunks = list(
+        OpenAICompatibleClient(settings).stream_chat_text(
+            [{"role": "user", "content": "ping"}]
+        )
+    )
+
+    assert chunks == ["pong"]
+    calls = fake_openai.instances[0].calls
+    assert calls[0]["payload"]["extra_body"] == {"thinking": {"type": "enabled"}}
+    assert "extra_body" not in calls[1]["payload"]
+    assert calls[1]["payload"]["metadata"]["reasoning_fallback"] == "true"
+
+
+def test_stream_responses_reasoning_400_falls_back_without_reasoning(fake_openai):
+    fake_openai.responses_outputs = [
+        FakeBadRequestError("invalid reasoning field"),
+        [_responses_delta("pong"), {"type": "response.completed"}],
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+
+    chunks = list(
+        OpenAICompatibleClient(settings).stream_chat_text(
+            [{"role": "user", "content": "ping"}]
+        )
+    )
+
+    assert chunks == ["pong"]
+    calls = fake_openai.instances[0].calls
+    assert calls[0]["payload"]["reasoning"] == {"effort": "medium", "summary": "auto"}
+    assert "reasoning" not in calls[1]["payload"]
+    assert calls[1]["payload"]["metadata"]["reasoning_fallback"] == "true"
 
 
 def test_structured_json_strict_json_schema_success(fake_openai):

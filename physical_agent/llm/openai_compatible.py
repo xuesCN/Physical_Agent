@@ -48,12 +48,24 @@ class OpenAICompatibleSettings:
     model: str
     timeout_s: int = 60
     api_mode: str = "chat_completions"
+    reasoning_enabled: bool = True
+    reasoning_effort: str = "medium"
+    reasoning_summary: str = "auto"
+    reasoning_extra_body: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         api_key = self.api_key.strip()
         base_url = _validate_api_root(self.base_url)
         model = self.model.strip()
         api_mode = self.api_mode.strip()
+        reasoning_enabled = _coerce_bool(self.reasoning_enabled)
+        reasoning_effort = self.reasoning_effort.strip()
+        reasoning_summary = self.reasoning_summary.strip()
+        reasoning_extra_body = (
+            dict(self.reasoning_extra_body)
+            if isinstance(self.reasoning_extra_body, dict)
+            else None
+        )
         if not api_key:
             raise OpenAICompatibleError(
                 "Missing API key. Set OPENAI_API_KEY or GPT_KEY in .env."
@@ -66,10 +78,23 @@ class OpenAICompatibleSettings:
             raise OpenAICompatibleError(
                 "Unsupported API mode. Set OPENAI_API_MODE to chat_completions or responses."
             )
+        if not reasoning_effort:
+            raise OpenAICompatibleError("Reasoning effort cannot be empty.")
+        if not reasoning_summary:
+            raise OpenAICompatibleError("Reasoning summary cannot be empty.")
+        if self.reasoning_extra_body is not None and not isinstance(
+            self.reasoning_extra_body,
+            dict,
+        ):
+            raise OpenAICompatibleError("reasoning_extra_body must be a JSON object.")
         object.__setattr__(self, "api_key", api_key)
         object.__setattr__(self, "base_url", base_url)
         object.__setattr__(self, "model", model)
         object.__setattr__(self, "api_mode", api_mode)
+        object.__setattr__(self, "reasoning_enabled", reasoning_enabled)
+        object.__setattr__(self, "reasoning_effort", reasoning_effort)
+        object.__setattr__(self, "reasoning_summary", reasoning_summary)
+        object.__setattr__(self, "reasoning_extra_body", reasoning_extra_body)
 
     @classmethod
     def from_env(
@@ -93,6 +118,10 @@ class OpenAICompatibleSettings:
             model=values["model"],
             timeout_s=timeout_s,
             api_mode=values["api_mode"],
+            reasoning_enabled=values["reasoning_enabled"],
+            reasoning_effort=values["reasoning_effort"],
+            reasoning_summary=values["reasoning_summary"],
+            reasoning_extra_body=values["reasoning_extra_body"],
         )
 
     @property
@@ -112,6 +141,12 @@ class OpenAICompatibleSettings:
             "model": self.model,
             "api_key": "<set>",
             "timeout_s": self.timeout_s,
+            "reasoning_enabled": self.reasoning_enabled,
+            "reasoning_effort": self.reasoning_effort,
+            "reasoning_summary": self.reasoning_summary,
+            "reasoning_extra_body": (
+                "<set>" if self.reasoning_extra_body else None
+            ),
         }
 
 
@@ -275,10 +310,16 @@ class OpenAICompatibleClient:
             payload["tool_choice"] = tool_choice
         if metadata:
             payload["metadata"] = metadata
+        reasoning_applied = _apply_chat_reasoning(payload, self.settings)
         try:
             response = self._client.chat.completions.create(**payload)
         except Exception as exc:  # noqa: BLE001 - normalize SDK errors for callers.
-            raise self._to_compatible_error(exc) from exc
+            error = self._to_compatible_error(exc)
+            if reasoning_applied and _is_reasoning_unsupported_error(error):
+                response = self._retry_chat_without_reasoning(payload)
+                parsed = _ensure_dict(_to_plain_data(response))
+                return _annotate_reasoning_fallback(parsed)
+            raise error from exc
         return _ensure_dict(_to_plain_data(response))
 
     def _stream_chat_completions_text(
@@ -298,16 +339,31 @@ class OpenAICompatibleClient:
         }
         if metadata:
             payload["metadata"] = metadata
+        reasoning_applied = _apply_chat_reasoning(payload, self.settings)
 
         stream = None
+        yielded = False
         try:
             stream = self._client.chat.completions.create(**payload)
             for chunk in stream:
                 for content in _chat_delta_contents(chunk):
                     if content:
+                        yielded = True
                         yield content
         except Exception as exc:  # noqa: BLE001 - normalize SDK and iterator errors.
-            raise self._to_compatible_error(exc) from exc
+            error = self._to_compatible_error(exc)
+            if reasoning_applied and not yielded and _is_reasoning_unsupported_error(error):
+                _close_stream(stream)
+                stream = self._retry_chat_stream_without_reasoning(payload)
+                try:
+                    for chunk in stream:
+                        for content in _chat_delta_contents(chunk):
+                            if content:
+                                yield content
+                    return
+                except Exception as retry_exc:  # noqa: BLE001
+                    raise self._to_compatible_error(retry_exc) from retry_exc
+            raise error from exc
         finally:
             _close_stream(stream)
 
@@ -336,10 +392,16 @@ class OpenAICompatibleClient:
             payload["tools"] = tools
         if metadata:
             payload["metadata"] = metadata
+        reasoning_applied = _apply_responses_reasoning(payload, self.settings)
         try:
             response = self._client.responses.create(**payload)
         except Exception as exc:  # noqa: BLE001 - normalize SDK errors for callers.
-            raise self._to_compatible_error(exc) from exc
+            error = self._to_compatible_error(exc)
+            if reasoning_applied and _is_reasoning_unsupported_error(error):
+                response = self._retry_responses_without_reasoning(payload)
+                parsed = _ensure_dict(_to_plain_data(response))
+                return _annotate_reasoning_fallback(parsed)
+            raise error from exc
         return _ensure_dict(_to_plain_data(response))
 
     def _stream_responses_text(
@@ -362,8 +424,10 @@ class OpenAICompatibleClient:
             payload["instructions"] = instructions
         if metadata:
             payload["metadata"] = metadata
+        reasoning_applied = _apply_responses_reasoning(payload, self.settings)
 
         stream = None
+        yielded = False
         try:
             stream = self._client.responses.create(**payload)
             for event in stream:
@@ -371,15 +435,55 @@ class OpenAICompatibleClient:
                 if event_type == "response.output_text.delta":
                     delta = _event_field(event, "delta")
                     if isinstance(delta, str) and delta:
+                        yielded = True
                         yield delta
                 elif event_type in {"response.completed", "response.output_text.done"}:
                     return
                 elif event_type in {"error", "response.failed"}:
                     raise _stream_event_error(event, self.settings)
-        except OpenAICompatibleError:
+        except OpenAICompatibleError as exc:
+            if reasoning_applied and not yielded and _is_reasoning_unsupported_error(exc):
+                _close_stream(stream)
+                stream = self._retry_responses_stream_without_reasoning(payload)
+                try:
+                    for event in stream:
+                        event_type = _event_type(event)
+                        if event_type == "response.output_text.delta":
+                            delta = _event_field(event, "delta")
+                            if isinstance(delta, str) and delta:
+                                yield delta
+                        elif event_type in {"response.completed", "response.output_text.done"}:
+                            return
+                        elif event_type in {"error", "response.failed"}:
+                            raise _stream_event_error(event, self.settings)
+                    return
+                except OpenAICompatibleError:
+                    raise
+                except Exception as retry_exc:  # noqa: BLE001
+                    raise self._to_compatible_error(retry_exc) from retry_exc
             raise
         except Exception as exc:  # noqa: BLE001 - normalize SDK and iterator errors.
-            raise self._to_compatible_error(exc) from exc
+            error = self._to_compatible_error(exc)
+            if reasoning_applied and not yielded and _is_reasoning_unsupported_error(error):
+                _close_stream(stream)
+                stream = self._retry_responses_stream_without_reasoning(payload)
+                try:
+                    for event in stream:
+                        event_type = _event_type(event)
+                        if event_type == "response.output_text.delta":
+                            delta = _event_field(event, "delta")
+                            if isinstance(delta, str) and delta:
+                                yield delta
+                        elif event_type in {"response.completed", "response.output_text.done"}:
+                            return
+                        elif event_type in {"error", "response.failed"}:
+                            raise _stream_event_error(event, self.settings)
+                    return
+                except OpenAICompatibleError:
+                    raise
+                except Exception as retry_exc:  # noqa: BLE001
+                    raise self._to_compatible_error(retry_exc) from retry_exc
+            raise error from exc
         finally:
             _close_stream(stream)
 
@@ -459,6 +563,34 @@ class OpenAICompatibleClient:
             message = f"OpenAI-compatible API request failed: {_short_error(detail)}"
         return OpenAICompatibleError(message, status_code=status_code, kind=kind)
 
+    def _retry_chat_without_reasoning(self, payload: dict[str, Any]) -> Any:
+        retry_payload = _reasoning_fallback_payload(payload, remove_keys=("extra_body",))
+        try:
+            return self._client.chat.completions.create(**retry_payload)
+        except Exception as exc:  # noqa: BLE001
+            raise self._to_compatible_error(exc) from exc
+
+    def _retry_chat_stream_without_reasoning(self, payload: dict[str, Any]) -> Any:
+        retry_payload = _reasoning_fallback_payload(payload, remove_keys=("extra_body",))
+        try:
+            return self._client.chat.completions.create(**retry_payload)
+        except Exception as exc:  # noqa: BLE001
+            raise self._to_compatible_error(exc) from exc
+
+    def _retry_responses_without_reasoning(self, payload: dict[str, Any]) -> Any:
+        retry_payload = _reasoning_fallback_payload(payload, remove_keys=("reasoning",))
+        try:
+            return self._client.responses.create(**retry_payload)
+        except Exception as exc:  # noqa: BLE001
+            raise self._to_compatible_error(exc) from exc
+
+    def _retry_responses_stream_without_reasoning(self, payload: dict[str, Any]) -> Any:
+        retry_payload = _reasoning_fallback_payload(payload, remove_keys=("reasoning",))
+        try:
+            return self._client.responses.create(**retry_payload)
+        except Exception as exc:  # noqa: BLE001
+            raise self._to_compatible_error(exc) from exc
+
 
 def _validate_api_root(base_url: str) -> str:
     url = base_url.strip().rstrip("/")
@@ -475,6 +607,91 @@ def _validate_api_root(base_url: str) -> str:
                 "not a URL ending in `/chat/completions` or `/responses`."
             )
     return url
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on", "enabled"}:
+        return True
+    if text in {"0", "false", "no", "n", "off", "disabled"}:
+        return False
+    raise OpenAICompatibleError("reasoning_enabled must be a boolean value.")
+
+
+def _apply_responses_reasoning(
+    payload: dict[str, Any],
+    settings: OpenAICompatibleSettings,
+) -> bool:
+    if not settings.reasoning_enabled:
+        return False
+    payload["reasoning"] = {
+        "effort": settings.reasoning_effort,
+        "summary": settings.reasoning_summary,
+    }
+    return True
+
+
+def _apply_chat_reasoning(
+    payload: dict[str, Any],
+    settings: OpenAICompatibleSettings,
+) -> bool:
+    if not settings.reasoning_enabled or not settings.reasoning_extra_body:
+        return False
+    payload["extra_body"] = dict(settings.reasoning_extra_body)
+    return True
+
+
+def _reasoning_fallback_payload(
+    payload: dict[str, Any],
+    *,
+    remove_keys: tuple[str, ...],
+) -> dict[str, Any]:
+    retry_payload = dict(payload)
+    for key in remove_keys:
+        retry_payload.pop(key, None)
+    metadata = retry_payload.get("metadata")
+    retry_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    retry_metadata["reasoning_fallback"] = "true"
+    retry_payload["metadata"] = retry_metadata
+    return retry_payload
+
+
+def _annotate_reasoning_fallback(parsed: dict[str, Any]) -> dict[str, Any]:
+    metadata = parsed.get("physical_agent_metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata["reasoning_fallback"] = True
+    parsed["physical_agent_metadata"] = metadata
+    return parsed
+
+
+def _is_reasoning_unsupported_error(error: OpenAICompatibleError) -> bool:
+    if not (error.is_bad_request or error.kind == "stream_error"):
+        return False
+    text = str(error).lower()
+    if not any(term in text for term in ("reasoning", "thinking", "extra_body", "extra body")):
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "unsupported",
+            "not support",
+            "does not support",
+            "unknown",
+            "unrecognized",
+            "invalid",
+            "unexpected",
+            "forbidden",
+            "not allowed",
+            "不支持",
+            "未知",
+            "无效",
+        )
+    )
 
 
 def _messages_to_responses_parts(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:

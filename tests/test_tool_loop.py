@@ -12,7 +12,7 @@ from physical_agent.agent.chat_runtime import ChatRuntime
 from physical_agent.agent.tool_loop import OpenAIToolLoop, ToolLoopError
 from physical_agent.config import write_default_config
 from physical_agent.drivers.mock_arm import MockArmDriver
-from physical_agent.llm import OpenAICompatibleSettings
+from physical_agent.llm import OpenAICompatibleSettings, llm_settings_path, write_llm_settings_file
 from physical_agent.protocol.schemas import Action
 from physical_agent.quickstart import setup_project
 from physical_agent.state import open_state_store
@@ -181,6 +181,41 @@ def test_tool_loop_chat_completions_proposes_action_only_sqlite(tmp_path, fake_o
     assert [action.id for action in actions["pending"]] == ["act_sqlite_001"]
     assert actions["completed"] == []
     assert actions["cancelled"] == []
+
+
+def test_tool_loop_default_client_uses_workspace_reasoning_settings(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = open_state_store(config_path=config_path)
+    store.initialize()
+    write_llm_settings_file(
+        llm_settings_path(tmp_path / "workspace"),
+        {
+            "base_url": "http://settings.test/v1",
+            "api_key": "settings-key",
+            "model": "settings-model",
+            "api_mode": "chat_completions",
+            "reasoning_enabled": True,
+            "reasoning_effort": "high",
+            "reasoning_summary": "detailed",
+            "reasoning_extra_body": {"thinking": {"type": "enabled"}},
+        },
+    )
+
+    class FakeClient:
+        def __init__(self, settings):
+            self.settings = settings
+
+    import physical_agent.agent.tool_loop as tool_loop_module
+
+    monkeypatch.setattr(tool_loop_module, "OpenAICompatibleClient", FakeClient)
+
+    client = OpenAIToolLoop(config_path)._client()
+
+    assert client.settings.base_url == "http://settings.test/v1"
+    assert client.settings.reasoning_enabled is True
+    assert client.settings.reasoning_effort == "high"
+    assert client.settings.reasoning_summary == "detailed"
+    assert client.settings.reasoning_extra_body == {"thinking": {"type": "enabled"}}
 
 
 @pytest.mark.parametrize("planner_name", ["tool_loop", "openai_tool_loop"])

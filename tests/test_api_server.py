@@ -365,22 +365,36 @@ def test_api_llm_settings_endpoints_do_not_leak_key(tmp_path):
             "api_key": "sk-local-secret-7890",
             "model": "local-model",
             "api_mode": "chat_completions",
+            "reasoning_enabled": True,
+            "reasoning_effort": "high",
+            "reasoning_summary": "detailed",
+            "reasoning_extra_body": {"thinking": {"type": "enabled"}},
         },
     )
     assert saved.status_code == 200
     assert saved.json()["has_api_key"] is True
     assert saved.json()["masked_api_key"] == "****7890"
+    assert saved.json()["reasoning_enabled"] is True
+    assert saved.json()["reasoning_effort"] == "high"
+    assert saved.json()["reasoning_summary"] == "detailed"
+    assert saved.json()["has_reasoning_extra_body"] is True
     assert "sk-local-secret-7890" not in saved.text
 
     settings_file = llm_settings_path(tmp_path / "workspace")
     assert settings_file.exists()
-    assert "sk-local-secret-7890" in settings_file.read_text(encoding="utf-8")
+    settings_text = settings_file.read_text(encoding="utf-8")
+    assert "sk-local-secret-7890" in settings_text
+    assert "thinking" in settings_text
 
     fetched = client.get("/api/settings/llm")
     assert fetched.status_code == 200
     assert fetched.json()["base_url"] == "http://local-llm.test/v1"
     assert fetched.json()["model"] == "local-model"
     assert fetched.json()["api_mode"] == "chat_completions"
+    assert fetched.json()["reasoning_enabled"] is True
+    assert fetched.json()["reasoning_effort"] == "high"
+    assert fetched.json()["reasoning_summary"] == "detailed"
+    assert fetched.json()["has_reasoning_extra_body"] is True
     assert "sk-local-secret-7890" not in fetched.text
 
 

@@ -2,6 +2,7 @@ import json
 
 import physical_agent.agent.chat_runtime as chat_runtime_module
 from physical_agent.agent.chat_runtime import ChatRuntime
+from physical_agent.llm import llm_settings_path, write_llm_settings_file
 from physical_agent.quickstart import setup_project
 from physical_agent.protocol.schemas import Action, Observation
 from physical_agent.state import open_state_store
@@ -123,6 +124,40 @@ def test_chat_runtime_api_safe_flags_disable_hardware_integration(tmp_path, monk
     assert result["mode"] == "rule_based"
     assert result["actions"] == []
     assert result["code_result"] is None
+
+
+def test_chat_runtime_llm_client_uses_workspace_reasoning_settings(tmp_path, monkeypatch):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    write_llm_settings_file(
+        llm_settings_path(tmp_path / "workspace"),
+        {
+            "base_url": "http://settings.test/v1",
+            "api_key": "settings-key",
+            "model": "settings-model",
+            "api_mode": "chat_completions",
+            "reasoning_enabled": True,
+            "reasoning_effort": "high",
+            "reasoning_summary": "detailed",
+            "reasoning_extra_body": {"thinking": {"type": "enabled"}},
+        },
+    )
+
+    class FakeClient:
+        def __init__(self, settings):
+            self.settings = settings
+
+    monkeypatch.setattr(chat_runtime_module, "OpenAICompatibleClient", FakeClient)
+
+    runtime = ChatRuntime(config_path, planner_name="llm")
+    runtime.setup()
+    client = runtime._llm_client()
+
+    assert client.settings.base_url == "http://settings.test/v1"
+    assert client.settings.reasoning_enabled is True
+    assert client.settings.reasoning_effort == "high"
+    assert client.settings.reasoning_summary == "detailed"
+    assert client.settings.reasoning_extra_body == {"thinking": {"type": "enabled"}}
 
 
 def test_chat_runtime_stream_writes_completed_assistant_message(tmp_path, monkeypatch):

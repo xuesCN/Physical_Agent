@@ -30,6 +30,9 @@ server = [
   "python-multipart>=0.0.9",
   "uvicorn>=0.29",
 ]
+serial = [
+  "pyserial>=3.5",
+]
 
 [project.scripts]
 physical-agent = "physical_agent.cli:app"

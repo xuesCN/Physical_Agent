@@ -1,17 +1,12 @@
 from __future__ import annotations
-import base64
-import hashlib
 import json
 import os
-import socket
-import ssl
-import struct
 import urllib.request
 from copy import deepcopy
 from typing import Any
-from urllib.parse import urlparse
 
 from physical_agent.drivers.base import PhysicalDriver
+from physical_agent.drivers.transport import WebSocketTransport
 from physical_agent.env import load_dotenv
 from physical_agent.protocol.schemas import Action, ActionResult, Capability, DriverContext, HealthStatus, Observation
 
@@ -122,65 +117,23 @@ class XiaozhiMcpWebSocketClient:
         self.url = url
         self.connect_timeout_s = connect_timeout_s
         self.timeout_s = timeout_s
-        self._ws: socket.socket | ssl.SSLSocket | None = None
+        self.transport = WebSocketTransport(
+            url,
+            connect_timeout_s=connect_timeout_s,
+            timeout_s=timeout_s,
+        )
         self._next_id = 1
 
     @property
     def is_connected(self) -> bool:
-        return self._ws is not None
+        return self.transport.is_open
 
     def connect(self) -> None:
         self.close()
-        parsed = urlparse(self.url)
-        if parsed.scheme not in {"ws", "wss"}:
-            raise RuntimeError(f"Unsupported WebSocket URL scheme: {parsed.scheme}")
-        if not parsed.hostname:
-            raise RuntimeError(f"Invalid WebSocket URL: {self.url}")
-
-        port = parsed.port or (443 if parsed.scheme == "wss" else 80)
-        path = parsed.path or "/"
-        if parsed.query:
-            path += "?" + parsed.query
-
-        sock = socket.create_connection(
-            (parsed.hostname, port),
-            timeout=self.connect_timeout_s,
-        )
-        if parsed.scheme == "wss":
-            context = ssl.create_default_context()
-            sock = context.wrap_socket(sock, server_hostname=parsed.hostname)
-        sock.settimeout(self.connect_timeout_s)
-
-        key = base64.b64encode(os.urandom(16)).decode("ascii")
-        host = parsed.hostname if parsed.port is None else f"{parsed.hostname}:{port}"
-        request = (
-            f"GET {path} HTTP/1.1\r\n"
-            f"Host: {host}\r\n"
-            "Upgrade: websocket\r\n"
-            "Connection: Upgrade\r\n"
-            f"Sec-WebSocket-Key: {key}\r\n"
-            "Sec-WebSocket-Version: 13\r\n"
-            "\r\n"
-        )
-        sock.sendall(request.encode("ascii"))
-        response = self._read_http_response(sock)
-        self._validate_handshake(response, key)
-        sock.settimeout(self.timeout_s)
-        self._ws = sock
+        self.transport.open()
 
     def close(self) -> None:
-        ws = self._ws
-        self._ws = None
-        if ws is None:
-            return
-        try:
-            self._send_frame(b"", opcode=0x8, sock=ws)
-        except Exception:
-            pass
-        try:
-            ws.close()
-        except Exception:
-            pass
+        self.transport.close()
 
     def initialize(self) -> dict[str, Any]:
         return self.request(
@@ -251,103 +204,11 @@ class XiaozhiMcpWebSocketClient:
             {"name": name, "arguments": arguments or {}},
         )
 
-    def _read_http_response(self, sock: socket.socket) -> bytes:
-        response = b""
-        while b"\r\n\r\n" not in response:
-            chunk = sock.recv(4096)
-            if not chunk:
-                raise RuntimeError("WebSocket handshake closed before response")
-            response += chunk
-            if len(response) > 65536:
-                raise RuntimeError("WebSocket handshake response too large")
-        return response
-
-    def _validate_handshake(self, response: bytes, key: str) -> None:
-        head = response.split(b"\r\n\r\n", 1)[0].decode("latin1", errors="replace")
-        lines = head.split("\r\n")
-        if not lines or " 101 " not in f" {lines[0]} ":
-            raise RuntimeError(f"WebSocket handshake failed: {lines[0] if lines else head}")
-
-        headers: dict[str, str] = {}
-        for line in lines[1:]:
-            if ":" not in line:
-                continue
-            name, value = line.split(":", 1)
-            headers[name.strip().lower()] = value.strip()
-
-        accept = headers.get("sec-websocket-accept")
-        expected = base64.b64encode(
-            hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
-        ).decode("ascii")
-        if accept != expected:
-            raise RuntimeError("WebSocket handshake failed: invalid Sec-WebSocket-Accept")
-
     def _send_text(self, message: str) -> None:
-        self._send_frame(message.encode("utf-8"), opcode=0x1)
-
-    def _send_frame(
-        self,
-        payload: bytes,
-        *,
-        opcode: int,
-        sock: socket.socket | ssl.SSLSocket | None = None,
-    ) -> None:
-        sock = sock or self._ws
-        if sock is None:
-            raise RuntimeError("WebSocket is not connected")
-        header = bytearray([0x80 | opcode])
-        length = len(payload)
-        if length < 126:
-            header.append(0x80 | length)
-        elif length < 65536:
-            header.append(0x80 | 126)
-            header.extend(struct.pack("!H", length))
-        else:
-            header.append(0x80 | 127)
-            header.extend(struct.pack("!Q", length))
-        mask = os.urandom(4)
-        header.extend(mask)
-        masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
-        sock.sendall(header + masked)
+        self.transport.write_text(message)
 
     def _recv_text(self) -> str:
-        while True:
-            opcode, payload = self._recv_frame()
-            if opcode in {0x1, 0x2}:
-                return payload.decode("utf-8", errors="replace")
-            if opcode == 0x8:
-                self.close()
-                raise RuntimeError("WebSocket closed by peer")
-            if opcode == 0x9:
-                self._send_frame(payload, opcode=0xA)
-
-    def _recv_frame(self) -> tuple[int, bytes]:
-        first = self._recv_exact(2)
-        byte1, byte2 = first
-        opcode = byte1 & 0x0F
-        masked = bool(byte2 & 0x80)
-        length = byte2 & 0x7F
-        if length == 126:
-            length = struct.unpack("!H", self._recv_exact(2))[0]
-        elif length == 127:
-            length = struct.unpack("!Q", self._recv_exact(8))[0]
-        mask = self._recv_exact(4) if masked else b""
-        payload = self._recv_exact(length) if length else b""
-        if masked:
-            payload = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
-        return opcode, payload
-
-    def _recv_exact(self, size: int) -> bytes:
-        sock = self._ws
-        if sock is None:
-            raise RuntimeError("WebSocket is not connected")
-        data = b""
-        while len(data) < size:
-            chunk = sock.recv(size - len(data))
-            if not chunk:
-                raise RuntimeError("WebSocket closed")
-            data += chunk
-        return data
+        return self.transport.read(self.timeout_s).decode("utf-8", errors="replace")
 
     def _decode_message(self, message: str | bytes) -> dict[str, Any]:
         if isinstance(message, bytes):

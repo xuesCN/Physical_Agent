@@ -2,6 +2,7 @@ import asyncio
 
 from physical_agent.drivers import xiaozhi_mcp as xiaozhi_mcp_module
 from physical_agent.drivers.loader import load_driver
+from physical_agent.drivers.transport import WebSocketTransport
 from physical_agent.protocol.schemas import Action
 from physical_agent.protocol.workspace import Workspace
 
@@ -164,6 +165,15 @@ def test_xiaozhi_mcp_ws_mode(monkeypatch, tmp_path):
         ("self.audio_speaker.set_volume", {"volume": 35}),
         ("self.otto.action", {"action": "hand_wave", "direction": 1}),
     ]
+
+
+def test_xiaozhi_ws_client_uses_shared_websocket_transport():
+    client = xiaozhi_mcp_module.XiaozhiMcpWebSocketClient("ws://127.0.0.1:8080/ws")
+
+    assert isinstance(client.transport, WebSocketTransport)
+    assert "_send_frame" not in xiaozhi_mcp_module.XiaozhiMcpWebSocketClient.__dict__
+    assert "_recv_frame" not in xiaozhi_mcp_module.XiaozhiMcpWebSocketClient.__dict__
+    assert "_validate_handshake" not in xiaozhi_mcp_module.XiaozhiMcpWebSocketClient.__dict__
 
 
 def test_xiaozhi_mcp_ws_fire_and_forget(monkeypatch, tmp_path):

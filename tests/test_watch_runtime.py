@@ -10,11 +10,15 @@ from physical_agent.state import open_state_store
 from physical_agent.watch.runtime import WatchRuntime
 
 
+def _write_config_backend(config_path, backend: str):
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data["workspace"]["backend"] = backend
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+
 def test_watch_runtime_step_executes_action(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    data["workspace"]["backend"] = "markdown"
-    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    _write_config_backend(config_path, "markdown")
     runtime = WatchRuntime(config_path)
     asyncio.run(runtime.setup())
     workspace = Workspace(tmp_path / "workspace")
@@ -41,9 +45,7 @@ def test_watch_runtime_step_executes_action(tmp_path):
 
 def test_watch_runtime_driver_exception_cancels_sqlite_action(tmp_path, monkeypatch):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    data["workspace"]["backend"] = "sqlite"
-    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    _write_config_backend(config_path, "sqlite")
 
     runtime = WatchRuntime(config_path)
     asyncio.run(runtime.setup())
@@ -98,3 +100,123 @@ def test_watch_runtime_driver_exception_cancels_sqlite_action(tmp_path, monkeypa
     assert row == ("cancelled", None, None)
     assert "Action `act_boom` failed" in log_message
     assert "boom" in log_message
+
+
+def test_watch_runtime_step_calls_driver_heartbeat(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+
+    calls = []
+
+    async def heartbeat():
+        calls.append("heartbeat")
+
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "heartbeat", heartbeat)
+
+    try:
+        count = asyncio.run(runtime.step(setup=False))
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert count == 0
+    assert calls == ["heartbeat"]
+
+
+def test_watch_runtime_heartbeat_failure_is_audited(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+
+    async def heartbeat():
+        raise RuntimeError("pulse lost")
+
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "heartbeat", heartbeat)
+
+    try:
+        count = asyncio.run(runtime.step(setup=False))
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert count == 0
+    feedback = store.read_feedback()
+    latest = feedback["latest"]
+    assert latest["event"] == "driver_heartbeat"
+    assert latest["robot_id"] == "arm_1"
+    assert latest["result"]["error_type"] == "RuntimeError"
+    assert latest["result"]["error_message"] == "pulse lost"
+    assert "Driver heartbeat failed" in latest["message"]
+    assert "arm_1" in latest["message"]
+
+    with sqlite3.connect(store.db_path) as conn:
+        log_message = conn.execute(
+            """
+            SELECT message
+            FROM log_entries
+            WHERE actor = 'watch' AND message LIKE ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            ("%Driver heartbeat failed%",),
+        ).fetchone()[0]
+    assert "RuntimeError" in log_message
+    assert "pulse lost" in log_message
+
+
+def test_watch_runtime_shutdown_calls_driver_halt(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+
+    calls = []
+
+    async def halt():
+        calls.append("halt")
+
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "halt", halt)
+
+    asyncio.run(runtime.shutdown())
+
+    assert calls == ["halt"]
+
+
+def test_watch_runtime_halt_failure_is_audited_and_shutdown_completes(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+
+    async def halt():
+        raise RuntimeError("halt jammed")
+
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "halt", halt)
+
+    asyncio.run(runtime.shutdown())
+
+    assert runtime.started is False
+    feedback = store.read_feedback()
+    latest = feedback["latest"]
+    assert latest["event"] == "driver_halt"
+    assert latest["robot_id"] == "arm_1"
+    assert latest["result"]["error_type"] == "RuntimeError"
+    assert latest["result"]["error_message"] == "halt jammed"
+    assert "Driver halt failed" in latest["message"]
+
+    with sqlite3.connect(store.db_path) as conn:
+        log_message = conn.execute(
+            """
+            SELECT message
+            FROM log_entries
+            WHERE actor = 'watch' AND message LIKE ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            ("%Driver halt failed%",),
+        ).fetchone()[0]
+    assert "RuntimeError" in log_message
+    assert "halt jammed" in log_message

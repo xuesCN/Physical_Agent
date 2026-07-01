@@ -22,6 +22,8 @@ class WorkspaceConfig(BaseModel):
 class WatchConfig(BaseModel):
     tick_ms: int = 500
     require_human_approval: bool = False
+    heartbeat_enabled: bool = True
+    halt_on_shutdown: bool = True
 
 
 class AgentConfig(BaseModel):
@@ -65,7 +67,12 @@ def default_config_dict() -> dict[str, Any]:
     return {
         "project": {"name": "quickstart"},
         "workspace": {"path": "./workspace", "backend": "sqlite"},
-        "watch": {"tick_ms": 500, "require_human_approval": False},
+        "watch": {
+            "tick_ms": 500,
+            "require_human_approval": False,
+            "heartbeat_enabled": True,
+            "halt_on_shutdown": True,
+        },
         "agent": {
             "planner": "rule_based",
             "model": "fake/local",

@@ -63,6 +63,7 @@ class WatchRuntime:
         self.started = True
 
     async def shutdown(self) -> None:
+        await self._halt_loaded_drivers()
         for loaded in self.loaded_drivers.values():
             await loaded.driver.disconnect()
         if self.workspace is not None:
@@ -82,6 +83,7 @@ class WatchRuntime:
     async def step(self, *, setup: bool = True) -> int:
         if setup:
             await self.setup()
+        await self._heartbeat_loaded_drivers()
         workspace = self._workspace()
         workspace.recover_stale_actions(ACTION_LEASE_SECONDS)
         actions_doc = workspace.read_actions()
@@ -181,6 +183,51 @@ class WatchRuntime:
             f"Action `{action.id}` {result.status}: {result.message}",
             actor="watch",
         )
+
+    async def _heartbeat_loaded_drivers(self) -> None:
+        if self.config is None or not self.config.watch.heartbeat_enabled:
+            return
+        for robot_id, loaded in self.loaded_drivers.items():
+            try:
+                await loaded.driver.heartbeat()
+            except Exception as exc:
+                self._record_driver_hook_failure(robot_id, "heartbeat", exc)
+
+    async def _halt_loaded_drivers(self) -> None:
+        if self.config is None or not self.config.watch.halt_on_shutdown:
+            return
+        for robot_id, loaded in self.loaded_drivers.items():
+            try:
+                await loaded.driver.halt()
+            except Exception as exc:
+                self._record_driver_hook_failure(robot_id, "halt", exc)
+
+    def _record_driver_hook_failure(self, robot_id: str, hook: str, exc: Exception) -> None:
+        workspace = self._workspace()
+        error_type = type(exc).__name__
+        error_message = str(exc)
+        message = (
+            f"Driver {hook} failed for robot `{robot_id}`: "
+            f"{error_type}: {error_message}"
+        )
+        latest = {
+            "status": "failed",
+            "event": f"driver_{hook}",
+            "robot": robot_id,
+            "robot_id": robot_id,
+            "message": message,
+            "result": {
+                "hook": hook,
+                "error_type": error_type,
+                "error_message": error_message,
+            },
+            "artifacts": [],
+        }
+        feedback = workspace.read_feedback()
+        history = list(feedback["history"])
+        history.append(latest)
+        workspace.write_feedback(latest, history)
+        workspace.append_log(message, actor="watch")
 
     def _workspace(self) -> StateStore:
         if self.workspace is None:

@@ -93,7 +93,11 @@ def _boundary_findings(path: Path) -> list[tuple[str, str, str]]:
                 findings.append((relative, "import", module))
         elif isinstance(node, ast.Call):
             target = _attribute_path(node.func)
-            if target in {"driver.execute"} or (target and target.endswith(".driver.execute")):
+            blocked_calls = {"driver.execute", "driver.heartbeat", "driver.halt"}
+            if target in blocked_calls or (
+                target
+                and any(target.endswith(f".{call}") for call in blocked_calls)
+            ):
                 findings.append((relative, "call", target))
     return findings
 
@@ -117,7 +121,8 @@ def _format_boundary_failure(findings: list[tuple[str, str, str]]) -> str:
     if not findings:
         return ""
     lines = [
-        "Agent/LLM/GUI/API code must not directly import physical_agent.drivers or call driver.execute.",
+        "Agent/LLM/GUI/API code must not directly import physical_agent.drivers "
+        "or call driver execute/heartbeat/halt hooks.",
         "Move execution to watch-side code or add a narrow documented allowlist entry if it is validation-only.",
         "Unexpected findings:",
     ]

@@ -1,10 +1,12 @@
 import { Alert, App as AntApp, ConfigProvider, Drawer, Layout, theme } from "antd";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  abortChatStream,
   fetchHealth,
   fetchState,
   proposeAction,
   sendChat,
+  sendChatStream,
   submitTask
 } from "./api";
 import { ActionBoard } from "./components/ActionBoard";
@@ -69,15 +71,25 @@ function Dashboard() {
   const [sseConnected, setSseConnected] = useState(false);
   const [watchEnabled, setWatchEnabled] = useState<boolean | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const [streamMessages, setStreamMessages] = useState<ChatMessage[] | null>(null);
+  const [chatStreamError, setChatStreamError] = useState<string | null>(null);
   const [busy, setBusy] = useState<BusyKey>("refresh");
   const [activePage, setActivePage] = useState<PageKey>("overview");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const busyRef = useRef<BusyKey>("refresh");
+  const chatSseDisconnectNotifiedRef = useRef(false);
+  const chatAbortControllerRef = useRef<AbortController | null>(null);
+  const chatStreamIdRef = useRef<string | null>(null);
 
   const chatMessages = useMemo(
-    () => state?.chat?.messages ?? [],
-    [state?.chat?.messages]
+    () => streamMessages ?? state?.chat?.messages ?? [],
+    [state?.chat?.messages, streamMessages]
   );
+
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
 
   const loadSnapshot = useCallback(async () => {
     setBusy((current) => current ?? "refresh");
@@ -104,9 +116,14 @@ function Dashboard() {
 
     source.onopen = () => {
       setSseConnected(true);
+      chatSseDisconnectNotifiedRef.current = false;
     };
     source.onerror = () => {
       setSseConnected(false);
+      if (busyRef.current === "chat" && !chatSseDisconnectNotifiedRef.current) {
+        chatSseDisconnectNotifiedRef.current = true;
+        message.error("SSE disconnected while chat was in progress.");
+      }
     };
 
     const listener = (event: Event) => {
@@ -133,26 +150,124 @@ function Dashboard() {
     };
   }, [loadSnapshot, message]);
 
-  useEffect(() => {
-    if (sseConnected) {
-      return undefined;
-    }
-    const poller = window.setInterval(() => {
-      void loadSnapshot();
-    }, 5000);
-    return () => window.clearInterval(poller);
-  }, [loadSnapshot, sseConnected]);
-
   async function handleChat(text: string) {
     setBusy("chat");
+    chatSseDisconnectNotifiedRef.current = false;
+    setChatStreamError(null);
+    const baseMessages = state?.chat?.messages ?? [];
+    const assistantKey = `assistant-stream-${Date.now()}`;
+    setStreamMessages([
+      ...baseMessages,
+      localChatMessage("user", text),
+      localChatMessage("assistant", "", {
+        local_key: assistantKey,
+        stream_status: "streaming"
+      })
+    ]);
+
+    const abortController = new AbortController();
+    const streamId = `chat-${Date.now()}`;
+    chatAbortControllerRef.current = abortController;
+    chatStreamIdRef.current = streamId;
+    let streamStarted = false;
+    let streamFinished = false;
+    let assistantContent = "";
+
     try {
-      const response = await sendChat(text);
-      setState(response.state);
+      await sendChatStream(text, {
+        streamId,
+        requestId: streamId,
+        signal: abortController.signal,
+        onEvent: (event) => {
+          const payload = event.payload ?? {};
+          if (event.type === "start") {
+            streamStarted = true;
+            return;
+          }
+          if (event.type === "delta") {
+            streamStarted = true;
+            assistantContent += String(payload.delta ?? "");
+            setStreamMessages((current) =>
+              updateStreamingAssistant(current, assistantKey, assistantContent)
+            );
+            return;
+          }
+          if (event.type === "done") {
+            streamFinished = true;
+            if (isAgentState(payload.state)) {
+              setState(payload.state);
+              setStreamMessages(null);
+            } else {
+              setStreamMessages((current) =>
+                updateStreamingAssistant(
+                  current,
+                  assistantKey,
+                  String(payload.reply ?? assistantContent)
+                )
+              );
+            }
+            return;
+          }
+          if (event.type === "aborted") {
+            streamFinished = true;
+            setChatStreamError("Chat stream stopped.");
+            if (isAgentState(payload.state)) {
+              setState(payload.state);
+              setStreamMessages(null);
+            }
+            return;
+          }
+          if (event.type === "error") {
+            streamFinished = true;
+            const text = String(payload.message ?? "Streaming chat failed.");
+            setChatStreamError(text);
+            if (isAgentState(payload.state)) {
+              setState(payload.state);
+              setStreamMessages(null);
+              return;
+            }
+            if (!assistantContent) {
+              setStreamMessages((current) =>
+                updateStreamingAssistant(current, assistantKey, text)
+              );
+            }
+          }
+        }
+      });
+      if (streamStarted && !streamFinished) {
+        setChatStreamError("Chat stream ended before completion.");
+      }
     } catch (error) {
-      showError(message, error);
+      if (isAbortError(error)) {
+        setChatStreamError("Chat stream stopped.");
+        streamFinished = true;
+      } else if (!streamStarted) {
+        try {
+          const response = await sendChat(text);
+          setState(response.state);
+          setStreamMessages(null);
+        } catch (fallbackError) {
+          showError(message, fallbackError);
+          setChatStreamError(fallbackError instanceof Error ? fallbackError.message : String(fallbackError));
+        }
+      } else {
+        const text = error instanceof Error ? error.message : String(error);
+        setChatStreamError(text);
+        showError(message, error);
+      }
     } finally {
+      chatAbortControllerRef.current = null;
+      chatStreamIdRef.current = null;
       setBusy(null);
     }
+  }
+
+  function handleStopChat() {
+    const streamId = chatStreamIdRef.current;
+    if (streamId) {
+      void abortChatStream(streamId).catch(() => undefined);
+    }
+    chatAbortControllerRef.current?.abort();
   }
 
   async function handleTask(task: string) {
@@ -224,6 +339,8 @@ function Dashboard() {
                 chatMessages,
                 busy,
                 onChat: handleChat,
+                onStopChat: handleStopChat,
+                chatError: chatStreamError,
                 onUploaded: handleUploaded,
                 onError: (error) => showError(message, error)
               })}
@@ -268,6 +385,8 @@ interface RenderPageProps {
   chatMessages: ChatMessage[];
   busy: BusyKey;
   onChat: (message: string) => Promise<void>;
+  onStopChat: () => void;
+  chatError: string | null;
   onUploaded: (state: AgentState, response: UploadResponse) => void;
   onError: (error: Error) => void;
 }
@@ -331,6 +450,8 @@ function renderPageContent({
   chatMessages,
   busy,
   onChat,
+  onStopChat,
+  chatError,
   onUploaded,
   onError
 }: RenderPageProps) {
@@ -394,7 +515,13 @@ function renderPageContent({
     <div className="overview-grid">
       <div className="main-column">
         <ActionBoard actions={state?.actions} />
-        <ChatPanel messages={chatMessages} loading={busy === "chat"} onSend={onChat} />
+        <ChatPanel
+          messages={chatMessages}
+          loading={busy === "chat"}
+          error={chatError}
+          onSend={onChat}
+          onStop={onStopChat}
+        />
       </div>
       <div className="context-column">
         <ContextTabs state={state} />
@@ -415,4 +542,51 @@ function parseApiEvent(event: MessageEvent<string>): ApiEvent | null {
 function showError(messageApi: ReturnType<typeof AntApp.useApp>["message"], error: unknown) {
   const text = error instanceof Error ? error.message : String(error);
   messageApi.error(text);
+}
+
+function localChatMessage(
+  role: ChatMessage["role"],
+  content: string,
+  metadata: Record<string, unknown> = {}
+): ChatMessage {
+  return {
+    role,
+    content,
+    created_at: new Date().toISOString(),
+    metadata
+  };
+}
+
+function updateStreamingAssistant(
+  messages: ChatMessage[] | null,
+  localKey: string,
+  content: string
+): ChatMessage[] | null {
+  if (!messages) {
+    return messages;
+  }
+  return messages.map((item) => {
+    if (item.metadata?.local_key !== localKey) {
+      return item;
+    }
+    return {
+      ...item,
+      content,
+      metadata: {
+        ...item.metadata,
+        stream_status: "streaming"
+      }
+    };
+  });
+}
+
+function isAgentState(value: unknown): value is AgentState {
+  return Boolean(value && typeof value === "object" && "ready" in value);
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException || error instanceof Error) &&
+    error.name === "AbortError"
+  );
 }

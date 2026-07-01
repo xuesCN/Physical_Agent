@@ -1,6 +1,6 @@
-import { RobotOutlined, UserOutlined } from "@ant-design/icons";
+import { RobotOutlined, StopOutlined, UserOutlined } from "@ant-design/icons";
 import { Bubble, Sender } from "@ant-design/x";
-import { Card, Empty, Space, Typography } from "antd";
+import { Alert, Button, Card, Empty, Space, Typography } from "antd";
 import { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import type { ChatMessage } from "../types";
@@ -8,10 +8,12 @@ import type { ChatMessage } from "../types";
 interface ChatPanelProps {
   messages: ChatMessage[];
   loading: boolean;
+  error?: string | null;
   onSend: (message: string) => Promise<void>;
+  onStop: () => void;
 }
 
-export function ChatPanel({ messages, loading, onSend }: ChatPanelProps) {
+export function ChatPanel({ messages, loading, error, onSend, onStop }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const items = useMemo(
     () =>
@@ -66,15 +68,35 @@ export function ChatPanel({ messages, loading, onSend }: ChatPanelProps) {
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No messages" />
         )}
       </div>
-      <Sender
-        className="chat-sender"
-        value={draft}
-        loading={loading}
-        placeholder="Message the agent"
-        submitType="enter"
-        onChange={setDraft}
-        onSubmit={submit}
-      />
+      {error && (
+        <Alert
+          className="chat-stream-error"
+          data-testid="chat-stream-error"
+          type="error"
+          showIcon
+          message={error}
+        />
+      )}
+      <div className="chat-input-row">
+        <Sender
+          className="chat-sender"
+          value={draft}
+          loading={loading}
+          placeholder="Message the agent"
+          submitType="enter"
+          onChange={setDraft}
+          onSubmit={submit}
+        />
+        <Button
+          className="chat-stop-button"
+          data-testid="stop-chat-stream"
+          icon={<StopOutlined />}
+          disabled={!loading}
+          onClick={onStop}
+        >
+          Stop
+        </Button>
+      </div>
     </Card>
   );
 }

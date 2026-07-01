@@ -297,6 +297,22 @@ body {
   margin-top: 8px;
 }
 
+.chat-stream-error {
+  margin-top: 8px;
+}
+
+.chat-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.chat-stop-button {
+  min-width: 86px;
+  height: 40px;
+}
+
 .markdown-body p {
   margin: 0 0 8px;
 }
@@ -502,6 +518,14 @@ body {
   .bubble-stage {
     height: 330px;
     min-height: 280px;
+  }
+
+  .chat-input-row {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-stop-button {
+    width: 100%;
   }
 
   .action-board .ant-card-head {

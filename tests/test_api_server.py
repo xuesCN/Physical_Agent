@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,19 @@ def _prepare_store(config_path: Path):
         )
     )
     return store
+
+
+def _sse_events(body: str) -> list[dict]:
+    events = []
+    for block in body.split("\n\n"):
+        data_lines = [
+            line.removeprefix("data:").strip()
+            for line in block.splitlines()
+            if line.startswith("data:")
+        ]
+        if data_lines:
+            events.append(json.loads("\n".join(data_lines)))
+    return events
 
 
 def test_api_cli_missing_server_extra_has_clear_message(tmp_path, monkeypatch):
@@ -456,6 +470,148 @@ def test_api_chat_constructs_api_safe_chat_runtime(tmp_path, monkeypatch):
     assert calls["respond"] == {"message": "hello", "auto_step": False}
 
 
+def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    calls = {}
+
+    class FakeRuntime:
+        def respond_stream(self, message, *, auto_step=False, **kwargs):
+            calls["respond"] = {
+                "message": message,
+                "auto_step": auto_step,
+                "has_cancel_check": "cancel_check" in kwargs,
+            }
+            yield {"type": "delta", "delta": "hel"}
+            yield {"type": "delta", "delta": "lo"}
+            yield {
+                "type": "done",
+                "mode": "llm",
+                "reply": "hello",
+                "actions": [],
+                "memory": [],
+                "plan": None,
+                "executed": 0,
+            }
+
+    def fake_new_runtime(config, **kwargs):
+        calls["runtime"] = {"config": Path(config), **kwargs}
+        return FakeRuntime()
+
+    monkeypatch.setattr(api_server_module, "_new_chat_runtime", fake_new_runtime)
+
+    client = TestClient(create_app(config_path))
+    with client.stream(
+        "POST",
+        "/api/chat/stream",
+        json={
+            "message": "hello",
+            "request_id": "req-test",
+            "stream_id": "stream-test",
+            "auto_step": True,
+        },
+    ) as response:
+        assert response.status_code == 200
+        events = _sse_events("".join(response.iter_text()))
+
+    assert [event["type"] for event in events] == ["start", "delta", "delta", "done"]
+    assert events[0]["payload"]["stream_id"] == "stream-test"
+    assert events[0]["payload"]["request_id"] == "req-test"
+    assert events[1]["payload"]["delta"] == "hel"
+    assert events[3]["payload"]["reply"] == "hello"
+    assert events[3]["payload"]["state"]["chat"]["messages"] == []
+    assert calls["runtime"] == {
+        "config": config_path.resolve(),
+        "planner_name": "auto",
+        "enable_code_skills": False,
+        "enable_hardware_integration": False,
+    }
+    assert calls["respond"] == {
+        "message": "hello",
+        "auto_step": False,
+        "has_cancel_check": True,
+    }
+
+
+def test_api_chat_stream_sends_sanitized_error_event(tmp_path, monkeypatch):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+
+    class FakeRuntime:
+        def respond_stream(self, message, *, auto_step=False, **kwargs):
+            raise OpenAICompatibleError("Bearer sk-local-secret-7890 failed")
+            yield  # pragma: no cover
+
+    monkeypatch.setattr(
+        api_server_module,
+        "_new_chat_runtime",
+        lambda config, **kwargs: FakeRuntime(),
+    )
+
+    client = TestClient(create_app(config_path))
+    with client.stream(
+        "POST",
+        "/api/chat/stream",
+        json={"message": "hello", "stream_id": "stream-error"},
+    ) as response:
+        assert response.status_code == 200
+        events = _sse_events("".join(response.iter_text()))
+
+    assert [event["type"] for event in events] == ["start", "error"]
+    assert "<redacted>" in events[-1]["payload"]["message"]
+    assert "sk-local-secret-7890" not in events[-1]["payload"]["message"]
+
+
+def test_api_chat_stream_abort_registry_stops_before_consuming_runtime(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    controller = ApiController(config_path)
+    stream_state = controller.register_chat_stream(
+        ChatRequest(message="hello", stream_id="stream-abort", request_id="req-abort")
+    )
+    assert controller.abort_chat_stream("stream-abort", reason="test") is True
+
+    class FakeRuntime:
+        def respond_stream(self, message, *, auto_step=False, **kwargs):
+            raise AssertionError("aborted stream must not consume runtime chunks")
+            yield  # pragma: no cover
+
+    monkeypatch.setattr(
+        api_server_module,
+        "_new_chat_runtime",
+        lambda config, **kwargs: FakeRuntime(),
+    )
+
+    events = list(
+        controller.chat_stream(
+            ChatRequest(message="hello"),
+            stream_state=stream_state,
+        )
+    )
+
+    assert events[0]["type"] == "aborted"
+    assert events[0]["payload"]["stream_id"] == "stream-abort"
+    assert controller.abort_chat_stream("missing-stream", reason="test") is False
+
+
+def test_api_chat_abort_endpoint_reports_missing_stream(tmp_path):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    client = TestClient(create_app(config_path))
+
+    response = client.post("/api/chat/abort/missing-stream")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "stream_id": "missing-stream",
+        "aborted": False,
+    }
+
+
 def test_api_browser_upload_records_untrusted_metadata_chunks_and_audit(tmp_path):
     TestClient = _client_or_skip()
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
@@ -605,6 +761,18 @@ def test_api_requests_do_not_instantiate_watch_or_execute_driver(tmp_path, monke
         "/api/chat",
         json={"message": "look around", "auto_step": True},
     ).status_code == 200
+    with client.stream(
+        "POST",
+        "/api/chat/stream",
+        json={"message": "look around", "auto_step": True},
+    ) as response:
+        assert response.status_code == 200
+        stream_event_types = [
+            event["type"] for event in _sse_events("".join(response.iter_text()))
+        ]
+        assert stream_event_types[0] == "start"
+        assert "delta" in stream_event_types
+        assert stream_event_types[-1] == "done"
     assert client.post(
         "/api/upload",
         files={"file": ("safe.md", b"upload text remains untrusted", "text/markdown")},

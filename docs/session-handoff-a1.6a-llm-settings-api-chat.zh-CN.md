@@ -1,7 +1,7 @@
 # Session Handoff: A1.6a LLM Settings + API Chat Bridge
 
-> 分支：`codex/openai-tool-loop-foundation`  
-> 起始 HEAD：`9c25e90 Use OpenAI SDK for compatible chat client`  
+> 分支：`codex/openai-tool-loop-foundation`
+> 起始 HEAD：`9c25e90 Use OpenAI SDK for compatible chat client`
 > 本轮范围：只做本地 LLM settings 与非流式 API chat bridge。未 push，未开 PR。
 
 ## 修改范围

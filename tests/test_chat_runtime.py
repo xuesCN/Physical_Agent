@@ -1,5 +1,6 @@
 import json
 
+import physical_agent.agent.chat_runtime as chat_runtime_module
 from physical_agent.agent.chat_runtime import ChatRuntime
 from physical_agent.quickstart import setup_project
 from physical_agent.protocol.schemas import Action, Observation
@@ -122,6 +123,117 @@ def test_chat_runtime_api_safe_flags_disable_hardware_integration(tmp_path, monk
     assert result["mode"] == "rule_based"
     assert result["actions"] == []
     assert result["code_result"] is None
+
+
+def test_chat_runtime_stream_writes_completed_assistant_message(tmp_path, monkeypatch):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="llm",
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+
+    class FakeClient:
+        def stream_chat_text(self, messages, **kwargs):
+            yield "hel"
+            yield "lo"
+
+    monkeypatch.setattr(runtime, "_llm_client", lambda: FakeClient())
+
+    events = list(runtime.respond_stream("hello"))
+
+    assert [event["type"] for event in events] == ["delta", "delta", "done"]
+    assert events[-1]["reply"] == "hello"
+    store = open_state_store(config_path=config_path)
+    messages = store.read_chat()["messages"]
+    assert [item.role for item in messages] == ["user", "assistant"]
+    assert messages[-1].content == "hello"
+    assert messages[-1].metadata["stream_status"] == "completed"
+    assert messages[-1].metadata["partial"] is False
+    assert store.read_actions()["pending"] == []
+
+
+def test_chat_runtime_stream_abort_writes_partial_without_actions(tmp_path, monkeypatch):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="llm",
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+
+    class FakeClient:
+        def stream_chat_text(self, messages, **kwargs):
+            yield "partial"
+            yield " ignored"
+
+    monkeypatch.setattr(runtime, "_llm_client", lambda: FakeClient())
+    checks = {"count": 0}
+
+    def cancel_after_first_delta():
+        checks["count"] += 1
+        return checks["count"] >= 3
+
+    events = list(runtime.respond_stream("hello", cancel_check=cancel_after_first_delta))
+
+    assert [event["type"] for event in events] == ["delta", "aborted"]
+    store = open_state_store(config_path=config_path)
+    messages = store.read_chat()["messages"]
+    assert messages[-1].content == "partial"
+    assert messages[-1].metadata["stream_status"] == "cancelled"
+    assert messages[-1].metadata["partial"] is True
+    assert store.read_plan()["plan"].status == "cancelled"
+    assert store.read_actions()["pending"] == []
+
+
+def test_chat_runtime_stream_never_creates_pending_actions(tmp_path):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="rule_based",
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+
+    events = list(runtime.respond_stream("pick the red block and place it on the tray"))
+
+    assert events[-1]["type"] == "done"
+    assert "did not create a pending action" in events[-1]["reply"]
+    store = open_state_store(config_path=config_path)
+    assert store.read_actions()["pending"] == []
+    assert store.read_plan()["plan"].actions == []
+
+
+def test_chat_runtime_stream_ignores_auto_step_and_watch_runtime(tmp_path, monkeypatch):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+
+    def fail_watch_init(self, *args, **kwargs):
+        raise AssertionError("streaming chat must not instantiate WatchRuntime")
+
+    monkeypatch.setattr(chat_runtime_module.WatchRuntime, "__init__", fail_watch_init)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="rule_based",
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+
+    events = list(
+        runtime.respond_stream(
+            "pick the red block and place it on the tray",
+            auto_step=True,
+        )
+    )
+
+    assert events[-1]["type"] == "done"
+    store = open_state_store(config_path=config_path)
+    assert store.read_actions()["pending"] == []
+    assert store.read_actions()["completed"] == []
 
 
 def test_chat_runtime_llm_context_uses_summary_and_live_workspace_state(

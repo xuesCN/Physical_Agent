@@ -7,6 +7,13 @@ function collectConsoleErrors(page: Page) {
   const consoleErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") {
+      const location = message.location();
+      if (
+        message.text().includes("404") &&
+        location.url.includes("/api/chat/stream")
+      ) {
+        return;
+      }
       consoleErrors.push(message.text());
     }
   });
@@ -211,6 +218,95 @@ test("settings panel saves and tests LLM settings with mocked API", async ({ pag
   expectNoConsoleErrors(consoleErrors);
 });
 
+test("chat panel streams text incrementally and can stop", async ({ page }) => {
+  const consoleErrors = collectConsoleErrors(page);
+  const snapshot = await mockReadyApiWithRobot(page);
+  const finalState = {
+    ...snapshot,
+    chat: {
+      messages: [
+        { role: "user", content: "stream a greeting", created_at: "2026-07-01T00:00:00Z" },
+        { role: "assistant", content: "Hello stream", created_at: "2026-07-01T00:00:01Z" }
+      ]
+    }
+  };
+  await installControlledChatStream(
+    page,
+    [
+      sseEvent(10, "start", { stream_id: "stream-e2e", request_id: "req-e2e" }),
+      sseEvent(11, "delta", { stream_id: "stream-e2e", request_id: "req-e2e", delta: "Hello" }),
+      sseEvent(12, "delta", { stream_id: "stream-e2e", request_id: "req-e2e", delta: " stream" }),
+      sseEvent(13, "done", {
+        stream_id: "stream-e2e",
+        request_id: "req-e2e",
+        reply: "Hello stream",
+        mode: "llm",
+        state: finalState
+      })
+    ],
+    2
+  );
+
+  await page.goto("/");
+  await page.getByPlaceholder("Message the agent").fill("stream a greeting");
+  await page.getByPlaceholder("Message the agent").press("Enter");
+  await expect(page.getByTestId("stop-chat-stream")).toBeEnabled();
+  await expect(page.getByTestId("chat-panel")).toContainText("Hello");
+  await expect(page.getByTestId("chat-panel")).not.toContainText("Hello stream", { timeout: 150 });
+  await page.evaluate(() => {
+    (window as typeof window & { __releaseChatStream?: () => void }).__releaseChatStream?.();
+  });
+  await expect(page.getByTestId("chat-panel")).toContainText("Hello stream");
+  await expect(page.getByTestId("stop-chat-stream")).toBeDisabled();
+  await expect(page.locator("vite-error-overlay")).toHaveCount(0);
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("chat stop aborts the active stream and leaves a visible status", async ({ page }) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await mockReadyApiWithRobot(page);
+  await installMockChatStream(
+    page,
+    [
+      sseEvent(20, "start", { stream_id: "stream-stop", request_id: "req-stop" }),
+      sseEvent(21, "delta", {
+        stream_id: "stream-stop",
+        request_id: "req-stop",
+        delta: "Partial"
+      }),
+      sseEvent(22, "delta", {
+        stream_id: "stream-stop",
+        request_id: "req-stop",
+        delta: " ignored"
+      })
+    ],
+    900
+  );
+
+  await page.goto("/");
+  await page.getByPlaceholder("Message the agent").fill("stream slowly");
+  await page.getByPlaceholder("Message the agent").press("Enter");
+  await expect(page.getByTestId("chat-panel")).toContainText("Partial");
+  await page.getByTestId("stop-chat-stream").click();
+  await expect(page.getByTestId("chat-stream-error")).toContainText("stopped");
+  await expect(page.getByTestId("stop-chat-stream")).toBeDisabled();
+  await expect(page.locator("vite-error-overlay")).toHaveCount(0);
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("chat stream unavailable falls back to regular chat", async ({ page }) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await mockReadyApiWithRobot(page);
+  await installUnavailableChatStream(page);
+
+  await page.goto("/");
+  await page.getByPlaceholder("Message the agent").fill("fallback please");
+  await page.getByPlaceholder("Message the agent").press("Enter");
+  await expect(page.getByTestId("chat-panel")).toContainText("Fallback reply: fallback please");
+  await expect(page.locator("vite-error-overlay")).toHaveCount(0);
+  expectNoConsoleErrors(consoleErrors);
+});
+
 async function mockReadyApiWithRobot(page: Page) {
   const snapshot = {
     ok: true,
@@ -241,6 +337,7 @@ async function mockReadyApiWithRobot(page: Page) {
   };
 
   await mockApiSnapshot(page, snapshot);
+  return snapshot;
 }
 
 test("config missing state renders a clear nonblank dashboard", async ({ page }) => {
@@ -375,6 +472,40 @@ async function mockApiSnapshot(page: Page, snapshot: Record<string, unknown>) {
       })
     });
   });
+  await page.route("**/api/chat", async (route) => {
+    const body = route.request().postDataJSON() as { message?: string };
+    const nextSnapshot = {
+      ...snapshot,
+      chat: {
+        messages: [
+          { role: "user", content: body.message ?? "", created_at: "2026-07-01T00:00:00Z" },
+          {
+            role: "assistant",
+            content: `Fallback reply: ${body.message ?? ""}`,
+            created_at: "2026-07-01T00:00:01Z"
+          }
+        ]
+      }
+    };
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        mode: "rule_based",
+        reply: `Fallback reply: ${body.message ?? ""}`,
+        executed: 0,
+        state: nextSnapshot
+      })
+    });
+  });
+  await page.route("**/api/chat/abort/**", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ok: true, stream_id: "mock-stream", aborted: true })
+    });
+  });
 }
 
 function sseEvent(id: number, type: string, payload: Record<string, unknown>) {
@@ -384,4 +515,103 @@ function sseEvent(id: number, type: string, payload: Record<string, unknown>) {
     ts: "2026-07-01T00:00:00Z",
     payload
   })}\n\n`;
+}
+
+async function installMockChatStream(page: Page, chunks: string[], delayMs = 250) {
+  await page.addInitScript(
+    ({ chunks, delayMs }) => {
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (!url.includes("/api/chat/stream")) {
+          return originalFetch(input, init);
+        }
+        const encoder = new TextEncoder();
+        const signal = init?.signal;
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            let aborted = false;
+            signal?.addEventListener("abort", () => {
+              aborted = true;
+              controller.error(new DOMException("Aborted", "AbortError"));
+            });
+            const push = (index: number) => {
+              if (aborted) {
+                return;
+              }
+              if (index >= chunks.length) {
+                controller.close();
+                return;
+              }
+              controller.enqueue(encoder.encode(chunks[index]));
+              window.setTimeout(() => push(index + 1), delayMs);
+            };
+            push(0);
+          }
+        });
+        return Promise.resolve(
+          new Response(stream, {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" }
+          })
+        );
+      };
+    },
+    { chunks, delayMs }
+  );
+}
+
+async function installControlledChatStream(page: Page, chunks: string[], releaseAfter: number) {
+  await page.addInitScript(
+    ({ chunks, releaseAfter }) => {
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (!url.includes("/api/chat/stream")) {
+          return originalFetch(input, init);
+        }
+        const encoder = new TextEncoder();
+        let release: (() => void) | null = null;
+        const releasePromise = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        (window as typeof window & { __releaseChatStream?: () => void }).__releaseChatStream =
+          () => release?.();
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            init?.signal?.addEventListener("abort", () => {
+              controller.error(new DOMException("Aborted", "AbortError"));
+            });
+            for (let index = 0; index < chunks.length; index += 1) {
+              if (index === releaseAfter) {
+                await releasePromise;
+              }
+              controller.enqueue(encoder.encode(chunks[index]));
+            }
+            controller.close();
+          }
+        });
+        return Promise.resolve(
+          new Response(stream, {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" }
+          })
+        );
+      };
+    },
+    { chunks, releaseAfter }
+  );
+}
+
+async function installUnavailableChatStream(page: Page) {
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/api/chat/stream")) {
+        return Promise.resolve(new Response("{}", { status: 404 }));
+      }
+      return originalFetch(input, init);
+    };
+  });
 }

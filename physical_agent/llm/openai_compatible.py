@@ -4,7 +4,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from jsonschema import SchemaError, ValidationError, validate as validate_json_schema
 
@@ -158,6 +158,32 @@ class OpenAICompatibleClient:
             raise OpenAICompatibleError("Chat completion content must be a string.")
         return content
 
+    def stream_chat_text(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        temperature: float = 0.0,
+        max_tokens: int = 1024,
+        metadata: dict[str, str] | None = None,
+    ) -> Iterator[str]:
+        """Yield assistant text deltas from the configured compatible API mode."""
+
+        if self.settings.api_mode == "responses":
+            yield from self._stream_responses_text(
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                metadata=metadata,
+            )
+            return
+
+        yield from self._stream_chat_completions_text(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            metadata=metadata,
+        )
+
     def structured_json(
         self,
         messages: list[dict[str, Any]],
@@ -255,6 +281,36 @@ class OpenAICompatibleClient:
             raise self._to_compatible_error(exc) from exc
         return _ensure_dict(_to_plain_data(response))
 
+    def _stream_chat_completions_text(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        temperature: float,
+        max_tokens: int,
+        metadata: dict[str, str] | None,
+    ) -> Iterator[str]:
+        payload: dict[str, Any] = {
+            "model": self.settings.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+        if metadata:
+            payload["metadata"] = metadata
+
+        stream = None
+        try:
+            stream = self._client.chat.completions.create(**payload)
+            for chunk in stream:
+                for content in _chat_delta_contents(chunk):
+                    if content:
+                        yield content
+        except Exception as exc:  # noqa: BLE001 - normalize SDK and iterator errors.
+            raise self._to_compatible_error(exc) from exc
+        finally:
+            _close_stream(stream)
+
     def responses_create_input(
         self,
         input_items: list[dict[str, Any]],
@@ -285,6 +341,47 @@ class OpenAICompatibleClient:
         except Exception as exc:  # noqa: BLE001 - normalize SDK errors for callers.
             raise self._to_compatible_error(exc) from exc
         return _ensure_dict(_to_plain_data(response))
+
+    def _stream_responses_text(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        temperature: float,
+        max_tokens: int,
+        metadata: dict[str, str] | None,
+    ) -> Iterator[str]:
+        instructions, input_items = _messages_to_responses_parts(messages)
+        payload: dict[str, Any] = {
+            "model": self.settings.model,
+            "input": input_items,
+            "temperature": temperature,
+            "max_output_tokens": max_tokens,
+            "stream": True,
+        }
+        if instructions:
+            payload["instructions"] = instructions
+        if metadata:
+            payload["metadata"] = metadata
+
+        stream = None
+        try:
+            stream = self._client.responses.create(**payload)
+            for event in stream:
+                event_type = _event_type(event)
+                if event_type == "response.output_text.delta":
+                    delta = _event_field(event, "delta")
+                    if isinstance(delta, str) and delta:
+                        yield delta
+                elif event_type in {"response.completed", "response.output_text.done"}:
+                    return
+                elif event_type in {"error", "response.failed"}:
+                    raise _stream_event_error(event, self.settings)
+        except OpenAICompatibleError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - normalize SDK and iterator errors.
+            raise self._to_compatible_error(exc) from exc
+        finally:
+            _close_stream(stream)
 
     def test_connection(self, *, prompt: str = "Reply with exactly: pong") -> dict[str, Any]:
         content = self.chat(
@@ -493,6 +590,69 @@ def _ensure_dict(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise OpenAICompatibleError("API response must be a JSON object.")
     return value
+
+
+def _chat_delta_contents(chunk: Any) -> list[str]:
+    choices = _field(_to_plain_data(chunk), "choices", [])
+    if not isinstance(choices, list):
+        return []
+    contents: list[str] = []
+    for choice in choices:
+        delta = _field(choice, "delta", {})
+        content = _field(delta, "content")
+        if isinstance(content, str):
+            contents.append(content)
+        elif isinstance(content, list):
+            contents.extend(_text_part_contents(content))
+    return contents
+
+
+def _text_part_contents(parts: list[Any]) -> list[str]:
+    contents: list[str] = []
+    for part in parts:
+        if isinstance(part, str):
+            contents.append(part)
+            continue
+        text = _field(part, "text")
+        if isinstance(text, str):
+            contents.append(text)
+    return contents
+
+
+def _event_type(event: Any) -> str:
+    value = _event_field(event, "type")
+    return value if isinstance(value, str) else ""
+
+
+def _event_field(event: Any, name: str, default: Any = None) -> Any:
+    return _field(_to_plain_data(event), name, default)
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _stream_event_error(
+    event: Any,
+    settings: OpenAICompatibleSettings,
+) -> OpenAICompatibleError:
+    error = _event_field(event, "error", {})
+    message = _field(error, "message")
+    if not isinstance(message, str) or not message:
+        message = _event_field(event, "message", "Responses stream emitted an error event.")
+    message = _sanitize_error(str(message), settings)
+    return OpenAICompatibleError(
+        f"OpenAI-compatible API stream failed: {_short_error(message)}",
+        kind="stream_error",
+    )
+
+
+def _close_stream(stream: Any) -> None:
+    close = getattr(stream, "close", None)
+    if callable(close):
+        close()
 
 
 def _sdk_error_kind(exc: Exception, *, status_code: int | None) -> str:

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 import re
 import tempfile
-from typing import Any
+import threading
+from typing import Any, Iterator
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -82,6 +86,8 @@ class ChatRequest(BaseModel):
     message: str
     planner: str | None = None
     auto_step: bool = False
+    request_id: str | None = None
+    stream_id: str | None = None
 
 
 class LLMSettingsRequest(BaseModel):
@@ -109,6 +115,13 @@ class ExportAuditRequest(BaseModel):
     out: str | None = None
 
 
+@dataclass
+class ChatStreamState:
+    stream_id: str
+    request_id: str
+    abort_event: threading.Event
+
+
 def create_app(
     config_path: str | Path = DEFAULT_CONFIG_NAME,
     *,
@@ -123,10 +136,12 @@ def create_app(
     Form = fastapi["Form"]
     JSONResponse = fastapi["JSONResponse"]
     PlainTextResponse = fastapi["PlainTextResponse"]
+    Request = fastapi["Request"]
     StreamingResponse = fastapi["StreamingResponse"]
     UploadFile = fastapi["UploadFile"]
 
     # FastAPI resolves postponed annotations from module globals.
+    globals()["Request"] = Request
     globals()["UploadFile"] = UploadFile
 
     events = ApiEventBroker()
@@ -249,6 +264,70 @@ def create_app(
         except ApiRequestError as exc:
             return handle_error(exc)
 
+    @app.post("/api/chat/stream")
+    async def chat_stream(payload: ChatRequest, request: Request) -> Any:
+        try:
+            stream_state = controller.register_chat_stream(payload)
+        except ApiRequestError as exc:
+            return handle_error(exc)
+
+        async def stream() -> Any:
+            yield format_sse_event(
+                events.make_event(
+                    "start",
+                    {
+                        "stream_id": stream_state.stream_id,
+                        "request_id": stream_state.request_id,
+                    },
+                )
+            )
+            iterator = controller.chat_stream(payload, stream_state=stream_state)
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        controller.abort_chat_stream(
+                            stream_state.stream_id,
+                            reason="client disconnected",
+                        )
+                        controller.log_chat_stream_disconnect(stream_state.stream_id)
+                        _close_iterator(iterator)
+                        return
+                    item = await asyncio.to_thread(_next_stream_item, iterator)
+                    if item is None:
+                        return
+                    yield format_sse_event(events.make_event(item["type"], item["payload"]))
+                    await asyncio.sleep(0)
+            except Exception as exc:  # noqa: BLE001 - stream errors must become SSE events.
+                error_payload_data = {
+                    "stream_id": stream_state.stream_id,
+                    "request_id": stream_state.request_id,
+                    "message": _sanitize_api_message(
+                        str(exc),
+                        controller.safe_resolved_llm_settings_values(),
+                    ),
+                }
+                yield format_sse_event(events.make_event("error", error_payload_data))
+            finally:
+                controller.unregister_chat_stream(stream_state.stream_id)
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.post("/api/chat/abort/{stream_id}")
+    def abort_chat(stream_id: str) -> dict[str, Any]:
+        aborted = controller.abort_chat_stream(stream_id, reason="abort endpoint")
+        return {
+            "ok": True,
+            "stream_id": stream_id,
+            "aborted": aborted,
+        }
+
     @app.get("/api/settings/llm")
     def get_llm_settings() -> dict[str, Any]:
         try:
@@ -327,6 +406,8 @@ class ApiController:
         self.base_dir = self.config_path.parent
         self.events = events
         self.planner = SafeProposalPlanner()
+        self._chat_streams: dict[str, ChatStreamState] = {}
+        self._chat_stream_lock = threading.Lock()
 
     def health(self) -> dict[str, Any]:
         if not self.config_path.exists():
@@ -449,6 +530,134 @@ class ApiController:
             "executed": 0,
             "state": state,
         }
+
+    def register_chat_stream(self, payload: ChatRequest) -> ChatStreamState:
+        stream_id = (payload.stream_id or "").strip() or f"chat_{uuid4().hex}"
+        request_id = (payload.request_id or "").strip() or stream_id
+        stream_state = ChatStreamState(
+            stream_id=stream_id,
+            request_id=request_id,
+            abort_event=threading.Event(),
+        )
+        with self._chat_stream_lock:
+            if stream_id in self._chat_streams:
+                raise ApiRequestError(
+                    f"Chat stream already exists: {stream_id}",
+                    status_code=409,
+                )
+            self._chat_streams[stream_id] = stream_state
+        return stream_state
+
+    def unregister_chat_stream(self, stream_id: str) -> None:
+        with self._chat_stream_lock:
+            self._chat_streams.pop(stream_id, None)
+
+    def abort_chat_stream(self, stream_id: str, *, reason: str = "abort requested") -> bool:
+        with self._chat_stream_lock:
+            stream_state = self._chat_streams.get(stream_id)
+        if stream_state is None:
+            return False
+        stream_state.abort_event.set()
+        try:
+            _, store = self._store(require_exists=True)
+            store.append_log(f"API chat stream `{stream_id}` abort requested: {reason}.", actor="api")
+        except Exception:
+            pass
+        return True
+
+    def log_chat_stream_disconnect(self, stream_id: str) -> None:
+        try:
+            _, store = self._store(require_exists=True)
+            store.append_log(f"API chat stream `{stream_id}` stopped after client disconnect.", actor="api")
+        except Exception:
+            pass
+
+    def chat_stream(
+        self,
+        payload: ChatRequest,
+        *,
+        stream_state: ChatStreamState,
+    ) -> Iterator[dict[str, Any]]:
+        message = payload.message.strip()
+        if not message:
+            raise ApiRequestError("Chat message cannot be empty.")
+        self._store(initialize=True)
+        runtime = _new_chat_runtime(
+            self.config_path,
+            planner_name=_api_chat_planner(payload.planner),
+            enable_code_skills=False,
+            enable_hardware_integration=False,
+        )
+        runtime_stream = runtime.respond_stream(
+            message,
+            auto_step=False,
+            cancel_check=stream_state.abort_event.is_set,
+        )
+        try:
+            while True:
+                if stream_state.abort_event.is_set():
+                    close = getattr(runtime_stream, "close", None)
+                    if callable(close):
+                        close()
+                    config, store = self._store(require_exists=True)
+                    state = self._state(config, store)
+                    self._publish_state("chat_stream_aborted", state)
+                    yield {
+                        "type": "aborted",
+                        "payload": {
+                            "stream_id": stream_state.stream_id,
+                            "request_id": stream_state.request_id,
+                            "state": _json_safe(state),
+                        },
+                    }
+                    return
+                try:
+                    item = next(runtime_stream)
+                except StopIteration:
+                    return
+                event_type = str(item.get("type") or "delta")
+                payload_data = {
+                    "stream_id": stream_state.stream_id,
+                    "request_id": stream_state.request_id,
+                }
+                if event_type == "delta":
+                    payload_data["delta"] = str(item.get("delta") or "")
+                elif event_type == "done":
+                    config, store = self._store(require_exists=True)
+                    store.append_log("API chat stream completed without executing watch.", actor="api")
+                    state = self._state(config, store)
+                    self._publish_state("chat_stream", state)
+                    payload_data.update(
+                        {
+                            "reply": item.get("reply", ""),
+                            "mode": item.get("mode", "rule_based"),
+                            "state": _json_safe(state),
+                        }
+                    )
+                elif event_type in {"aborted", "error"}:
+                    config, store = self._store(require_exists=True)
+                    store.append_log(f"API chat stream {event_type} without executing watch.", actor="api")
+                    state = self._state(config, store)
+                    self._publish_state(f"chat_stream_{event_type}", state)
+                    payload_data.update(
+                        {
+                            "reply": item.get("reply", ""),
+                            "mode": item.get("mode", "rule_based"),
+                            "message": item.get("message", ""),
+                            "state": _json_safe(state),
+                        }
+                    )
+                else:
+                    payload_data.update(_json_safe(item))
+                yield {"type": event_type, "payload": payload_data}
+        except Exception:
+            raise
+
+    def safe_resolved_llm_settings_values(self) -> dict[str, str]:
+        try:
+            return self._resolved_llm_settings_values()
+        except Exception:
+            return {}
 
     def get_llm_settings(self) -> dict[str, Any]:
         values = self._resolved_llm_settings_values()
@@ -992,7 +1201,7 @@ class SafeProposalPlanner:
 
 def _load_fastapi() -> dict[str, Any]:
     try:
-        from fastapi import FastAPI, File, Form, UploadFile
+        from fastapi import FastAPI, File, Form, Request, UploadFile
         from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
         from fastapi.staticfiles import StaticFiles
     except ImportError as exc:
@@ -1004,6 +1213,7 @@ def _load_fastapi() -> dict[str, Any]:
         "HTMLResponse": HTMLResponse,
         "JSONResponse": JSONResponse,
         "PlainTextResponse": PlainTextResponse,
+        "Request": Request,
         "StreamingResponse": StreamingResponse,
         "StaticFiles": StaticFiles,
         "UploadFile": UploadFile,
@@ -1061,6 +1271,19 @@ def _state_event_payload(controller: ApiController, reason: str) -> dict[str, An
                 "message": f"State snapshot failed: {type(exc).__name__}: {exc}",
             },
         }
+
+
+def _next_stream_item(iterator: Iterator[dict[str, Any]]) -> dict[str, Any] | None:
+    try:
+        return next(iterator)
+    except StopIteration:
+        return None
+
+
+def _close_iterator(iterator: Any) -> None:
+    close = getattr(iterator, "close", None)
+    if callable(close):
+        close()
 
 
 def _validate_action(payload: dict[str, Any]) -> Action:

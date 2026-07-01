@@ -145,7 +145,7 @@ class ChatMessage(StrictModel):
 
 
 class ChatPlan(StrictModel):
-    status: Literal["idle", "thinking", "proposed_actions", "answered", "needs_watch", "error"] = "idle"
+    status: Literal["idle", "thinking", "proposed_actions", "answered", "needs_watch", "error", "cancelled"] = "idle"
     intent: str = ""
     summary: str = ""
     steps: list[str] = Field(default_factory=list)

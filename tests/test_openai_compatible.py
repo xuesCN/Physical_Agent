@@ -98,6 +98,10 @@ def _chat_text(text: str) -> dict:
     return {"choices": [{"message": {"role": "assistant", "content": text}}]}
 
 
+def _chat_delta(text: str) -> dict:
+    return {"choices": [{"delta": {"content": text}}]}
+
+
 def _responses_text(text: str) -> dict:
     return {
         "output": [
@@ -107,6 +111,10 @@ def _responses_text(text: str) -> dict:
             }
         ]
     }
+
+
+def _responses_delta(text: str) -> dict:
+    return {"type": "response.output_text.delta", "delta": text}
 
 
 def test_load_dotenv_sets_gpt_env_names(tmp_path, monkeypatch):
@@ -289,6 +297,97 @@ def test_chat_completion_create_calls_openai_sdk(fake_openai):
     assert payload["model"] == "test-model"
     assert payload["messages"][0]["role"] == "user"
     assert payload["metadata"]["physical_agent_surface"] == "test"
+
+
+def test_stream_chat_text_aggregates_chat_completion_deltas(fake_openai):
+    fake_openai.chat_outputs = [
+        [
+            {"choices": [{"delta": {"role": "assistant"}}]},
+            _chat_delta("hel"),
+            _chat_delta("lo"),
+            {"choices": [{"delta": {}}]},
+        ]
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    chunks = list(
+        OpenAICompatibleClient(settings).stream_chat_text(
+            [{"role": "user", "content": "ping"}],
+            metadata={"physical_agent_surface": "test_stream"},
+        )
+    )
+
+    assert chunks == ["hel", "lo"]
+    call = fake_openai.instances[0].calls[0]
+    assert call["method"] == "chat.completions.create"
+    assert call["payload"]["stream"] is True
+    assert call["payload"]["metadata"]["physical_agent_surface"] == "test_stream"
+
+
+def test_stream_chat_text_aggregates_responses_deltas(fake_openai):
+    fake_openai.responses_outputs = [
+        [
+            {"type": "response.created"},
+            _responses_delta("hel"),
+            _responses_delta("lo"),
+            {"type": "response.completed"},
+        ]
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+
+    chunks = list(
+        OpenAICompatibleClient(settings).stream_chat_text(
+            [
+                {"role": "system", "content": "Return text."},
+                {"role": "user", "content": "ping"},
+            ],
+            metadata={"physical_agent_surface": "test_stream"},
+        )
+    )
+
+    assert chunks == ["hel", "lo"]
+    call = fake_openai.instances[0].calls[0]
+    assert call["method"] == "responses.create"
+    assert call["payload"]["stream"] is True
+    assert call["payload"]["instructions"] == "Return text."
+    assert call["payload"]["metadata"]["physical_agent_surface"] == "test_stream"
+
+
+def test_stream_chat_text_error_redacts_api_key(fake_openai):
+    fake_openai.responses_outputs = [
+        [
+            _responses_delta("partial"),
+            {
+                "type": "error",
+                "error": {"message": "Bearer sk-test-key failed"},
+            },
+        ]
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="sk-test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+    stream = OpenAICompatibleClient(settings).stream_chat_text(
+        [{"role": "user", "content": "ping"}]
+    )
+
+    assert next(stream) == "partial"
+    with pytest.raises(OpenAICompatibleError) as info:
+        next(stream)
+
+    assert "sk-test-key" not in str(info.value)
+    assert "<redacted>" in str(info.value)
 
 
 def test_responses_create_input_calls_openai_sdk(fake_openai):

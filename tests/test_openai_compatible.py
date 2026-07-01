@@ -1,66 +1,108 @@
 from __future__ import annotations
 
 import json
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import os
+from types import SimpleNamespace
 
+import pytest
+
+import physical_agent.llm.openai_compatible as openai_compatible
 from physical_agent.agent.llm_planner import LLMPlanner
 from physical_agent.env import load_dotenv
-from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
+from physical_agent.llm import (
+    OpenAICompatibleClient,
+    OpenAICompatibleError,
+    OpenAICompatibleSettings,
+)
 from physical_agent.protocol.schemas import Observation
 
 
-class _ChatHandler(BaseHTTPRequestHandler):
-    requests: list[dict] = []
-    content = "pong"
+class FakeBadRequestError(Exception):
+    status_code = 400
 
-    def do_POST(self) -> None:
-        length = int(self.headers.get("Content-Length", "0"))
-        payload = json.loads(self.rfile.read(length).decode("utf-8"))
-        self.__class__.requests.append(payload)
-        if self.path.endswith("/responses"):
-            response = {
-                "output": [
-                    {
-                        "type": "message",
-                        "content": [
-                            {
-                                "type": "output_text",
-                                "text": self.__class__.content,
-                            }
-                        ],
-                    }
-                ]
+
+class FakeRateLimitError(Exception):
+    status_code = 429
+
+
+class FakeTimeoutError(Exception):
+    pass
+
+
+class FakeConnectionError(Exception):
+    pass
+
+
+class FakeStatusError(Exception):
+    def __init__(self, message: str, *, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class FakeOpenAI:
+    instances: list["FakeOpenAI"] = []
+    chat_outputs: list[object] = []
+    responses_outputs: list[object] = []
+
+    def __init__(self, *, api_key: str, base_url: str, timeout: int):
+        self.api_key = api_key
+        self.base_url = base_url
+        self.timeout = timeout
+        self.calls: list[dict[str, object]] = []
+        self.chat = SimpleNamespace(
+            completions=SimpleNamespace(create=self._chat_completion_create)
+        )
+        self.responses = SimpleNamespace(create=self._responses_create)
+        self.__class__.instances.append(self)
+
+    def _chat_completion_create(self, **payload):
+        self.calls.append({"method": "chat.completions.create", "payload": payload})
+        output = self.__class__.chat_outputs.pop(0)
+        if isinstance(output, BaseException):
+            raise output
+        return output
+
+    def _responses_create(self, **payload):
+        self.calls.append({"method": "responses.create", "payload": payload})
+        output = self.__class__.responses_outputs.pop(0)
+        if isinstance(output, BaseException):
+            raise output
+        return output
+
+
+@pytest.fixture
+def fake_openai(monkeypatch):
+    FakeOpenAI.instances = []
+    FakeOpenAI.chat_outputs = []
+    FakeOpenAI.responses_outputs = []
+    monkeypatch.setattr(
+        openai_compatible,
+        "openai",
+        SimpleNamespace(
+            OpenAI=FakeOpenAI,
+            BadRequestError=FakeBadRequestError,
+            RateLimitError=FakeRateLimitError,
+            APITimeoutError=FakeTimeoutError,
+            APIConnectionError=FakeConnectionError,
+            APIStatusError=FakeStatusError,
+        ),
+    )
+    return FakeOpenAI
+
+
+def _chat_text(text: str) -> dict:
+    return {"choices": [{"message": {"role": "assistant", "content": text}}]}
+
+
+def _responses_text(text: str) -> dict:
+    return {
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": text}],
             }
-        else:
-            response = {
-                "choices": [
-                    {
-                        "message": {
-                            "role": "assistant",
-                            "content": self.__class__.content,
-                        }
-                    }
-                ]
-            }
-        body = json.dumps(response).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, format: str, *args) -> None:
-        return
-
-
-def _server():
-    _ChatHandler.requests = []
-    _ChatHandler.content = "pong"
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _ChatHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    return server
+        ]
+    }
 
 
 def test_load_dotenv_sets_gpt_env_names(tmp_path, monkeypatch):
@@ -73,12 +115,12 @@ def test_load_dotenv_sets_gpt_env_names(tmp_path, monkeypatch):
     assert loaded["GPT_KEY"] == "secret"
 
 
-def test_openai_settings_prefers_project_env_file(tmp_path, monkeypatch):
+def test_openai_settings_reads_gpt_env_names(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "GPT_URL=http://project.test/v1\n"
+        "GPT_URL=https://ark.cn-beijing.volces.com/api/v3\n"
         "GPT_KEY=project-key\n"
-        "GPT_MODEL=project-model\n",
+        "GPT_MODEL=doubao-seed-2.1-pro\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("GPT_URL", "http://global.test/v1")
@@ -90,16 +132,17 @@ def test_openai_settings_prefers_project_env_file(tmp_path, monkeypatch):
 
     settings = OpenAICompatibleSettings.from_env(env_file=env_file)
 
-    assert settings.base_url == "http://project.test/v1"
+    assert settings.base_url == "https://ark.cn-beijing.volces.com/api/v3"
     assert settings.api_key == "project-key"
-    assert settings.model == "project-model"
+    assert settings.model == "doubao-seed-2.1-pro"
     assert settings.api_mode == "chat_completions"
-    assert settings.responses_url == "http://project.test/v1/responses"
+    assert settings.chat_completions_url == (
+        "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+    )
+    assert settings.responses_url == "https://ark.cn-beijing.volces.com/api/v3/responses"
 
 
 def test_openai_settings_can_select_responses_mode(tmp_path, monkeypatch):
-    import os
-
     env_file = tmp_path / ".env"
     env_file.write_text(
         "GPT_URL=http://project.test/v1\n"
@@ -118,39 +161,146 @@ def test_openai_settings_can_select_responses_mode(tmp_path, monkeypatch):
         os.environ.pop(key, None)
 
 
-def test_openai_compatible_client_posts_chat_completion():
-    server = _server()
-    try:
-        settings = OpenAICompatibleSettings(
+def test_openai_settings_rejects_full_endpoint_base_url():
+    with pytest.raises(OpenAICompatibleError, match="API root"):
+        OpenAICompatibleSettings(
             api_key="test-key",
-            base_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
+            base_url="https://provider.test/v1/chat/completions",
             model="test-model",
         )
-        result = OpenAICompatibleClient(settings).test_connection()
-        assert result["ok"] is True
-        assert result["content"] == "pong"
-        assert _ChatHandler.requests[0]["model"] == "test-model"
-        assert _ChatHandler.requests[0]["messages"][0]["role"] == "system"
-    finally:
-        server.shutdown()
-        server.server_close()
 
 
-def test_openai_compatible_client_posts_responses_structured_json():
-    server = _server()
-    _ChatHandler.content = json.dumps({"answer": "pong"})
-    try:
-        settings = OpenAICompatibleSettings(
-            api_key="test-key",
-            base_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
-            model="test-model",
-            api_mode="responses",
-        )
-        result = OpenAICompatibleClient(settings).structured_json(
-            [
-                {"role": "system", "content": "Return JSON."},
-                {"role": "user", "content": "ping"},
-            ],
+def test_sdk_client_receives_ark_api_root_without_extra_v1(fake_openai):
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="https://ark.cn-beijing.volces.com/api/v3",
+        model="doubao-seed-2.1-pro",
+    )
+
+    OpenAICompatibleClient(settings)
+
+    assert fake_openai.instances[0].base_url == "https://ark.cn-beijing.volces.com/api/v3"
+    assert not fake_openai.instances[0].base_url.endswith("/v1")
+
+
+def test_chat_completion_create_calls_openai_sdk(fake_openai):
+    fake_openai.chat_outputs = [_chat_text("pong")]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    result = OpenAICompatibleClient(settings).chat_completion_create(
+        [{"role": "user", "content": "ping"}],
+        metadata={"physical_agent_surface": "test"},
+    )
+
+    assert result["choices"][0]["message"]["content"] == "pong"
+    call = fake_openai.instances[0].calls[0]
+    assert call["method"] == "chat.completions.create"
+    payload = call["payload"]
+    assert payload["model"] == "test-model"
+    assert payload["messages"][0]["role"] == "user"
+    assert payload["metadata"]["physical_agent_surface"] == "test"
+
+
+def test_responses_create_input_calls_openai_sdk(fake_openai):
+    fake_openai.responses_outputs = [_responses_text("pong")]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+
+    result = OpenAICompatibleClient(settings).responses_create_input(
+        [{"role": "user", "content": "ping"}],
+        instructions="Return text.",
+        text_format={"type": "json_object"},
+        metadata={"physical_agent_surface": "test"},
+    )
+
+    assert result["output"][0]["content"][0]["text"] == "pong"
+    call = fake_openai.instances[0].calls[0]
+    assert call["method"] == "responses.create"
+    payload = call["payload"]
+    assert payload["input"][0]["role"] == "user"
+    assert payload["instructions"] == "Return text."
+    assert payload["text"]["format"]["type"] == "json_object"
+    assert payload["metadata"]["physical_agent_surface"] == "test"
+
+
+def test_structured_json_strict_json_schema_success(fake_openai):
+    fake_openai.chat_outputs = [_chat_text(json.dumps({"answer": "pong"}))]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    result = OpenAICompatibleClient(settings).structured_json(
+        [{"role": "user", "content": "ping"}],
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["answer"],
+            "properties": {"answer": {"type": "string"}},
+        },
+        schema_name="ping_response",
+    )
+
+    assert result == {"answer": "pong"}
+    payload = fake_openai.instances[0].calls[0]["payload"]
+    assert payload["response_format"]["type"] == "json_schema"
+    assert payload["response_format"]["json_schema"]["name"] == "ping_response"
+    assert payload["response_format"]["json_schema"]["strict"] is True
+
+
+def test_structured_json_strict_400_falls_back_to_json_object(fake_openai):
+    fake_openai.chat_outputs = [
+        FakeBadRequestError("schema unsupported for test-key"),
+        _chat_text(json.dumps({"answer": "pong"})),
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    result = OpenAICompatibleClient(settings).structured_json(
+        [{"role": "user", "content": "ping"}],
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["answer"],
+            "properties": {"answer": {"type": "string"}},
+        },
+        schema_name="ping_response",
+    )
+
+    assert result == {"answer": "pong"}
+    calls = fake_openai.instances[0].calls
+    assert calls[0]["payload"]["response_format"]["type"] == "json_schema"
+    assert calls[1]["payload"]["response_format"] == {"type": "json_object"}
+    assert "JSON" in calls[1]["payload"]["messages"][0]["content"]
+    assert "test-key" not in str(calls)
+
+
+def test_structured_json_fallback_still_validates_schema(fake_openai):
+    fake_openai.chat_outputs = [
+        FakeBadRequestError("schema unsupported"),
+        _chat_text(json.dumps({"answer": 123})),
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(OpenAICompatibleError, match="did not match schema"):
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
             schema={
                 "type": "object",
                 "additionalProperties": False,
@@ -158,110 +308,181 @@ def test_openai_compatible_client_posts_responses_structured_json():
                 "properties": {"answer": {"type": "string"}},
             },
             schema_name="ping_response",
-            metadata={"physical_agent_surface": "test"},
         )
 
-        assert result == {"answer": "pong"}
-        request = _ChatHandler.requests[0]
-        assert request["model"] == "test-model"
-        assert request["instructions"] == "Return JSON."
-        assert request["input"][0]["role"] == "user"
-        assert request["text"]["format"]["type"] == "json_schema"
-        assert request["text"]["format"]["name"] == "ping_response"
-        assert request["metadata"]["physical_agent_surface"] == "test"
-    finally:
-        server.shutdown()
-        server.server_close()
 
-
-def test_llm_planner_parses_actions_from_chat_completion():
-    server = _server()
-    _ChatHandler.content = json.dumps(
-        {
-            "actions": [
-                {
-                    "robot": "arm_1",
-                    "capability": "pick",
-                    "params": {"object_id": "red_block"},
-                    "reason": "Pick the requested object.",
-                    "depends_on": [],
-                },
-                {
-                    "robot": "arm_1",
-                    "capability": "place",
-                    "params": {"target": "tray"},
-                    "reason": "Place it on the tray.",
-                    "depends_on": ["arm_1:pick:red_block"],
-                },
-            ]
-        }
+def test_responses_structured_json_uses_responses_text_format(fake_openai):
+    fake_openai.responses_outputs = [_responses_text(json.dumps({"answer": "pong"}))]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
     )
-    try:
-        settings = OpenAICompatibleSettings(
-            api_key="test-key",
-            base_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
-            model="test-model",
-        )
-        planner = LLMPlanner(settings=settings)
-        actions = planner.plan(
-            task="pick the red block and place it on the tray",
-            capabilities={
-                "robots": {
-                    "arm_1": {
-                        "capabilities": [
-                            {"name": "pick"},
-                            {"name": "place"},
-                        ]
-                    }
-                }
-            },
-            world={
-                "state": {"objects": {"red_block": {}, "tray": {}}},
-                "observation": Observation(summary="Arm sees a red block and a tray."),
-            },
-        )
-        assert [action.capability for action in actions] == ["pick", "place"]
-        assert actions[0].id == "act_001"
-        assert actions[1].depends_on == ["act_001"]
-        assert _ChatHandler.requests[0]["response_format"]["type"] == "json_schema"
-    finally:
-        server.shutdown()
-        server.server_close()
 
-
-def test_llm_planner_parses_actions_from_responses_api():
-    server = _server()
-    _ChatHandler.content = json.dumps(
-        {
-            "actions": [
-                {
-                    "robot": "arm_1",
-                    "capability": "observe",
-                    "params": {},
-                    "reason": "Inspect world state.",
-                    "depends_on": [],
-                }
-            ]
-        }
+    result = OpenAICompatibleClient(settings).structured_json(
+        [
+            {"role": "system", "content": "Return JSON."},
+            {"role": "user", "content": "ping"},
+        ],
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["answer"],
+            "properties": {"answer": {"type": "string"}},
+        },
+        schema_name="ping_response",
+        metadata={"physical_agent_surface": "test"},
     )
-    try:
-        settings = OpenAICompatibleSettings(
-            api_key="test-key",
-            base_url=f"http://127.0.0.1:{server.server_address[1]}/v1",
-            model="test-model",
-            api_mode="responses",
-        )
-        planner = LLMPlanner(settings=settings)
-        actions = planner.plan(
-            task="look around",
-            capabilities={"robots": {"arm_1": {"capabilities": [{"name": "observe"}]}}},
-            world={"state": {}, "observation": Observation(summary="")},
+
+    assert result == {"answer": "pong"}
+    payload = fake_openai.instances[0].calls[0]["payload"]
+    assert payload["instructions"] == "Return JSON."
+    assert payload["text"]["format"]["type"] == "json_schema"
+    assert payload["text"]["format"]["name"] == "ping_response"
+    assert payload["metadata"]["physical_agent_surface"] == "test"
+
+
+def test_structured_json_responses_strict_400_falls_back_to_json_object(fake_openai):
+    fake_openai.responses_outputs = [
+        FakeBadRequestError("strict schema unsupported"),
+        _responses_text(json.dumps({"answer": "pong"})),
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+
+    result = OpenAICompatibleClient(settings).structured_json(
+        [{"role": "user", "content": "ping"}],
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["answer"],
+            "properties": {"answer": {"type": "string"}},
+        },
+        schema_name="ping_response",
+    )
+
+    assert result == {"answer": "pong"}
+    calls = fake_openai.instances[0].calls
+    assert calls[0]["payload"]["text"]["format"]["type"] == "json_schema"
+    assert calls[1]["payload"]["text"]["format"] == {"type": "json_object"}
+    assert "JSON" in calls[1]["payload"]["instructions"]
+
+
+def test_error_mapping_redacts_api_key(fake_openai):
+    fake_openai.chat_outputs = [FakeRateLimitError("Bearer sk-test-key was limited")]
+    settings = OpenAICompatibleSettings(
+        api_key="sk-test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(OpenAICompatibleError) as info:
+        OpenAICompatibleClient(settings).chat_completion_create(
+            [{"role": "user", "content": "ping"}]
         )
 
-        assert [action.capability for action in actions] == ["observe"]
-        assert "JSON action intents" in _ChatHandler.requests[0]["instructions"]
-        assert _ChatHandler.requests[0]["text"]["format"]["type"] == "json_schema"
-        assert _ChatHandler.requests[0]["metadata"]["physical_agent_surface"] == "planner"
-    finally:
-        server.shutdown()
-        server.server_close()
+    assert info.value.status_code == 429
+    assert info.value.kind == "rate_limit"
+    assert "sk-test-key" not in str(info.value)
+    assert "<redacted>" in str(info.value)
+
+
+def test_llm_planner_parses_actions_from_chat_completion(fake_openai):
+    fake_openai.chat_outputs = [
+        _chat_text(
+            json.dumps(
+                {
+                    "actions": [
+                        {
+                            "robot": "arm_1",
+                            "capability": "pick",
+                            "params": {"object_id": "red_block"},
+                            "reason": "Pick the requested object.",
+                            "depends_on": [],
+                        },
+                        {
+                            "robot": "arm_1",
+                            "capability": "place",
+                            "params": {"target": "tray"},
+                            "reason": "Place it on the tray.",
+                            "depends_on": ["arm_1:pick:red_block"],
+                        },
+                    ]
+                }
+            )
+        )
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    planner = LLMPlanner(settings=settings)
+    actions = planner.plan(
+        task="pick the red block and place it on the tray",
+        capabilities={
+            "robots": {
+                "arm_1": {
+                    "capabilities": [
+                        {"name": "pick"},
+                        {"name": "place"},
+                    ]
+                }
+            }
+        },
+        world={
+            "state": {"objects": {"red_block": {}, "tray": {}}},
+            "observation": Observation(summary="Arm sees a red block and a tray."),
+        },
+    )
+
+    assert [action.capability for action in actions] == ["pick", "place"]
+    assert actions[0].id == "act_001"
+    assert actions[1].depends_on == ["act_001"]
+    payload = fake_openai.instances[0].calls[0]["payload"]
+    assert payload["response_format"]["type"] == "json_schema"
+
+
+def test_llm_planner_parses_actions_from_responses_api(fake_openai):
+    fake_openai.responses_outputs = [
+        _responses_text(
+            json.dumps(
+                {
+                    "actions": [
+                        {
+                            "robot": "arm_1",
+                            "capability": "observe",
+                            "params": {},
+                            "reason": "Inspect world state.",
+                            "depends_on": [],
+                        }
+                    ]
+                }
+            )
+        )
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+
+    planner = LLMPlanner(settings=settings)
+    actions = planner.plan(
+        task="look around",
+        capabilities={"robots": {"arm_1": {"capabilities": [{"name": "observe"}]}}},
+        world={"state": {}, "observation": Observation(summary="")},
+    )
+
+    assert [action.capability for action in actions] == ["observe"]
+    payload = fake_openai.instances[0].calls[0]["payload"]
+    assert "JSON action intents" in payload["instructions"]
+    assert payload["text"]["format"]["type"] == "json_schema"
+    assert payload["metadata"]["physical_agent_surface"] == "planner"

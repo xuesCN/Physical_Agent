@@ -62,6 +62,11 @@ test("desktop dashboard smoke still loads and core panels respond", async ({ pag
     await expect(page.locator("vite-error-overlay")).toHaveCount(0);
   }
 
+  await page.getByTestId("nav-settings").click();
+  await expect(page.getByTestId("state-backend-summary")).toContainText("Recommended backend");
+  await expect(page.getByTestId("state-backend-summary")).toContainText("state.db is source of truth");
+  await expect(page.getByTestId("state-backend-summary")).toContainText("SAFETY.md remains file source");
+
   await page.getByTestId("nav-overview").click();
   await page.getByPlaceholder("Message the agent").fill("remember that c3.2 e2e smoke is safe");
   await page.getByPlaceholder("Message the agent").press("Enter");
@@ -201,6 +206,9 @@ test("settings panel saves and tests LLM settings with mocked API", async ({ pag
 
   await page.goto("/");
   await page.getByTestId("nav-settings").click();
+  await expect(page.getByTestId("state-backend-summary")).toContainText("Recommended backend");
+  await expect(page.getByTestId("state-backend-summary")).toContainText("state.db is source of truth");
+  await expect(page.getByTestId("state-backend-summary")).toContainText("SAFETY.md remains file source");
   await expect(page.getByTestId("settings-panel")).toContainText("key ****7890");
 
   await page.getByLabel("Base URL").fill("http://local-llm.test/v1");
@@ -215,6 +223,26 @@ test("settings panel saves and tests LLM settings with mocked API", async ({ pag
   await expect(page.getByTestId("llm-settings-feedback")).toContainText(
     "LLM connection test passed"
   );
+
+  await page.getByTestId("export-audit-button").click();
+  await expect(page.getByTestId("export-audit-feedback")).toContainText("Exported audit view");
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("settings panel explains markdown legacy backend without live switching", async ({ page }) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await mockReadyApiWithRobot(page, {
+    backend: "markdown",
+    workspace_path: "C:/tmp/physical-agent-markdown-workspace"
+  });
+
+  await page.goto("/");
+  await page.getByTestId("nav-settings").click();
+
+  await expect(page.getByTestId("state-backend-summary")).toContainText("Legacy backend");
+  await expect(page.getByTestId("state-backend-summary")).toContainText("migrate-md-to-sqlite");
+  await expect(page.getByTestId("state-backend-summary")).toContainText("no GUI live backend switch");
+  await expect(page.getByTestId("state-backend-summary")).not.toContainText("JSON backend");
   expectNoConsoleErrors(consoleErrors);
 });
 
@@ -307,7 +335,7 @@ test("chat stream unavailable falls back to regular chat", async ({ page }) => {
   expectNoConsoleErrors(consoleErrors);
 });
 
-async function mockReadyApiWithRobot(page: Page) {
+async function mockReadyApiWithRobot(page: Page, overrides: Record<string, unknown> = {}) {
   const snapshot = {
     ok: true,
     ready: true,
@@ -333,7 +361,8 @@ async function mockReadyApiWithRobot(page: Page) {
     plan: {},
     memory: { notes: [] },
     uploads: { uploads: [] },
-    chunks: { chunks: [] }
+    chunks: { chunks: [] },
+    ...overrides
   };
 
   await mockApiSnapshot(page, snapshot);
@@ -414,6 +443,35 @@ async function mockApiSnapshot(page: Page, snapshot: Record<string, unknown>) {
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(snapshot)
+    });
+  });
+  await page.route("**/api/state-check", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(stateCheckForSnapshot(snapshot))
+    });
+  });
+  await page.route("**/api/export-audit", async (route) => {
+    const backend = String(snapshot.backend ?? "sqlite");
+    const workspacePath = String(snapshot.workspace_path ?? "C:/tmp/physical-agent-workspace");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        message: "Exported audit view.",
+        backend,
+        workspace_path: workspacePath,
+        out_dir: `${workspacePath}/audit`,
+        manifest: `${workspacePath}/audit/manifest.json`,
+        result: {
+          backend,
+          workspace_path: workspacePath,
+          out_dir: `${workspacePath}/audit`,
+          manifest: `${workspacePath}/audit/manifest.json`
+        }
+      })
     });
   });
   await page.route("**/api/events", async (route) => {
@@ -506,6 +564,44 @@ async function mockApiSnapshot(page: Page, snapshot: Record<string, unknown>) {
       body: JSON.stringify({ ok: true, stream_id: "mock-stream", aborted: true })
     });
   });
+}
+
+function stateCheckForSnapshot(snapshot: Record<string, unknown>) {
+  const backend = String(snapshot.backend ?? "sqlite");
+  const workspacePath = String(snapshot.workspace_path ?? "C:/tmp/physical-agent-workspace");
+  const isSqlite = backend === "sqlite";
+  return {
+    ok: true,
+    ready: Boolean(snapshot.ready ?? true),
+    message: "State backend is ready.",
+    backend,
+    backend_role: isSqlite ? "recommended" : "legacy",
+    backend_label: isSqlite ? "SQLite recommended backend" : "Markdown legacy backend",
+    source_of_truth: isSqlite ? `${workspacePath}/state.db` : workspacePath,
+    payload_format: isSqlite ? "JSON payloads inside SQLite tables" : "Markdown protocol files",
+    human_view: isSqlite
+      ? "export-audit creates a read-only audit view"
+      : "Markdown files are directly human-editable",
+    safety_source: `${workspacePath}/SAFETY.md`,
+    runtime_switch_supported: false,
+    switching_model: isSqlite
+      ? "Change workspace.backend in config and restart the process; there is no GUI live backend switch."
+      : "Migrate with migrate-md-to-sqlite, update workspace.backend, then restart the process; there is no GUI live backend switch.",
+    recommendation: isSqlite
+      ? "Use workspace/state.db as the state source of truth; SAFETY.md remains the file source for safety rules."
+      : "Legacy compatibility backend; migrate to SQLite for the recommended state source of truth.",
+    workspace_path: workspacePath,
+    workspace_initialized: Boolean(snapshot.ready ?? true),
+    audit_dir: `${workspacePath}/audit`,
+    audit_export_writable: true,
+    sqlite_schema_complete: isSqlite ? true : null,
+    sqlite_chunk_schema_complete: isSqlite ? true : null,
+    sqlite_missing_tables: [],
+    sqlite_missing_action_columns: [],
+    sqlite_missing_memory_columns: [],
+    sqlite_missing_upload_columns: [],
+    sqlite_missing_chunk_columns: []
+  };
 }
 
 function sseEvent(id: number, type: string, payload: Record<string, unknown>) {

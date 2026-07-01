@@ -32,6 +32,7 @@ def run_state_check(
     audit_parent = audit_dir if audit_dir.exists() else audit_dir.parent
     result: dict[str, Any] = {
         "backend": backend,
+        **_backend_guidance(backend, workspace),
         "workspace_path": str(workspace.path),
         "workspace_initialized": initialized,
         "retrieval_enabled": bool(config.memory.retrieval.enabled),
@@ -133,6 +134,57 @@ def _sqlite_schema_status(db_path: Path) -> dict[str, Any]:
         "sqlite_missing_upload_columns": missing_upload_columns,
         "sqlite_missing_chunk_columns": missing_chunk_columns,
         "sqlite_chunk_schema_complete": chunk_table_present and not missing_chunk_columns,
+    }
+
+
+def _backend_guidance(backend: str, workspace: Any) -> dict[str, Any]:
+    safety_source = str(workspace.file("safety"))
+    if backend == "sqlite":
+        return {
+            "backend_role": "recommended",
+            "backend_label": "SQLite recommended backend",
+            "source_of_truth": str(workspace.path / "state.db"),
+            "payload_format": "JSON payloads inside SQLite tables",
+            "human_view": "export-audit creates a read-only audit view",
+            "safety_source": safety_source,
+            "runtime_switch_supported": False,
+            "switching_model": (
+                "Change workspace.backend in config and restart the process; "
+                "there is no GUI live backend switch."
+            ),
+            "recommendation": (
+                "Use workspace/state.db as the state source of truth; "
+                "SAFETY.md remains the file source for safety rules."
+            ),
+        }
+    if backend == "markdown":
+        return {
+            "backend_role": "legacy",
+            "backend_label": "Markdown legacy backend",
+            "source_of_truth": str(workspace.path),
+            "payload_format": "Markdown protocol files",
+            "human_view": "Markdown files are directly human-editable",
+            "safety_source": safety_source,
+            "runtime_switch_supported": False,
+            "switching_model": (
+                "Migrate with migrate-md-to-sqlite, update workspace.backend, "
+                "then restart the process; there is no GUI live backend switch."
+            ),
+            "recommendation": (
+                "Legacy compatibility backend; migrate to SQLite for the "
+                "recommended state source of truth."
+            ),
+        }
+    return {
+        "backend_role": "unsupported",
+        "backend_label": f"Unsupported backend: {backend}",
+        "source_of_truth": "",
+        "payload_format": "",
+        "human_view": "",
+        "safety_source": safety_source,
+        "runtime_switch_supported": False,
+        "switching_model": "",
+        "recommendation": "Use workspace.backend: sqlite or workspace.backend: markdown.",
     }
 
 

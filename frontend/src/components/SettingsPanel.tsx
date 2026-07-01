@@ -1,8 +1,8 @@
-import { ApiOutlined, SaveOutlined, SettingOutlined } from "@ant-design/icons";
+import { ApiOutlined, DownloadOutlined, SaveOutlined, SettingOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, Descriptions, Form, Input, Select, Space, Tag, Typography } from "antd";
 import { useEffect, useState } from "react";
-import { fetchLLMSettings, saveLLMSettings, testLLMSettings } from "../api";
-import type { AgentState, HealthState, LLMSettingsSummary } from "../types";
+import { exportAudit, fetchLLMSettings, fetchStateCheck, saveLLMSettings, testLLMSettings } from "../api";
+import type { AgentState, ExportAuditResponse, HealthState, LLMSettingsSummary, StateCheckResult } from "../types";
 import { compactJson, oneLine } from "./utils";
 
 interface SettingsPanelProps {
@@ -21,11 +21,38 @@ export function SettingsPanel({ health, state }: SettingsPanelProps) {
   const ready = Boolean(state?.ready ?? health?.ready);
   const [form] = Form.useForm<LLMSettingsFormValues>();
   const [llmSettings, setLlmSettings] = useState<LLMSettingsSummary | null>(null);
+  const [stateCheck, setStateCheck] = useState<StateCheckResult | null>(null);
+  const [stateCheckError, setStateCheckError] = useState<string | null>(null);
+  const [auditFeedback, setAuditFeedback] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(
     null
   );
   const [loading, setLoading] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [exportingAudit, setExportingAudit] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchStateCheck()
+      .then((response) => {
+        if (cancelled) {
+          return;
+        }
+        setStateCheck(response);
+        setStateCheckError(null);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setStateCheckError(error instanceof Error ? error.message : String(error));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [state?.backend, state?.workspace_path, health?.backend, health?.workspace_path]);
 
   useEffect(() => {
     let cancelled = false;
@@ -46,11 +73,28 @@ export function SettingsPanel({ health, state }: SettingsPanelProps) {
         if (!cancelled) {
           setFeedback({ type: "error", text: error instanceof Error ? error.message : String(error) });
         }
-      });
+    });
     return () => {
       cancelled = true;
     };
   }, [form]);
+
+  async function handleExportAudit() {
+    setExportingAudit(true);
+    setAuditFeedback(null);
+    try {
+      const response: ExportAuditResponse = await exportAudit();
+      const outDir = response.out_dir ?? response.result?.out_dir ?? "workspace/audit";
+      setAuditFeedback({
+        type: "success",
+        text: `${response.message ?? "Exported audit view."} ${outDir}`
+      });
+    } catch (error) {
+      setAuditFeedback({ type: "error", text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setExportingAudit(false);
+    }
+  }
 
   async function handleSave(values: LLMSettingsFormValues) {
     setLoading(true);
@@ -91,6 +135,37 @@ export function SettingsPanel({ health, state }: SettingsPanelProps) {
     }
   }
 
+  const activeBackend = stateCheck?.backend ?? state?.backend ?? health?.backend ?? "-";
+  const backendRole = stateCheck?.backend_role ?? (activeBackend === "sqlite" ? "recommended" : activeBackend === "markdown" ? "legacy" : undefined);
+  const backendTagColor = backendRole === "recommended" ? "green" : backendRole === "legacy" ? "gold" : "default";
+  const backendNotice =
+    backendRole === "legacy"
+      ? {
+          type: "warning" as const,
+          message: "Legacy backend",
+          description:
+            "Markdown is retained for compatibility. Migrate with CLI migrate-md-to-sqlite, set workspace.backend to sqlite, and restart; there is no GUI live backend switch."
+        }
+      : backendRole === "recommended"
+        ? {
+            type: "success" as const,
+            message: "Recommended backend",
+            description:
+              "state.db is source of truth; SQLite payloads are JSON; SAFETY.md remains file source."
+          }
+        : {
+            type: "info" as const,
+            message: "State backend",
+            description: "State-check is loading or unavailable."
+          };
+  const stateCheckStatus = stateCheck
+    ? stateCheck.ok
+      ? "ready"
+      : "needs attention"
+    : stateCheckError
+      ? "unavailable"
+      : "loading";
+
   return (
     <Card
       className="panel settings-panel"
@@ -104,7 +179,7 @@ export function SettingsPanel({ health, state }: SettingsPanelProps) {
     >
       <Descriptions size="small" column={1} className="tight-descriptions">
         <Descriptions.Item label="Backend">
-          <Tag>{state?.backend ?? health?.backend ?? "-"}</Tag>
+          <Tag color={backendTagColor}>{activeBackend}</Tag>
         </Descriptions.Item>
         <Descriptions.Item label="Workspace">
           <Tag color={ready ? "green" : "gold"}>{ready ? "ready" : "not ready"}</Tag>
@@ -122,6 +197,86 @@ export function SettingsPanel({ health, state }: SettingsPanelProps) {
           {oneLine(state?.task?.body ?? state?.task?.task ?? state?.task, "-")}
         </Descriptions.Item>
       </Descriptions>
+      <div className="panel-divider" />
+      <Space
+        direction="vertical"
+        size={8}
+        className="full-width state-backend-summary"
+        data-testid="state-backend-summary"
+      >
+        <Space wrap>
+          <Typography.Text strong>State backend</Typography.Text>
+          <Tag color={backendTagColor}>
+            {stateCheck?.backend_label ?? activeBackend}
+          </Tag>
+          <Tag color={stateCheck?.audit_export_writable ? "green" : "gold"}>
+            audit {stateCheck?.audit_export_writable ? "writable" : "check"}
+          </Tag>
+        </Space>
+        <Alert
+          type={backendNotice.type}
+          showIcon
+          message={backendNotice.message}
+          description={backendNotice.description}
+        />
+        <Descriptions size="small" column={1} className="tight-descriptions">
+          <Descriptions.Item label="State-check">
+            <Tag color={stateCheck?.ok ? "green" : "gold"}>{stateCheckStatus}</Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="Workspace path">
+            {stateCheck?.workspace_path ?? state?.workspace_path ?? health?.workspace_path ?? "-"}
+          </Descriptions.Item>
+          <Descriptions.Item label="Source of truth">
+            {stateCheck?.source_of_truth ?? "-"}
+          </Descriptions.Item>
+          <Descriptions.Item label="Payload">
+            {stateCheck?.payload_format ?? "-"}
+          </Descriptions.Item>
+          <Descriptions.Item label="Human view">
+            {stateCheck?.human_view ?? "export-audit"}
+          </Descriptions.Item>
+          <Descriptions.Item label="Safety source">
+            {stateCheck?.safety_source ?? "SAFETY.md"}
+          </Descriptions.Item>
+          <Descriptions.Item label="SQLite schema">
+            {stateCheck?.sqlite_schema_complete == null ? "n/a" : stateCheck.sqlite_schema_complete ? "complete" : "incomplete"}
+          </Descriptions.Item>
+          <Descriptions.Item label="Switching">
+            {stateCheck?.switching_model ?? "Change config and restart; no GUI live backend switch."}
+          </Descriptions.Item>
+        </Descriptions>
+        <Space wrap>
+          <Button
+            icon={<DownloadOutlined />}
+            loading={exportingAudit}
+            disabled={!ready || stateCheck?.workspace_initialized === false}
+            onClick={handleExportAudit}
+            data-testid="export-audit-button"
+          >
+            Export audit view
+          </Button>
+          <Typography.Text type="secondary">
+            Creates a read-only audit view; it does not change backend.
+          </Typography.Text>
+        </Space>
+        {stateCheckError && (
+          <Alert
+            data-testid="state-check-feedback"
+            type="warning"
+            showIcon
+            message="State-check unavailable"
+            description={stateCheckError}
+          />
+        )}
+        {auditFeedback && (
+          <Alert
+            data-testid="export-audit-feedback"
+            type={auditFeedback.type}
+            showIcon
+            message={auditFeedback.text}
+          />
+        )}
+      </Space>
       <div className="panel-divider" />
       <Space direction="vertical" size={8} className="full-width">
         <Space wrap>

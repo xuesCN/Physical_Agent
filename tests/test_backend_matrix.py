@@ -71,6 +71,8 @@ def test_default_init_setup_and_state_check_use_sqlite_with_safety_file(tmp_path
 
         assert check.exit_code == 0, check.output
         assert "Backend: sqlite" in check.output
+        assert "Backend role: recommended" in check.output
+        assert "Source of truth:" in check.output
         assert "Workspace initialized: yes" in check.output
         assert "SQLite schema complete: yes" in check.output
         assert "Audit export writable: yes" in check.output
@@ -387,12 +389,16 @@ def test_state_check_reports_backend_readiness_without_mutating_state(
 
     assert result.exit_code == 0, result.output
     assert f"Backend: {backend}" in result.output
+    assert f"Backend role: {'recommended' if backend == 'sqlite' else 'legacy'}" in result.output
     assert "Workspace initialized: yes" in result.output
     assert "Audit export writable: yes" in result.output
     if backend == "sqlite":
         assert "SQLite schema complete: yes" in result.output
+        assert "workspace/state.db" in result.output.replace("\\", "/")
+        assert "SAFETY.md remains the file source" in result.output
     else:
         assert "SQLite schema complete: n/a" in result.output
+        assert "Legacy compatibility backend" in result.output
     assert config_path.read_text(encoding="utf-8") == before_config
     assert _ids(store.read_actions()["pending"]) == _ids(before_actions["pending"])
 

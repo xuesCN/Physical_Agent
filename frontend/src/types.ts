@@ -17,6 +17,52 @@ export interface HealthState {
   workspace_exists?: boolean;
 }
 
+export interface StateCheckResult {
+  ok: boolean;
+  ready?: boolean;
+  message?: string;
+  backend: string;
+  backend_role?: "recommended" | "legacy" | "unsupported" | string;
+  backend_label?: string;
+  source_of_truth?: string;
+  payload_format?: string;
+  human_view?: string;
+  safety_source?: string;
+  runtime_switch_supported?: boolean;
+  switching_model?: string;
+  recommendation?: string;
+  workspace_path: string;
+  workspace_initialized: boolean;
+  retrieval_enabled?: boolean;
+  retrieval_max_chunks?: number;
+  retrieval_max_chars_per_chunk?: number;
+  audit_dir?: string;
+  audit_export_writable?: boolean;
+  sqlite_schema_complete?: boolean | null;
+  sqlite_chunk_schema_complete?: boolean | null;
+  sqlite_missing_tables?: string[];
+  sqlite_missing_action_columns?: string[];
+  sqlite_missing_memory_columns?: string[];
+  sqlite_missing_upload_columns?: string[];
+  sqlite_missing_chunk_columns?: string[];
+}
+
+export interface ExportAuditResponse {
+  ok: boolean;
+  message: string;
+  backend?: string;
+  workspace_path?: string;
+  out_dir?: string;
+  manifest?: string;
+  result?: {
+    backend?: string;
+    workspace_path?: string;
+    out_dir?: string;
+    manifest?: string;
+    [key: string]: unknown;
+  };
+}
+
 export interface ActionItem {
   id: string;
   robot: string;

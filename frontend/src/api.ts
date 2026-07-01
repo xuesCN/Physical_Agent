@@ -2,10 +2,12 @@ import type {
   ActionItem,
   AgentState,
   ApiEvent,
+  ExportAuditResponse,
   HealthState,
   LLMSettingsPayload,
   LLMSettingsResponse,
   SearchResponse,
+  StateCheckResult,
   UploadResponse
 } from "./types";
 
@@ -38,6 +40,17 @@ export function fetchHealth(): Promise<HealthState> {
 
 export function fetchState(): Promise<AgentState> {
   return apiJson<AgentState>("/api/state", {}, { allowNotReadyBody: true });
+}
+
+export function fetchStateCheck(): Promise<StateCheckResult> {
+  return apiJson<StateCheckResult>("/api/state-check", {}, { allowNotReadyBody: true });
+}
+
+export function exportAudit(): Promise<ExportAuditResponse> {
+  return apiJson<ExportAuditResponse>("/api/export-audit", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
 }
 
 export function sendChat(message: string): Promise<{

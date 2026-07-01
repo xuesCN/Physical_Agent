@@ -47,7 +47,7 @@ driver 不感知存储后端、不调用 agent runtime
 ```text
 A  OpenAI 官方 SDK + 工具调用循环          agent 侧内聚，最低风险，先做
 A3 最简上下文压缩（rolling summary）         随 A，轻量
-B  JSON 为准的 StateStore + SQLite + 人类视图 地基：定下 GUI/记忆的数据契约
+B  StateStore backend 收口：SQLite 推荐真源 + Markdown legacy + audit view
 B4 记忆分层 + sqlite-vec 检索               建在 B 的 SQLite 之上
 C  FastAPI 后端 + 常驻 watch + AntD GUI      依赖 B 的 JSON 契约稳定后再做
 D  传输层抽象 + 串口 + 硬件级安全            仅动 drivers/ + watch/，与 A/B/C 解耦
@@ -57,13 +57,16 @@ D  传输层抽象 + 串口 + 硬件级安全            仅动 drivers/ + watch
 
 ---
 
-## 2. 阶段 B：JSON 为准的 StateStore + SQLite + 人类可读视图
+## 2. 阶段 B：StateStore backend 收口
 
 ### 2.1 设计原则
 
-- **SQLite 为唯一真源，payload 用 JSON**（不再用 Markdown 当存储格式），可**直接删掉** `parsers/renderers` Markdown 混合解析层，schema 用 pydantic 校验。
-- **人类可读文本是从 JSON 生成的视图，不是存储格式**（见 2.4）。
-- `StateStore` 抽象把"读写状态"与"后端"解耦；driver 与 SafetyGate 继续只与 `Action`/`Observation`/`Capability` 交互，不感知后端。
+- `StateStore` Protocol 把“读写状态”与具体后端解耦；运行时每次只打开一个 active backend。
+- **SQLite 是推荐/default backend**：`workspace/state.db` 是状态真源，表内 payload 用 JSON，schema 用 pydantic/结构化读写校验。
+- **Markdown backend 保留为 legacy 兼容路径**：已有 Markdown workspace 可显式 `workspace.backend: markdown` 继续运行，Markdown parser / renderer 不删除。
+- **人类可读文本是 audit view 或 Markdown legacy 源**：SQLite 下通过 `export-audit` 生成可读视图；它不是第二套存储层。
+- API/GUI JSON 是结构化传输与渲染视图，不是 `JsonStateStore`，也不是独立 backend。
+- driver 与 SafetyGate 继续只与 `Action`/`Observation`/`Capability` 交互，不感知后端。
 
 ### 2.2 StateStore 接口
 
@@ -82,7 +85,7 @@ class StateStore(Protocol):
     def append_chat_message(...); def read_chat() -> dict: ...
     def append_memory_note(...); def read_memory() -> dict: ...
     def append_log(...): ...
-    def export_human_view(self, out_dir: Path) -> None: ...        # JSON -> 人类视图
+    def export_human_view(self, out_dir: Path) -> None: ...        # active backend -> audit view
 ```
 
 ### 2.3 SQLite schema
@@ -101,19 +104,20 @@ CREATE TABLE memory_notes  (id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT, 
 
 `read_actions()` 由 `SELECT ... WHERE status=?` 组装，调用方零改动；`SAFETY.md` 保持文件真源；`doc_state.revision` 保留自增。
 
-### 2.4 人类可读视图（取代 Markdown 审计）
+### 2.4 人类可读视图
 
 - **结构化数据 + summary 字段并存**：每类状态 JSON 带 `summary` 人话句子（`Observation.summary` 已有先例）。
-- `export_human_view()`：渲染 pretty-print JSON + 可选自然语言摘要到 `workspace/audit/`，保留 git 可 diff 审计。
+- `export_human_view()` / `export-audit`：从当前 active backend 导出 pretty-print JSON + 可选自然语言摘要到 `workspace/audit/`，保留可 diff 审计。
+- Markdown backend 下，Markdown 文件本身仍是 legacy human-editable source。
 - dashboard 不展示 raw JSON，而是字段映射成 AntD 组件 + summary（§6）。
 
 ### 2.5 配置、迁移、风险
 
 ```yaml
-workspace: { path: ./workspace, backend: sqlite, format: json, audit_export: true }
+workspace: { path: ./workspace, backend: sqlite }
 ```
 
-工厂 `open_state_store(config)` 取代直接 `Workspace(path)`；`physical-agent migrate-md-to-sqlite` 迁移；风险缓解：审计靠 `audit_export`、回归靠后端矩阵测试（§9）、并发靠 WAL + 行级原子、安全入口靠 `SAFETY.md` 保持文件。
+工厂 `open_state_store(config)` 取代直接 `Workspace(path)`；`physical-agent migrate-md-to-sqlite` 只做 Markdown -> SQLite 迁移且不自动改 config；`export-audit` 只导出 audit view 且不改 backend/action board。切 backend 是修改配置并重启的运维动作，不支持 GUI live backend switch 或运行时切换 active backend。本项目不提供 SQLite -> Markdown 反向迁移。风险缓解：审计靠 `export-audit`、回归靠后端矩阵测试（§9）、并发靠 WAL + 行级原子、安全入口靠 `SAFETY.md` 保持文件。
 
 ---
 
@@ -352,7 +356,7 @@ serial = ["pyserial>=3.5"]                      # D，串口传输
 # 前端在独立 frontend/，npm 管理：react / vite / antd / @ant-design/x / react-markdown
 ```
 
-`physical-agent.yaml` 新增（均有默认值）：`workspace.{backend,format,audit_export}`、`agent.planner=auto`、`agent.context.*`（§5）、`memory.embedding.*`（§4，默认关闭）、robot 级 `transport.*`（§7）。
+`physical-agent.yaml` 新增/稳定（均有默认值）：`workspace.backend`、`agent.planner=auto`、`agent.context.*`（§5）、`memory.embedding.*`（§4，默认关闭）、robot 级 `transport.*`（§7）。审计导出通过 `export-audit` 命令/API 触发，不作为独立存储 backend。
 
 ---
 
@@ -378,8 +382,8 @@ A1  openai SDK 替换 urllib（行为不变）                  低风险，可�
 A2  tool_loop 工具循环 + import 静态检查                 agent 侧内聚
 A3  最简上下文压缩（rolling summary）                   轻量，随 A
 B1  StateStore 抽象，Workspace 改造为接口实现            纯重构
-B2  SqliteStateStore（JSON 为准）+ 矩阵测试 + 迁移命令    切真源，删 md 解析层
-B3  export_human_view 人类视图 + audit_export            补回可读审计
+B2  SqliteStateStore（payload JSON）+ 矩阵测试 + 迁移命令    SQLite 推荐真源，保留 Markdown legacy
+B3  export_human_view 人类视图 + export-audit            补回可读审计
 B4  sqlite-vec 记忆分层 + 检索（先结构化，后 embedding）  建在 B 之上
 B4b 文件上传摄入入口（小→inline / 大→ingest，§4.4）       Upload + /api/upload，不可信输入
 C1  FastAPI 端点与旧 server 对等                         后端迁移

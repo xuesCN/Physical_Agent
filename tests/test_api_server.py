@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 import physical_agent.cli as cli_module
@@ -76,6 +77,12 @@ def _prepare_store(config_path: Path):
         )
     )
     return store
+
+
+def _set_config_backend(config_path: Path, backend: str) -> None:
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data["workspace"]["backend"] = backend
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
 def _sse_events(body: str) -> list[dict]:
@@ -282,6 +289,8 @@ def test_api_endpoints_cover_state_proposals_memory_ingest_search_and_audit(tmp_
     audit_dir = tmp_path / "api-audit"
     exported = client.post("/api/export-audit", json={"out": str(audit_dir)})
     assert exported.status_code == 200
+    assert exported.json()["backend"] == "sqlite"
+    assert Path(exported.json()["manifest"]).exists()
     assert Path(exported.json()["result"]["manifest"]).exists()
     assert (audit_dir / "uploads.json").exists()
 
@@ -293,6 +302,54 @@ def test_api_endpoints_cover_state_proposals_memory_ingest_search_and_audit(tmp_
     ]
     assert board["completed"] == []
     assert board["cancelled"] == []
+
+
+@pytest.mark.parametrize(
+    ("backend", "role", "expected_source"),
+    [
+        ("markdown", "legacy", "workspace"),
+        ("sqlite", "recommended", "state.db"),
+    ],
+)
+def test_api_state_check_reports_backend_guidance_without_watch(
+    tmp_path,
+    monkeypatch,
+    backend,
+    role,
+    expected_source,
+):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _set_config_backend(config_path, backend)
+    store = open_state_store(config_path=config_path)
+    store.initialize()
+
+    import physical_agent.watch.runtime as watch_runtime
+
+    def fail_watch_init(self, *args, **kwargs):
+        raise AssertionError("state-check API must not instantiate WatchRuntime")
+
+    monkeypatch.setattr(watch_runtime.WatchRuntime, "__init__", fail_watch_init)
+
+    client = TestClient(create_app(config_path))
+    response = client.get("/api/state-check")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["backend"] == backend
+    assert body["backend_role"] == role
+    assert expected_source in body["source_of_truth"]
+    assert body["runtime_switch_supported"] is False
+    assert "GUI live backend switch" in body["switching_model"]
+    if backend == "sqlite":
+        assert "state.db" in body["recommendation"]
+        assert "SAFETY.md" in body["recommendation"]
+        assert body["sqlite_schema_complete"] is True
+    else:
+        assert "Legacy compatibility backend" in body["recommendation"]
+        assert "migrate" in body["switching_model"]
+        assert body["sqlite_schema_complete"] is None
 
 
 def test_api_llm_settings_endpoints_do_not_leak_key(tmp_path):
@@ -742,6 +799,7 @@ def test_api_requests_do_not_instantiate_watch_or_execute_driver(tmp_path, monke
 
     client = TestClient(create_app(config_path))
 
+    assert client.get("/api/state-check").status_code == 200
     assert client.post(
         "/api/actions/propose",
         json={
@@ -777,6 +835,7 @@ def test_api_requests_do_not_instantiate_watch_or_execute_driver(tmp_path, monke
         "/api/upload",
         files={"file": ("safe.md", b"upload text remains untrusted", "text/markdown")},
     ).status_code == 200
+    assert client.post("/api/export-audit", json={}).status_code == 200
 
     store = open_state_store(config_path=config_path)
     assert [item.id for item in store.read_actions()["completed"]] == []

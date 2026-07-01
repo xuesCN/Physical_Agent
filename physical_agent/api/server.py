@@ -38,6 +38,7 @@ from physical_agent.llm import (
 )
 from physical_agent.protocol.schemas import Action, ChatPlan
 from physical_agent.state import StateStore, open_state_store
+from physical_agent.state.check import run_state_check, state_check_ok
 
 
 BROWSER_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
@@ -189,6 +190,13 @@ def create_app(
     @app.get("/api/state")
     def state() -> dict[str, Any]:
         return controller.state()
+
+    @app.get("/api/state-check")
+    def state_check() -> dict[str, Any]:
+        try:
+            return controller.state_check()
+        except ApiRequestError as exc:
+            return handle_error(exc)
 
     @app.get("/api/events")
     def event_stream(limit: int | None = None) -> Any:
@@ -461,6 +469,22 @@ class ApiController:
                 "backend": config.workspace.backend,
             }
         return self._state(config, store)
+
+    def state_check(self) -> dict[str, Any]:
+        if not self.config_path.exists():
+            raise ApiRequestError(
+                f"Could not find {self.config_path}. Run `physical-agent init` first.",
+                status_code=404,
+            )
+        config = load_config(self.config_path)
+        result = run_state_check(config, base_dir=self.base_dir)
+        ok = state_check_ok(result)
+        return {
+            "ok": ok,
+            "ready": bool(result["workspace_initialized"]),
+            "message": "State backend is ready." if ok else "State backend needs attention.",
+            **_json_safe(result),
+        }
 
     def propose_action(self, payload: ActionProposalRequest) -> dict[str, Any]:
         _, store = self._store(initialize=True)
@@ -855,6 +879,10 @@ class ApiController:
         return {
             "ok": True,
             "message": "Exported audit view.",
+            "backend": result.get("backend"),
+            "workspace_path": result.get("workspace_path"),
+            "out_dir": result.get("out_dir"),
+            "manifest": result.get("manifest"),
             "result": _json_safe(result),
         }
 

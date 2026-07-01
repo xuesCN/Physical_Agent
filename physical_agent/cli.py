@@ -90,6 +90,11 @@ def state_check(
     result = run_state_check(cfg, base_dir=config.resolve().parent)
 
     typer.echo(f"Backend: {result['backend']}")
+    typer.echo(f"Backend role: {result['backend_role']}")
+    typer.echo(f"Source of truth: {result['source_of_truth']}")
+    typer.echo(f"Payload format: {result['payload_format']}")
+    typer.echo(f"Safety source: {result['safety_source']}")
+    typer.echo(f"Recommendation: {result['recommendation']}")
     typer.echo(f"Workspace: {result['workspace_path']}")
     typer.echo(
         "Workspace initialized: "
@@ -430,7 +435,10 @@ def inspect(
     actions = workspace.read_actions()
     feedback = workspace.read_feedback()
 
-    typer.echo("Robots:")
+    typer.echo(f"Backend: {cfg.workspace.backend}")
+    typer.echo(f"Workspace: {workspace.path}")
+
+    typer.echo("\nRobots:")
     robots = capabilities.get("robots", {})
     if robots:
         for robot_id, robot in robots.items():

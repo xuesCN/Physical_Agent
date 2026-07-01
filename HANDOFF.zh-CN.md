@@ -7,7 +7,7 @@
 
 ## 1. 快速结论
 
-Physical Agent 是一个面向安全物理世界 agent 的本地 agent/runtime 项目。新项目默认使用 SQLite `workspace/state.db` 作为状态真源，同时保留 Markdown backend、Markdown parser / renderer 和可读审计导出。它把“认知侧 agent”和“物理执行侧 watch”拆开：
+Physical Agent 是一个面向安全物理世界 agent 的本地 agent/runtime 项目。新项目默认使用 SQLite `workspace/state.db` 作为状态真源，同时保留 Markdown backend、Markdown parser / renderer 和可读审计导出。`StateStore` Protocol 每次只打开一个 active backend：Markdown 是 legacy 兼容后端，SQLite 是推荐/default 后端；SQLite payload 使用 JSON，API/GUI JSON 只是结构化传输与渲染视图，不是独立存储层。它把“认知侧 agent”和“物理执行侧 watch”拆开：
 
 ```text
 agent/run/chat  ->  写 pending action proposal
@@ -21,6 +21,7 @@ watch           ->  写 capabilities / world / feedback / log
 
 本次已完成：
 
+- B5 已把状态后端口径收口到“一个 active backend”：本地 `physical-agent.yaml` 显式使用 `workspace.backend: sqlite`，`state-check` / `/api/state-check` 会报告 recommended/legacy 信息，GUI Settings 只读展示 backend 与 audit export，不支持 live backend switch。
 - 已拉取仓库并安装依赖到 `.venv/`。
 - `py scripts/bootstrap.py` 成功，测试结果 `85 passed in 22.75s`。
 - quickstart smoke test 成功：执行 2 个动作，`red_block.location = tray`。
@@ -588,7 +589,7 @@ GUI 相关测试重点文件：
 
 1. `python` 命令在当前 Windows 环境不可用，优先用 `py` 或 `.venv\Scripts\python.exe`。
 2. `workspace/`、`workspace/state.db` 和 `physical-agent.yaml` 是运行态文件，默认被 gitignore，不要把它们当源码改动提交。
-3. 新项目默认 backend 是 SQLite；已有 Markdown 项目只要显式保留 `workspace.backend: markdown`，仍走 Markdown backend。单项目回滚也是把该配置改回 `markdown`。
+3. 新项目默认 backend 是 SQLite；已有 Markdown 项目只要显式保留 `workspace.backend: markdown`，仍走 Markdown legacy backend。切换 backend 是修改配置并重启的运维动作；没有 `JsonStateStore`、没有 GUI live backend switch、没有运行时切换 active backend，也不提供 SQLite -> Markdown 反向迁移。
 4. agent/watch 的安全边界不要打破：任何真实硬件执行都必须经过 `action board -> watch -> SafetyGate -> driver.execute()`。
 5. GUI 是单文件内联前端，改起来方便但可维护性一般；如果继续扩展 UI，建议拆出模板/static assets 或引入轻量前端结构。
 6. LLM 相关功能需要 `.env`，默认没有 key 时 rule-based 路径仍然能跑。
@@ -600,9 +601,9 @@ GUI 相关测试重点文件：
 优先级较高：
 
 - 修复 UTF-8 中文文案和相关测试断言。
-- 给 GUI 增加浏览器级 E2E smoke test：页面加载、点击 setup/demo、发送 chat、检查 DOM 状态。
-- 把 GUI 的 HTML/CSS/JS 从 Python raw string 中拆出来，至少分成模板和静态 JS，便于维护。
-- 为 `/api/setup`、`/api/demo` 等长操作增加前端禁用按钮/防重复点击状态。
+- A1.3 reasoning UI：在现有 FastAPI/React chat 基础上展示规划/工具步骤，但请求侧仍只写 proposal，不执行硬件。
+- A1.5 PDF upload：作为不可信输入进入上下文，先做文本抽取与审计，不进入 watch 执行捷径。
+- 统一前端体验优化：继续改善 Settings/Memory/Events 的信息密度、错误态和响应式细节。
 
 中期：
 

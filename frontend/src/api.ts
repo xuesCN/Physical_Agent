@@ -4,11 +4,14 @@ import type {
   ApiEvent,
   ExportAuditResponse,
   HealthState,
+  IntegratePayload,
+  IntegrateResponse,
   LLMSettingsPayload,
   LLMSettingsResponse,
   SearchResponse,
   StateCheckResult,
-  UploadResponse
+  UploadResponse,
+  WorkspaceResetResponse
 } from "./types";
 
 interface ApiJsonOptions {
@@ -63,6 +66,31 @@ export function sendChat(message: string): Promise<{
   return apiJson("/api/chat", {
     method: "POST",
     body: JSON.stringify({ message })
+  });
+}
+
+export function resetChat(): Promise<{
+  ok: boolean;
+  message: string;
+  state: AgentState;
+}> {
+  return apiJson("/api/chat/reset", {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+}
+
+export function resetWorkspace(): Promise<WorkspaceResetResponse> {
+  return apiJson<WorkspaceResetResponse>("/api/workspace/reset", {
+    method: "POST",
+    body: JSON.stringify({ confirm: true })
+  });
+}
+
+export function integrateHardware(payload: IntegratePayload): Promise<IntegrateResponse> {
+  return apiJson<IntegrateResponse>("/api/integrate", {
+    method: "POST",
+    body: JSON.stringify(payload)
   });
 }
 

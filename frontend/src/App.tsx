@@ -1,10 +1,11 @@
-import { Alert, App as AntApp, ConfigProvider, Drawer, Layout, theme } from "antd";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Alert, App as AntApp, ConfigProvider, Drawer, Layout, Spin, theme } from "antd";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   abortChatStream,
   fetchHealth,
   fetchState,
   proposeAction,
+  resetChat,
   sendChat,
   sendChatStream,
   submitTask
@@ -12,16 +13,11 @@ import {
 import { ActionBoard } from "./components/ActionBoard";
 import { ChatPanel } from "./components/ChatPanel";
 import { ContextTabs } from "./components/ContextTabs";
-import { EventsPanel } from "./components/EventsPanel";
-import { MemorySearchPanel } from "./components/MemorySearchPanel";
 import { ProposalPanel } from "./components/ProposalPanel";
-import { RawDebug } from "./components/RawDebug";
 import { RobotsPanel } from "./components/RobotsPanel";
-import { SettingsPanel } from "./components/SettingsPanel";
 import { PAGE_LABELS, SidebarNav } from "./components/SidebarNav";
 import type { PageKey } from "./components/SidebarNav";
 import { StatusBar } from "./components/StatusBar";
-import { UploadPanel } from "./components/UploadPanel";
 import type {
   ActionItem,
   AgentState,
@@ -30,6 +26,28 @@ import type {
   HealthState,
   UploadResponse
 } from "./types";
+
+// Secondary-page panels are loaded on demand so their bundles (and the antd
+// widgets only they use — Upload/Collapse/List/InputNumber) stay out of the
+// initial download. The overview page keeps its panels eager.
+const HardwarePanel = lazy(() =>
+  import("./components/HardwarePanel").then((m) => ({ default: m.HardwarePanel }))
+);
+const MemorySearchPanel = lazy(() =>
+  import("./components/MemorySearchPanel").then((m) => ({ default: m.MemorySearchPanel }))
+);
+const UploadPanel = lazy(() =>
+  import("./components/UploadPanel").then((m) => ({ default: m.UploadPanel }))
+);
+const EventsPanel = lazy(() =>
+  import("./components/EventsPanel").then((m) => ({ default: m.EventsPanel }))
+);
+const RawDebug = lazy(() =>
+  import("./components/RawDebug").then((m) => ({ default: m.RawDebug }))
+);
+const SettingsPanel = lazy(() =>
+  import("./components/SettingsPanel").then((m) => ({ default: m.SettingsPanel }))
+);
 
 type BusyKey = "refresh" | "chat" | "proposal" | null;
 
@@ -296,9 +314,35 @@ function Dashboard() {
     }
   }
 
+  async function handleResetChat() {
+    setBusy("chat");
+    try {
+      const response = await resetChat();
+      setStreamMessages(null);
+      setChatStreamError(null);
+      setState(response.state);
+      message.success(response.message);
+    } catch (error) {
+      showError(message, error);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function handleUploaded(nextState: AgentState, response: UploadResponse) {
     setState(nextState);
     message.success(`${response.filename} uploaded`);
+  }
+
+  function handleStateChange(nextState: AgentState) {
+    setState(nextState);
+  }
+
+  function handleWorkspaceReset(nextState: AgentState, text: string) {
+    setStreamMessages(null);
+    setChatStreamError(null);
+    setState(nextState);
+    message.success(text);
   }
 
   return (
@@ -331,19 +375,24 @@ function Dashboard() {
                 health={health}
                 state={state}
               />
-              {renderPageContent({
-                activePage,
-                state,
-                health,
-                events,
-                chatMessages,
-                busy,
-                onChat: handleChat,
-                onStopChat: handleStopChat,
-                chatError: chatStreamError,
-                onUploaded: handleUploaded,
-                onError: (error) => showError(message, error)
-              })}
+              <Suspense fallback={<PageFallback />}>
+                {renderPageContent({
+                  activePage,
+                  state,
+                  health,
+                  events,
+                  chatMessages,
+                  busy,
+                  onChat: handleChat,
+                  onStopChat: handleStopChat,
+                  onResetChat: handleResetChat,
+                  chatError: chatStreamError,
+                  onUploaded: handleUploaded,
+                  onStateChange: handleStateChange,
+                  onWorkspaceReset: handleWorkspaceReset,
+                  onError: (error) => showError(message, error)
+                })}
+              </Suspense>
             </main>
             <aside className="inspector-column">
               <ProposalPanel
@@ -386,8 +435,11 @@ interface RenderPageProps {
   busy: BusyKey;
   onChat: (message: string) => Promise<void>;
   onStopChat: () => void;
+  onResetChat: () => Promise<void>;
   chatError: string | null;
   onUploaded: (state: AgentState, response: UploadResponse) => void;
+  onStateChange: (state: AgentState) => void;
+  onWorkspaceReset: (state: AgentState, message: string) => void;
   onError: (error: Error) => void;
 }
 
@@ -396,6 +448,18 @@ interface WorkspaceNoticeProps {
   loading: boolean;
   health: HealthState | null;
   state: AgentState | null;
+}
+
+function PageFallback() {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{ display: "flex", justifyContent: "center", padding: "48px 0" }}
+    >
+      <Spin />
+    </div>
+  );
 }
 
 function WorkspaceNotice({ error, loading, health, state }: WorkspaceNoticeProps) {
@@ -451,8 +515,11 @@ function renderPageContent({
   busy,
   onChat,
   onStopChat,
+  onResetChat,
   chatError,
   onUploaded,
+  onStateChange,
+  onWorkspaceReset,
   onError
 }: RenderPageProps) {
   if (activePage === "actions") {
@@ -474,6 +541,15 @@ function renderPageContent({
 
   if (activePage === "robots") {
     return <RobotsPanel state={state} />;
+  }
+
+  if (activePage === "hardware") {
+    return (
+      <div className="page-stack">
+        <HardwarePanel onStateChange={onStateChange} onError={onError} />
+        <RobotsPanel state={state} />
+      </div>
+    );
   }
 
   if (activePage === "memory") {
@@ -505,7 +581,7 @@ function renderPageContent({
   if (activePage === "settings") {
     return (
       <div className="two-panel-page">
-        <SettingsPanel health={health} state={state} />
+        <SettingsPanel health={health} state={state} onWorkspaceReset={onWorkspaceReset} />
         <RawDebug state={state} />
       </div>
     );
@@ -521,6 +597,7 @@ function renderPageContent({
           error={chatError}
           onSend={onChat}
           onStop={onStopChat}
+          onReset={onResetChat}
         />
       </div>
       <div className="context-column">

@@ -1,4 +1,5 @@
 import {
+  ApiOutlined,
   DashboardOutlined,
   DatabaseOutlined,
   DeploymentUnitOutlined,
@@ -17,6 +18,7 @@ export type PageKey =
   | "actions"
   | "world"
   | "robots"
+  | "hardware"
   | "memory"
   | "safety"
   | "events"
@@ -27,6 +29,7 @@ export const PAGE_LABELS: Record<PageKey, string> = {
   actions: "Actions",
   world: "World",
   robots: "Robots",
+  hardware: "Hardware",
   memory: "Memory",
   safety: "Safety",
   events: "Events",
@@ -54,6 +57,11 @@ const NAV_ITEMS: MenuProps["items"] = [
   },
   { key: "world", icon: navIcon("world", <GlobalOutlined />), label: navLabel("world") },
   { key: "robots", icon: navIcon("robots", <RobotOutlined />), label: navLabel("robots") },
+  {
+    key: "hardware",
+    icon: navIcon("hardware", <ApiOutlined />),
+    label: navLabel("hardware")
+  },
   { key: "memory", icon: navIcon("memory", <DatabaseOutlined />), label: navLabel("memory") },
   {
     key: "safety",

@@ -1,6 +1,6 @@
-import { RobotOutlined, StopOutlined, UserOutlined } from "@ant-design/icons";
+import { DeleteOutlined, RobotOutlined, StopOutlined, UserOutlined } from "@ant-design/icons";
 import { Bubble, Sender } from "@ant-design/x";
-import { Alert, Button, Card, Empty, Space, Typography } from "antd";
+import { Alert, Button, Card, Empty, Popconfirm, Space, Typography } from "antd";
 import { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import type { ChatMessage } from "../types";
@@ -11,9 +11,10 @@ interface ChatPanelProps {
   error?: string | null;
   onSend: (message: string) => Promise<void>;
   onStop: () => void;
+  onReset: () => Promise<void>;
 }
 
-export function ChatPanel({ messages, loading, error, onSend, onStop }: ChatPanelProps) {
+export function ChatPanel({ messages, loading, error, onSend, onStop, onReset }: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const items = useMemo(
     () =>
@@ -47,6 +48,24 @@ export function ChatPanel({ messages, loading, error, onSend, onStop }: ChatPane
           <RobotOutlined />
           <Typography.Text strong>Chat</Typography.Text>
         </Space>
+      }
+      extra={
+        <Popconfirm
+          title="Clear chat history?"
+          description="Actions, feedback, memory, and uploads will stay unchanged."
+          okText="Clear"
+          cancelText="Cancel"
+          onConfirm={() => void onReset()}
+        >
+          <Button
+            aria-label="Clear chat history"
+            data-testid="reset-chat-button"
+            disabled={loading || messages.length === 0}
+            icon={<DeleteOutlined />}
+            size="small"
+            type="text"
+          />
+        </Popconfirm>
       }
     >
       <div className="bubble-stage">

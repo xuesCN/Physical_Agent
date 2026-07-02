@@ -22,6 +22,26 @@ export default defineConfig({
           if (normalized.includes("/@ant-design/x/")) {
             return "antd-x";
           }
+          // antd widgets used ONLY on lazy-loaded pages. They have no eager
+          // importer, so isolating them into their own chunk lets Rollup defer
+          // it until a secondary page is opened, instead of forcing them into
+          // the always-loaded antd-vendor chunk.
+          if (
+            normalized.includes("/antd/es/upload/") ||
+            normalized.includes("/antd/lib/upload/") ||
+            normalized.includes("/rc-upload/") ||
+            normalized.includes("/antd/es/collapse/") ||
+            normalized.includes("/antd/lib/collapse/") ||
+            normalized.includes("/rc-collapse/") ||
+            normalized.includes("/antd/es/input-number/") ||
+            normalized.includes("/antd/lib/input-number/") ||
+            normalized.includes("/rc-input-number/") ||
+            normalized.includes("/@rc-component/mini-decimal/") ||
+            normalized.includes("/antd/es/list/") ||
+            normalized.includes("/antd/lib/list/")
+          ) {
+            return "antd-extras";
+          }
           if (
             normalized.includes("/antd/") ||
             normalized.includes("/@ant-design/icons/") ||

@@ -9,6 +9,9 @@ interface RobotRow {
   kind: string;
   driver: string;
   status: string;
+  worldStatus: string;
+  endpoint: string;
+  mode: string;
   capabilities: string[];
 }
 
@@ -16,27 +19,53 @@ interface RobotsPanelProps {
   state: AgentState | null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function firstString(source: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+    if (typeof value === "number") {
+      return String(value);
+    }
+  }
+  return "-";
+}
+
 export function RobotsPanel({ state }: RobotsPanelProps) {
+  const worldRobots = asRecord(asRecord(state?.world).robots);
+
   const rows: RobotRow[] = Object.entries(state?.capabilities?.robots ?? {}).map(
-    ([id, robot]) => ({
-      key: id,
-      id,
-      kind: robot.kind ?? "robot",
-      driver: robot.driver ?? "-",
-      status: robot.status ?? "unknown",
-      capabilities: robot.capabilities?.map((capability) => capability.name ?? "").filter(Boolean) ?? []
-    })
+    ([id, robot]) => {
+      const worldInfo = asRecord(worldRobots[id]);
+      return {
+        key: id,
+        id,
+        kind: robot.kind ?? "robot",
+        driver: robot.driver ?? "-",
+        status: robot.status ?? "unknown",
+        worldStatus: firstString(worldInfo, ["status", "state"]),
+        endpoint: firstString(worldInfo, ["endpoint", "url", "port", "serial_port", "address"]),
+        mode: firstString(worldInfo, ["mode", "transport"]),
+        capabilities:
+          robot.capabilities?.map((capability) => capability.name ?? "").filter(Boolean) ?? []
+      };
+    }
   );
 
   const columns: ColumnsType<RobotRow> = [
     {
       title: "Robot",
       dataIndex: "id",
-      width: 160,
+      width: 140,
       render: (value: string) => <Typography.Text code>{value}</Typography.Text>
     },
-    { title: "Kind", dataIndex: "kind", width: 110 },
-    { title: "Driver", dataIndex: "driver", width: 150 },
+    { title: "Kind", dataIndex: "kind", width: 100 },
+    { title: "Driver", dataIndex: "driver", width: 140 },
     {
       title: "Status",
       dataIndex: "status",
@@ -45,6 +74,30 @@ export function RobotsPanel({ state }: RobotsPanelProps) {
         <Tag color={value === "connected" ? "green" : "default"}>{value}</Tag>
       )
     },
+    {
+      title: "Health",
+      dataIndex: "worldStatus",
+      width: 110,
+      render: (value: string) => {
+        const healthy = ["idle", "ok", "connected", "ready"].includes(value.toLowerCase());
+        const offline = ["offline", "error", "halted"].includes(value.toLowerCase());
+        return (
+          <Tag color={healthy ? "green" : offline ? "red" : "default"}>{value}</Tag>
+        );
+      }
+    },
+    {
+      title: "Endpoint / Port",
+      dataIndex: "endpoint",
+      width: 170,
+      render: (value: string) =>
+        value === "-" ? (
+          <Typography.Text type="secondary">-</Typography.Text>
+        ) : (
+          <Typography.Text code>{value}</Typography.Text>
+        )
+    },
+    { title: "Mode", dataIndex: "mode", width: 100 },
     {
       title: "Capabilities",
       dataIndex: "capabilities",
@@ -73,7 +126,7 @@ export function RobotsPanel({ state }: RobotsPanelProps) {
           pagination={false}
           dataSource={rows}
           columns={columns}
-          scroll={{ x: 680 }}
+          scroll={{ x: 880 }}
         />
       ) : (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No robots" />

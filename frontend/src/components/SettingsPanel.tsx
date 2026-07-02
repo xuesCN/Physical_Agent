@@ -1,13 +1,39 @@
-import { ApiOutlined, DownloadOutlined, SaveOutlined, SettingOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Descriptions, Form, Input, Select, Space, Tag, Typography } from "antd";
+import {
+  ApiOutlined,
+  DeleteOutlined,
+  DownloadOutlined,
+  SaveOutlined,
+  SettingOutlined
+} from "@ant-design/icons";
+import {
+  Alert,
+  Button,
+  Card,
+  Descriptions,
+  Form,
+  Input,
+  Popconfirm,
+  Select,
+  Space,
+  Tag,
+  Typography
+} from "antd";
 import { useEffect, useState } from "react";
-import { exportAudit, fetchLLMSettings, fetchStateCheck, saveLLMSettings, testLLMSettings } from "../api";
+import {
+  exportAudit,
+  fetchLLMSettings,
+  fetchStateCheck,
+  resetWorkspace,
+  saveLLMSettings,
+  testLLMSettings
+} from "../api";
 import type { AgentState, ExportAuditResponse, HealthState, LLMSettingsSummary, StateCheckResult } from "../types";
 import { compactJson, oneLine } from "./utils";
 
 interface SettingsPanelProps {
   health: HealthState | null;
   state: AgentState | null;
+  onWorkspaceReset?: (state: AgentState, message: string) => void;
 }
 
 interface LLMSettingsFormValues {
@@ -17,12 +43,17 @@ interface LLMSettingsFormValues {
   api_mode: string;
 }
 
-export function SettingsPanel({ health, state }: SettingsPanelProps) {
+export function SettingsPanel({ health, state, onWorkspaceReset }: SettingsPanelProps) {
   const ready = Boolean(state?.ready ?? health?.ready);
   const [form] = Form.useForm<LLMSettingsFormValues>();
   const [llmSettings, setLlmSettings] = useState<LLMSettingsSummary | null>(null);
   const [stateCheck, setStateCheck] = useState<StateCheckResult | null>(null);
   const [stateCheckError, setStateCheckError] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [resetFeedback, setResetFeedback] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
   const [auditFeedback, setAuditFeedback] = useState<{
     type: "success" | "error";
     text: string;
@@ -114,6 +145,23 @@ export function SettingsPanel({ health, state }: SettingsPanelProps) {
       setFeedback({ type: "error", text: error instanceof Error ? error.message : String(error) });
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleWorkspaceReset() {
+    setResetting(true);
+    setResetFeedback(null);
+    try {
+      const response = await resetWorkspace();
+      setResetFeedback({ type: "success", text: response.message });
+      onWorkspaceReset?.(response.state, response.message);
+    } catch (error) {
+      setResetFeedback({
+        type: "error",
+        text: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      setResetting(false);
     }
   }
 
@@ -343,6 +391,48 @@ export function SettingsPanel({ health, state }: SettingsPanelProps) {
       <div className="panel-divider" />
       <Typography.Text strong>Plan</Typography.Text>
       <pre className="pre-block settings-pre">{compactJson(state?.plan, "{}")}</pre>
+      <div className="panel-divider" />
+      <Space
+        direction="vertical"
+        size={8}
+        className="full-width"
+        data-testid="danger-zone"
+      >
+        <Typography.Text strong type="danger">
+          Danger zone
+        </Typography.Text>
+        <Alert
+          type="warning"
+          showIcon
+          message="Workspace reset"
+          description="Clears world, actions, memory, chat, and uploads, and restores SAFETY to defaults. physical-agent.yaml and LLM settings are kept. Capabilities are republished the next time watch runs."
+        />
+        <Popconfirm
+          title="Reset the entire workspace?"
+          description="World, actions, memory, chat, and uploads will be cleared. This cannot be undone."
+          okText="Reset workspace"
+          okButtonProps={{ danger: true }}
+          cancelText="Cancel"
+          onConfirm={() => void handleWorkspaceReset()}
+        >
+          <Button
+            danger
+            icon={<DeleteOutlined />}
+            loading={resetting}
+            data-testid="reset-workspace-button"
+          >
+            Reset workspace
+          </Button>
+        </Popconfirm>
+        {resetFeedback && (
+          <Alert
+            data-testid="reset-workspace-feedback"
+            type={resetFeedback.type}
+            showIcon
+            message={resetFeedback.text}
+          />
+        )}
+      </Space>
     </Card>
   );
 }

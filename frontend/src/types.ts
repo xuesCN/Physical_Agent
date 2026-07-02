@@ -201,3 +201,68 @@ export interface LLMSettingsPayload {
   model?: string;
   api_mode?: string;
 }
+
+export interface WorkspaceResetResponse {
+  ok: boolean;
+  message: string;
+  workspace_path?: string;
+  backend?: string;
+  state: AgentState;
+}
+
+export interface IntegrationSourceProfile {
+  source?: string;
+  resolved_path?: string;
+  source_kind?: string;
+  name?: string;
+  title?: string;
+  description?: string;
+  robot_kind?: string;
+  transport?: string;
+  supports_simulation?: boolean;
+  capabilities?: Array<Record<string, unknown>>;
+  evidence?: string[];
+  next_steps?: string[];
+  [key: string]: unknown;
+}
+
+export interface IntegrateResult {
+  output_path?: string;
+  generated_files?: string[];
+  report_path?: string | null;
+  source?: IntegrationSourceProfile;
+  integration?: {
+    source?: IntegrationSourceProfile;
+    output_path?: string;
+    generated_files?: string[];
+    report_path?: string | null;
+    [key: string]: unknown;
+  };
+  llm_used?: boolean;
+  llm_error?: string | null;
+  summary?: string;
+  next_steps?: string[];
+  validation?: {
+    ok?: boolean;
+    errors?: string[];
+    checks?: string[];
+    [key: string]: unknown;
+  };
+  attempts?: number;
+  [key: string]: unknown;
+}
+
+export interface IntegrateResponse {
+  ok: boolean;
+  message: string;
+  result: IntegrateResult;
+  state: AgentState;
+}
+
+export interface IntegratePayload {
+  source: string;
+  name?: string;
+  output?: string;
+  llm?: boolean;
+  model?: string;
+}

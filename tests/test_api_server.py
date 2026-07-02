@@ -195,6 +195,13 @@ def test_api_controller_contract_runs_without_fastapi(tmp_path):
     chat = controller.chat(ChatRequest(message="remember that controller memory is safe"))
     assert chat["executed"] == 0
     assert chat["memory"][0]["content"] == "controller memory is safe"
+    assert controller.state()["chat"]["messages"]
+
+    reset = controller.reset_chat()
+    assert reset["ok"] is True
+    assert reset["state"]["chat"]["messages"] == []
+    assert reset["state"]["chat"]["running_summary"] == ""
+    assert store.read_memory()["notes"][0]["content"] == "controller memory is safe"
 
     source = tmp_path / "controller.md"
     source.write_text("Controller upload retrieval text.", encoding="utf-8")
@@ -267,6 +274,12 @@ def test_api_endpoints_cover_state_proposals_memory_ingest_search_and_audit(tmp_
     assert chat.json()["executed"] == 0
     assert "I will remember" in chat.json()["reply"]
     assert chat.json()["memory"][0]["content"] == "API memory is safe"
+
+    reset = client.post("/api/chat/reset")
+    assert reset.status_code == 200
+    assert reset.json()["state"]["chat"]["messages"] == []
+    assert reset.json()["state"]["chat"]["running_summary"] == ""
+    assert store.read_memory()["notes"][0]["content"] == "API memory is safe"
 
     source = tmp_path / "upload.md"
     source.write_text("# Calibration\n\nUse local path ingest for retrieval chunks.", encoding="utf-8")
@@ -854,3 +867,155 @@ def test_api_requests_do_not_instantiate_watch_or_execute_driver(tmp_path, monke
     store = open_state_store(config_path=config_path)
     assert [item.id for item in store.read_actions()["completed"]] == []
     assert [item.id for item in store.read_actions()["cancelled"]] == []
+
+
+def test_api_workspace_reset_requires_confirm(tmp_path):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    client = TestClient(create_app(config_path))
+
+    response = client.post("/api/workspace/reset", json={})
+
+    assert response.status_code == 400
+    assert response.json()["ok"] is False
+    assert "confirm" in response.json()["message"].lower()
+
+
+def test_api_workspace_reset_clears_state_without_watch(tmp_path, monkeypatch):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    store.append_chat_message("user", "hello before reset")
+    client = TestClient(create_app(config_path))
+    client.post(
+        "/api/actions/propose",
+        json={
+            "id": "act_before_reset",
+            "robot": "arm_1",
+            "capability": "observe",
+            "params": {},
+            "reason": "will be cleared by reset",
+            "depends_on": [],
+        },
+    )
+
+    import physical_agent.watch.runtime as watch_runtime
+
+    def fail_watch_init(self, *args, **kwargs):
+        raise AssertionError("workspace reset must not instantiate WatchRuntime")
+
+    monkeypatch.setattr(watch_runtime.WatchRuntime, "__init__", fail_watch_init)
+
+    response = client.post("/api/workspace/reset", json={"confirm": True})
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    fresh = open_state_store(config_path=config_path)
+    assert fresh.exists()
+    assert fresh.read_chat()["messages"] == []
+    assert fresh.read_actions()["pending"] == []
+    # Config file must survive a workspace reset.
+    assert config_path.exists()
+    assert "arm_1" in config_path.read_text(encoding="utf-8")
+
+
+def test_api_integrate_generates_scaffold(tmp_path):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    sdk = tmp_path / "vendor_sdk"
+    sdk.mkdir()
+    (sdk / "README.md").write_text(
+        "# Demo Voice Device\n\nHTTP SDK with voice, speak, tts, light and RGB support.",
+        encoding="utf-8",
+    )
+    client = TestClient(create_app(config_path))
+
+    response = client.post(
+        "/api/integrate",
+        json={"source": str(sdk), "name": "voice_light_driver"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    output_path = Path(body["result"]["output_path"])
+    assert output_path.exists()
+    assert (output_path / "driver.py").exists()
+    assert (output_path / "physical_driver.yaml").exists()
+
+
+def test_api_integrate_rejects_empty_source(tmp_path):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    client = TestClient(create_app(config_path))
+
+    response = client.post("/api/integrate", json={"source": "   "})
+
+    assert response.status_code == 400
+    assert response.json()["ok"] is False
+
+
+def test_api_get_config_returns_effective_view(tmp_path):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    client = TestClient(create_app(config_path))
+
+    response = client.get("/api/config")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["config_path"] == str(config_path)
+    assert body["config"]["workspace"]["backend"] == "sqlite"
+    assert "arm_1" in body["config"]["robots"]
+
+
+def test_api_register_robot_appends_yaml_and_keeps_existing(tmp_path):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    client = TestClient(create_app(config_path))
+
+    response = client.post(
+        "/api/config/robots",
+        json={
+            "robot_id": "arm_2",
+            "driver": "mock_rover",
+            "config": {"mode": "mock"},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["requires_watch_restart"] is True
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert data["robots"]["arm_2"] == {"driver": "mock_rover", "config": {"mode": "mock"}}
+    # Existing robot must survive.
+    assert "arm_1" in data["robots"]
+    # Registered config must still load.
+    assert client.get("/api/config").json()["config"]["robots"]["arm_2"]["driver"] == "mock_rover"
+
+
+def test_api_register_robot_rejects_duplicate_and_bad_id(tmp_path):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    client = TestClient(create_app(config_path))
+    before = config_path.read_text(encoding="utf-8")
+
+    duplicate = client.post(
+        "/api/config/robots", json={"robot_id": "arm_1", "driver": "mock_arm"}
+    )
+    bad_id = client.post(
+        "/api/config/robots", json={"robot_id": "1 bad id!", "driver": "mock_arm"}
+    )
+
+    assert duplicate.status_code == 409
+    assert bad_id.status_code == 400
+    # Nothing may be written on rejection.
+    assert config_path.read_text(encoding="utf-8") == before

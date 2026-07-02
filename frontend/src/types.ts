@@ -210,6 +210,14 @@ export interface WorkspaceResetResponse {
   state: AgentState;
 }
 
+export interface SchemaProperty {
+  type?: string;
+  default?: unknown;
+  description?: string;
+  enum?: unknown[];
+  [key: string]: unknown;
+}
+
 export interface IntegrationSourceProfile {
   source?: string;
   resolved_path?: string;
@@ -221,6 +229,12 @@ export interface IntegrationSourceProfile {
   transport?: string;
   supports_simulation?: boolean;
   capabilities?: Array<Record<string, unknown>>;
+  config_schema?: {
+    type?: string;
+    properties?: Record<string, SchemaProperty>;
+    required?: string[];
+    [key: string]: unknown;
+  };
   evidence?: string[];
   next_steps?: string[];
   [key: string]: unknown;
@@ -265,4 +279,40 @@ export interface IntegratePayload {
   output?: string;
   llm?: boolean;
   model?: string;
+}
+
+export interface EffectiveRobotConfig {
+  driver: string;
+  config: Record<string, unknown>;
+}
+
+export interface EffectiveConfig {
+  project?: { name?: string };
+  workspace?: { path?: string; backend?: string };
+  watch?: Record<string, unknown>;
+  agent?: Record<string, unknown>;
+  memory?: Record<string, unknown>;
+  robots?: Record<string, EffectiveRobotConfig>;
+}
+
+export interface ConfigResponse {
+  ok: boolean;
+  message: string;
+  config_path: string;
+  config: EffectiveConfig;
+}
+
+export interface RegisterRobotPayload {
+  robot_id: string;
+  driver: string;
+  config?: Record<string, unknown>;
+}
+
+export interface RegisterRobotResponse {
+  ok: boolean;
+  message: string;
+  requires_watch_restart?: boolean;
+  robot_id?: string;
+  config_path?: string;
+  config?: EffectiveConfig;
 }

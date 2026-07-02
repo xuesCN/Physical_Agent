@@ -238,9 +238,42 @@ def test_chat_runtime_stream_never_creates_pending_actions(tmp_path):
 
     assert events[-1]["type"] == "done"
     assert "did not create a pending action" in events[-1]["reply"]
+    assert '"capability": "pick"' in events[-1]["reply"]
+    assert '"capability": "place"' in events[-1]["reply"]
     store = open_state_store(config_path=config_path)
     assert store.read_actions()["pending"] == []
     assert store.read_plan()["plan"].actions == []
+
+
+def test_chat_runtime_stream_prompt_allows_copyable_action_drafts(tmp_path, monkeypatch):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="llm",
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+    captured = {}
+
+    class FakeClient:
+        def stream_chat_text(self, messages, **kwargs):
+            captured["system"] = messages[0]["content"]
+            captured["payload"] = json.loads(messages[1]["content"])
+            yield "draft"
+
+    monkeypatch.setattr(runtime, "_llm_client", lambda: FakeClient())
+
+    events = list(runtime.respond_stream("我要让机械臂观察当前环境，应该提交什么 action?"))
+
+    assert events[-1]["type"] == "done"
+    assert "Action Draft JSON" in captured["system"]
+    assert "Do not call tools" in captured["system"]
+    assert "Do not return JSON" not in captured["system"]
+    assert "capabilities" in captured["payload"]
+    assert events[-1]["actions"] == []
+    store = open_state_store(config_path=config_path)
+    assert store.read_actions()["pending"] == []
 
 
 def test_chat_runtime_stream_ignores_auto_step_and_watch_runtime(tmp_path, monkeypatch):

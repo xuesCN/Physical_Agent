@@ -120,6 +120,24 @@ class ExportAuditRequest(BaseModel):
     out: str | None = None
 
 
+class WorkspaceResetRequest(BaseModel):
+    confirm: bool = False
+
+
+class IntegrateRequest(BaseModel):
+    source: str
+    name: str | None = None
+    output: str | None = None
+    llm: bool = False
+    model: str | None = None
+
+
+class RegisterRobotRequest(BaseModel):
+    robot_id: str
+    driver: str
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
 @dataclass
 class ChatStreamState:
     stream_id: str
@@ -276,6 +294,13 @@ def create_app(
         except ApiRequestError as exc:
             return handle_error(exc)
 
+    @app.post("/api/chat/reset")
+    def reset_chat() -> dict[str, Any]:
+        try:
+            return controller.reset_chat()
+        except ApiRequestError as exc:
+            return handle_error(exc)
+
     @app.post("/api/chat/stream")
     async def chat_stream(payload: ChatRequest, request: Request) -> Any:
         try:
@@ -399,6 +424,34 @@ def create_app(
     def export_audit(payload: ExportAuditRequest) -> dict[str, Any]:
         try:
             return controller.export_audit(payload)
+        except ApiRequestError as exc:
+            return handle_error(exc)
+
+    @app.post("/api/workspace/reset")
+    def workspace_reset(payload: WorkspaceResetRequest) -> dict[str, Any]:
+        try:
+            return controller.reset_workspace(payload)
+        except ApiRequestError as exc:
+            return handle_error(exc)
+
+    @app.post("/api/integrate")
+    def integrate(payload: IntegrateRequest) -> dict[str, Any]:
+        try:
+            return controller.integrate_hardware(payload)
+        except ApiRequestError as exc:
+            return handle_error(exc)
+
+    @app.get("/api/config")
+    def get_config() -> dict[str, Any]:
+        try:
+            return controller.get_config()
+        except ApiRequestError as exc:
+            return handle_error(exc)
+
+    @app.post("/api/config/robots")
+    def register_robot(payload: RegisterRobotRequest) -> dict[str, Any]:
+        try:
+            return controller.register_robot(payload)
         except ApiRequestError as exc:
             return handle_error(exc)
 
@@ -556,6 +609,18 @@ class ApiController:
             "memory": _json_safe(response.get("memory", [])),
             "plan": _json_safe(response.get("plan")),
             "executed": 0,
+            "state": state,
+        }
+
+    def reset_chat(self) -> dict[str, Any]:
+        config, store = self._store(initialize=True)
+        store.write_chat([], running_summary="", compact=False)
+        store.append_log("API reset chat history.", actor="api")
+        state = self._state(config, store)
+        self._publish_state("chat_reset", state)
+        return {
+            "ok": True,
+            "message": "Chat history cleared.",
             "state": state,
         }
 
@@ -892,6 +957,174 @@ class ApiController:
             "out_dir": result.get("out_dir"),
             "manifest": result.get("manifest"),
             "result": _json_safe(result),
+        }
+
+    def reset_workspace(self, payload: WorkspaceResetRequest) -> dict[str, Any]:
+        if not payload.confirm:
+            raise ApiRequestError(
+                "Workspace reset requires explicit confirmation. "
+                "Send {\"confirm\": true} to clear world, actions, memory, and chat.",
+                status_code=400,
+            )
+        config, store = self._store()
+        store.initialize(overwrite=True)
+        store.append_log(
+            "API reset the workspace (full state re-init; config file untouched).",
+            actor="api",
+        )
+        state = self.state()
+        self._publish_state("workspace_reset", state)
+        return {
+            "ok": True,
+            "message": (
+                "Workspace has been reset: world, actions, memory, chat, and uploads "
+                "are cleared; SAFETY is restored to defaults. "
+                "physical-agent.yaml is untouched. "
+                "Capabilities will be republished the next time watch runs."
+            ),
+            "workspace_path": str(store.path),
+            "backend": config.workspace.backend,
+            "state": state,
+        }
+
+    def integrate_hardware(self, payload: IntegrateRequest) -> dict[str, Any]:
+        source = payload.source.strip()
+        if not source:
+            raise ApiRequestError("Integration source cannot be empty.")
+        _, store = self._store(initialize=True)
+        from physical_agent.agent.driver_coder import DriverCodingAgent
+        from physical_agent.agent.onboarding import HardwareIntegrationAssistant
+
+        try:
+            if payload.llm:
+                coding_result = DriverCodingAgent(
+                    source,
+                    output_dir=payload.output or None,
+                    name=payload.name or None,
+                    base_dir=self.base_dir,
+                    model=payload.model or None,
+                ).generate()
+                message = (
+                    f"Generated LLM driver draft at {coding_result.output_path}."
+                    if coding_result.llm_used
+                    else (
+                        f"Generated safe scaffold at {coding_result.output_path}; "
+                        "LLM coding did not validate."
+                    )
+                )
+                result_payload = coding_result.model_dump(mode="json")
+            else:
+                integration_result = HardwareIntegrationAssistant(
+                    source,
+                    output_dir=payload.output or None,
+                    name=payload.name or None,
+                    base_dir=self.base_dir,
+                ).generate()
+                message = f"Generated driver scaffold at {integration_result.output_path}."
+                result_payload = integration_result.model_dump(mode="json")
+        except ApiRequestError:
+            raise
+        except Exception as exc:
+            raise ApiRequestError(str(exc), status_code=400) from exc
+        store.append_log(
+            f"API generated a driver {'draft' if payload.llm else 'scaffold'} "
+            f"from `{source}`. Watch must load and validate it before execution.",
+            actor="api",
+        )
+        state = self.state()
+        self._publish_state("hardware_integrated", state)
+        return {
+            "ok": True,
+            "message": message,
+            "result": _json_safe(result_payload),
+            "state": state,
+        }
+
+    def get_config(self) -> dict[str, Any]:
+        if not self.config_path.exists():
+            raise ApiRequestError(
+                f"Could not find {self.config_path}. Run `physical-agent init` first.",
+                status_code=404,
+            )
+        try:
+            config = load_config(self.config_path)
+        except Exception as exc:
+            raise ApiRequestError(f"Config file is invalid: {exc}", status_code=400) from exc
+        return {
+            "ok": True,
+            "message": "Effective configuration as watch would load it. Read-only.",
+            "config_path": str(self.config_path),
+            "config": _json_safe(config.model_dump(mode="json")),
+        }
+
+    def register_robot(self, payload: RegisterRobotRequest) -> dict[str, Any]:
+        robot_id = payload.robot_id.strip()
+        driver = payload.driver.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", robot_id or ""):
+            raise ApiRequestError(
+                "robot_id must start with a letter or underscore and contain only "
+                "letters, digits, '_' or '-'."
+            )
+        if not driver:
+            raise ApiRequestError("driver cannot be empty.")
+        if not self.config_path.exists():
+            raise ApiRequestError(
+                f"Could not find {self.config_path}. Run `physical-agent init` first.",
+                status_code=404,
+            )
+        import yaml as _yaml
+
+        try:
+            data = _yaml.safe_load(self.config_path.read_text(encoding="utf-8")) or {}
+        except Exception as exc:
+            raise ApiRequestError(f"Config file is invalid YAML: {exc}", status_code=400) from exc
+        if not isinstance(data, dict):
+            raise ApiRequestError(
+                "Config file is invalid: top level must be a mapping.", status_code=400
+            )
+        robots = data.setdefault("robots", {})
+        if not isinstance(robots, dict):
+            raise ApiRequestError(
+                "Config file is invalid: `robots` must be a mapping.", status_code=400
+            )
+        if robot_id in robots:
+            raise ApiRequestError(
+                f"Robot `{robot_id}` already exists in {self.config_path.name}. "
+                "Editing existing robots from the GUI is not supported; edit the file manually.",
+                status_code=409,
+            )
+        robots[robot_id] = {"driver": driver, "config": dict(payload.config)}
+        try:
+            PhysicalAgentConfig.model_validate(data)
+        except Exception as exc:
+            raise ApiRequestError(
+                f"New robot entry failed config validation; nothing was written: {exc}",
+                status_code=400,
+            ) from exc
+        self.config_path.write_text(
+            _yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        try:
+            _, store = self._store()
+            store.append_log(
+                f"API registered robot `{robot_id}` (driver `{driver}`) in "
+                f"{self.config_path.name}. Restart watch to apply.",
+                actor="api",
+            )
+        except Exception:
+            pass
+        self._publish_state("config_updated")
+        return {
+            "ok": True,
+            "message": (
+                f"Robot `{robot_id}` registered in {self.config_path.name}. "
+                "Restart watch (`physical-agent watch`) to connect it."
+            ),
+            "requires_watch_restart": True,
+            "robot_id": robot_id,
+            "config_path": str(self.config_path),
+            "config": self.get_config()["config"],
         }
 
     def _store(

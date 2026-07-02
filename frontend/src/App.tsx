@@ -48,6 +48,9 @@ const RawDebug = lazy(() =>
 const SettingsPanel = lazy(() =>
   import("./components/SettingsPanel").then((m) => ({ default: m.SettingsPanel }))
 );
+const ConfigPanel = lazy(() =>
+  import("./components/ConfigPanel").then((m) => ({ default: m.ConfigPanel }))
+);
 
 type BusyKey = "refresh" | "chat" | "proposal" | null;
 
@@ -95,6 +98,7 @@ function Dashboard() {
   const [activePage, setActivePage] = useState<PageKey>("overview");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [configVersion, setConfigVersion] = useState(0);
   const busyRef = useRef<BusyKey>("refresh");
   const chatSseDisconnectNotifiedRef = useRef(false);
   const chatAbortControllerRef = useRef<AbortController | null>(null);
@@ -345,6 +349,10 @@ function Dashboard() {
     message.success(text);
   }
 
+  function handleRobotRegistered() {
+    setConfigVersion((current) => current + 1);
+  }
+
   return (
     <Layout className="app-shell" data-testid="dashboard-shell">
       <SidebarNav
@@ -390,6 +398,8 @@ function Dashboard() {
                   onUploaded: handleUploaded,
                   onStateChange: handleStateChange,
                   onWorkspaceReset: handleWorkspaceReset,
+                  onRobotRegistered: handleRobotRegistered,
+                  configVersion,
                   onError: (error) => showError(message, error)
                 })}
               </Suspense>
@@ -440,6 +450,8 @@ interface RenderPageProps {
   onUploaded: (state: AgentState, response: UploadResponse) => void;
   onStateChange: (state: AgentState) => void;
   onWorkspaceReset: (state: AgentState, message: string) => void;
+  onRobotRegistered: () => void;
+  configVersion: number;
   onError: (error: Error) => void;
 }
 
@@ -520,6 +532,8 @@ function renderPageContent({
   onUploaded,
   onStateChange,
   onWorkspaceReset,
+  onRobotRegistered,
+  configVersion,
   onError
 }: RenderPageProps) {
   if (activePage === "actions") {
@@ -546,7 +560,12 @@ function renderPageContent({
   if (activePage === "hardware") {
     return (
       <div className="page-stack">
-        <HardwarePanel onStateChange={onStateChange} onError={onError} />
+        <HardwarePanel
+          onStateChange={onStateChange}
+          onError={onError}
+          onRobotRegistered={onRobotRegistered}
+        />
+        <ConfigPanel refreshToken={configVersion} />
         <RobotsPanel state={state} />
       </div>
     );

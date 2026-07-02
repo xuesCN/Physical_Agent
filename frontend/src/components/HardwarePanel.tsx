@@ -1,4 +1,4 @@
-import { ApiOutlined, CodeOutlined } from "@ant-design/icons";
+import { ApiOutlined, CodeOutlined, PlusCircleOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -11,13 +11,14 @@ import {
   Tag,
   Typography
 } from "antd";
-import { useState } from "react";
-import { integrateHardware } from "../api";
-import type { AgentState, IntegrateResult } from "../types";
+import { useEffect, useState } from "react";
+import { integrateHardware, registerRobot } from "../api";
+import type { AgentState, IntegrateResult, SchemaProperty } from "../types";
 
 interface HardwarePanelProps {
   onStateChange: (state: AgentState) => void;
   onError: (error: Error) => void;
+  onRobotRegistered?: () => void;
 }
 
 interface HardwareFormValues {
@@ -28,12 +29,39 @@ interface HardwareFormValues {
   model?: string;
 }
 
-export function HardwarePanel({ onStateChange, onError }: HardwarePanelProps) {
+interface RegisterFormValues {
+  robot_id: string;
+  driver: string;
+  [key: string]: unknown;
+}
+
+function coerceSchemaValue(raw: unknown, schema: SchemaProperty | undefined): unknown {
+  if (raw == null || raw === "") {
+    return undefined;
+  }
+  const type = schema?.type;
+  if (type === "integer" || type === "number") {
+    const parsed = Number(raw);
+    return Number.isNaN(parsed) ? raw : parsed;
+  }
+  if (type === "boolean") {
+    return raw === true || raw === "true";
+  }
+  return raw;
+}
+
+export function HardwarePanel({ onStateChange, onError, onRobotRegistered }: HardwarePanelProps) {
   const [form] = Form.useForm<HardwareFormValues>();
+  const [registerForm] = Form.useForm<RegisterFormValues>();
   const [loading, setLoading] = useState(false);
+  const [registering, setRegistering] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(
     null
   );
+  const [registerFeedback, setRegisterFeedback] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
   const [result, setResult] = useState<IntegrateResult | null>(null);
   const mode = Form.useWatch("mode", form) ?? "scaffold";
 
@@ -66,6 +94,55 @@ export function HardwarePanel({ onStateChange, onError }: HardwarePanelProps) {
     result?.generated_files ?? result?.integration?.generated_files ?? [];
   const nextSteps = result?.next_steps ?? profile?.next_steps ?? [];
   const validation = result?.validation ?? null;
+  const outputPath = result?.output_path ?? result?.integration?.output_path ?? "";
+  const schemaProperties: Record<string, SchemaProperty> = Object.fromEntries(
+    Object.entries(profile?.config_schema?.properties ?? {}).filter(
+      ([, property]) => property?.type !== "object"
+    )
+  );
+
+  useEffect(() => {
+    if (result) {
+      setRegisterFeedback(null);
+      registerForm.setFieldsValue({
+        robot_id: profile?.name ?? "",
+        driver: outputPath,
+        ...Object.fromEntries(
+          Object.entries(schemaProperties)
+            .filter(([, property]) => property.default != null)
+            .map(([key, property]) => [key, String(property.default)])
+        )
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result]);
+
+  async function handleRegister(values: RegisterFormValues) {
+    setRegistering(true);
+    setRegisterFeedback(null);
+    try {
+      const config: Record<string, unknown> = {};
+      for (const [key, property] of Object.entries(schemaProperties)) {
+        const coerced = coerceSchemaValue(values[key], property);
+        if (coerced !== undefined) {
+          config[key] = coerced;
+        }
+      }
+      const response = await registerRobot({
+        robot_id: values.robot_id.trim(),
+        driver: values.driver.trim(),
+        config
+      });
+      setRegisterFeedback({ type: "success", text: response.message });
+      onRobotRegistered?.();
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      setRegisterFeedback({ type: "error", text: err.message });
+      onError(err);
+    } finally {
+      setRegistering(false);
+    }
+  }
 
   return (
     <Card
@@ -202,6 +279,78 @@ export function HardwarePanel({ onStateChange, onError }: HardwarePanelProps) {
               <Typography.Text type="secondary">
                 Next steps: {nextSteps.join(" · ")}
               </Typography.Text>
+            )}
+          </Space>
+          <div className="panel-divider" />
+          <Space direction="vertical" size={8} className="full-width" data-testid="register-robot">
+            <Space>
+              <PlusCircleOutlined />
+              <Typography.Text strong>Register to config</Typography.Text>
+            </Space>
+            <Typography.Text type="secondary">
+              Appends a robots entry to physical-agent.yaml. Watch connects it after a restart;
+              nothing touches hardware now.
+            </Typography.Text>
+            <Form form={registerForm} layout="vertical" onFinish={handleRegister}>
+              <div className="two-col">
+                <Form.Item
+                  label="Robot ID"
+                  name="robot_id"
+                  rules={[{ required: true, message: "Robot ID is required" }]}
+                >
+                  <Input placeholder="my_arm_1" data-testid="register-robot-id" />
+                </Form.Item>
+                <Form.Item
+                  label="Driver (name or path)"
+                  name="driver"
+                  rules={[{ required: true, message: "Driver is required" }]}
+                >
+                  <Input placeholder="my_hardware/my_driver" />
+                </Form.Item>
+              </div>
+              {Object.entries(schemaProperties).map(([key, property]) => (
+                <Form.Item
+                  key={key}
+                  label={`${key}${property.type ? ` (${property.type})` : ""}`}
+                  name={key}
+                  tooltip={property.description}
+                >
+                  {Array.isArray(property.enum) && property.enum.length ? (
+                    <Select
+                      allowClear
+                      options={property.enum.map((option) => ({
+                        value: String(option),
+                        label: String(option)
+                      }))}
+                    />
+                  ) : (
+                    <Input
+                      placeholder={
+                        property.default != null
+                          ? `default: ${String(property.default)}`
+                          : property.description ?? ""
+                      }
+                    />
+                  )}
+                </Form.Item>
+              ))}
+              <Button
+                type="primary"
+                htmlType="submit"
+                loading={registering}
+                icon={<PlusCircleOutlined />}
+                data-testid="register-robot-button"
+              >
+                Add to config
+              </Button>
+            </Form>
+            {registerFeedback && (
+              <Alert
+                data-testid="register-robot-feedback"
+                type={registerFeedback.type}
+                showIcon
+                message={registerFeedback.text}
+              />
             )}
           </Space>
         </>

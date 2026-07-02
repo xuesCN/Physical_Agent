@@ -2,12 +2,15 @@ import type {
   ActionItem,
   AgentState,
   ApiEvent,
+  ConfigResponse,
   ExportAuditResponse,
   HealthState,
   IntegratePayload,
   IntegrateResponse,
   LLMSettingsPayload,
   LLMSettingsResponse,
+  RegisterRobotPayload,
+  RegisterRobotResponse,
   SearchResponse,
   StateCheckResult,
   UploadResponse,
@@ -89,6 +92,17 @@ export function resetWorkspace(): Promise<WorkspaceResetResponse> {
 
 export function integrateHardware(payload: IntegratePayload): Promise<IntegrateResponse> {
   return apiJson<IntegrateResponse>("/api/integrate", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function fetchConfig(): Promise<ConfigResponse> {
+  return apiJson<ConfigResponse>("/api/config");
+}
+
+export function registerRobot(payload: RegisterRobotPayload): Promise<RegisterRobotResponse> {
+  return apiJson<RegisterRobotResponse>("/api/config/robots", {
     method: "POST",
     body: JSON.stringify(payload)
   });

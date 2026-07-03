@@ -287,7 +287,7 @@ body {
 }
 
 .bubble-stage {
-  height: min(43vh, 420px);
+  height: min(46vh, 560px);
   min-height: 310px;
   overflow: auto;
   padding: 2px 2px 12px;

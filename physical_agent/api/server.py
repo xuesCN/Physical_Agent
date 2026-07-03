@@ -205,6 +205,16 @@ def create_app(
             payload["details"] = _json_safe(exc.details)
         return JSONResponse(status_code=exc.status_code, content=payload)
 
+    @app.exception_handler(Exception)
+    async def handle_unexpected_error(_request: Request, exc: Exception) -> Any:
+        # Endpoints only translate ApiRequestError themselves; anything else
+        # would otherwise surface to the client as a bare "Internal Server
+        # Error" with no way to see the cause from the dashboard.
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "message": f"{type(exc).__name__}: {exc}"},
+        )
+
     @app.get("/api/health")
     def health() -> dict[str, Any]:
         return controller.health()

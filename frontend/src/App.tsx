@@ -100,6 +100,7 @@ function Dashboard() {
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [configVersion, setConfigVersion] = useState(0);
   const busyRef = useRef<BusyKey>("refresh");
+  const lastEventSummaryRef = useRef<string | null>(null);
   const chatSseDisconnectNotifiedRef = useRef(false);
   const chatAbortControllerRef = useRef<AbortController | null>(null);
   const chatStreamIdRef = useRef<string | null>(null);
@@ -158,7 +159,18 @@ function Dashboard() {
         setWatchEnabled(Boolean(parsed.payload.watch_enabled));
       }
       if (parsed.type === "state" || parsed.type === "watch_step") {
-        void loadSnapshot();
+        // The watch loop publishes a watch_step every tick (watch.tick_ms,
+        // default 500ms) even when nothing ran; skip the snapshot refetch on
+        // idle ticks whose state summary matches the last one we saw.
+        const summary = JSON.stringify(parsed.payload.state ?? null);
+        const idleWatchTick =
+          parsed.type === "watch_step" &&
+          !Number(parsed.payload.executed ?? 0) &&
+          summary === lastEventSummaryRef.current;
+        lastEventSummaryRef.current = summary;
+        if (!idleWatchTick) {
+          void loadSnapshot();
+        }
       }
       if (parsed.type === "error") {
         message.warning(String(parsed.payload.message ?? "API event error"));

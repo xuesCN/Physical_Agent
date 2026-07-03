@@ -127,7 +127,7 @@ class SqliteStateStore:
         self.artifacts_path.mkdir(parents=True, exist_ok=True)
         self.uploads_path.mkdir(parents=True, exist_ok=True)
         if overwrite:
-            self._unlink_database_files()
+            self._clear_database()
 
         with self._connect() as conn:
             self._create_schema(conn)
@@ -844,6 +844,27 @@ class SqliteStateStore:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_chunks_identity ON memory_chunks(source_type, source_id, chunk_index)"
         )
+
+    def _clear_database(self) -> None:
+        # Drop tables in place instead of deleting state.db: on Windows the
+        # unlink raises PermissionError (WinError 32) whenever another thread
+        # (a watch tick or a concurrent API request) holds a connection open.
+        # File deletion remains only for databases sqlite cannot open at all.
+        if not self._database_files_exist():
+            return
+        try:
+            with self._connect() as conn:
+                names = [
+                    str(row["name"])
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                    ).fetchall()
+                ]
+                for name in names:
+                    conn.execute(f'DROP TABLE IF EXISTS "{name}"')
+        except sqlite3.Error:
+            self._unlink_database_files()
 
     def _unlink_database_files(self) -> None:
         for path in (

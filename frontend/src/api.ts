@@ -14,7 +14,7 @@ import type {
   SearchResponse,
   StateCheckResult,
   UploadResponse,
-  WorkspaceResetResponse
+  WorkspaceResetResponse,
 } from "./types";
 
 interface ApiJsonOptions {
@@ -24,14 +24,14 @@ interface ApiJsonOptions {
 async function apiJson<T>(
   path: string,
   init: RequestInit = {},
-  options: ApiJsonOptions = {}
+  options: ApiJsonOptions = {},
 ): Promise<T> {
   const response = await fetch(path, {
     headers: {
       "Content-Type": "application/json",
-      ...(init.headers ?? {})
+      ...(init.headers ?? {}),
     },
-    ...init
+    ...init,
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || (!options.allowNotReadyBody && data.ok === false)) {
@@ -49,13 +49,17 @@ export function fetchState(): Promise<AgentState> {
 }
 
 export function fetchStateCheck(): Promise<StateCheckResult> {
-  return apiJson<StateCheckResult>("/api/state-check", {}, { allowNotReadyBody: true });
+  return apiJson<StateCheckResult>(
+    "/api/state-check",
+    {},
+    { allowNotReadyBody: true },
+  );
 }
 
 export function exportAudit(): Promise<ExportAuditResponse> {
   return apiJson<ExportAuditResponse>("/api/export-audit", {
     method: "POST",
-    body: JSON.stringify({})
+    body: JSON.stringify({}),
   });
 }
 
@@ -68,7 +72,7 @@ export function sendChat(message: string): Promise<{
 }> {
   return apiJson("/api/chat", {
     method: "POST",
-    body: JSON.stringify({ message })
+    body: JSON.stringify({ message }),
   });
 }
 
@@ -79,21 +83,23 @@ export function resetChat(): Promise<{
 }> {
   return apiJson("/api/chat/reset", {
     method: "POST",
-    body: JSON.stringify({})
+    body: JSON.stringify({}),
   });
 }
 
 export function resetWorkspace(): Promise<WorkspaceResetResponse> {
   return apiJson<WorkspaceResetResponse>("/api/workspace/reset", {
     method: "POST",
-    body: JSON.stringify({ confirm: true })
+    body: JSON.stringify({ confirm: true }),
   });
 }
 
-export function integrateHardware(payload: IntegratePayload): Promise<IntegrateResponse> {
+export function integrateHardware(
+  payload: IntegratePayload,
+): Promise<IntegrateResponse> {
   return apiJson<IntegrateResponse>("/api/integrate", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 }
 
@@ -101,10 +107,12 @@ export function fetchConfig(): Promise<ConfigResponse> {
   return apiJson<ConfigResponse>("/api/config");
 }
 
-export function registerRobot(payload: RegisterRobotPayload): Promise<RegisterRobotResponse> {
+export function registerRobot(
+  payload: RegisterRobotPayload,
+): Promise<RegisterRobotResponse> {
   return apiJson<RegisterRobotResponse>("/api/config/robots", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 }
 
@@ -117,7 +125,7 @@ export interface ChatStreamCallbacks {
 
 export async function sendChatStream(
   message: string,
-  { signal, requestId, streamId, onEvent }: ChatStreamCallbacks
+  { signal, requestId, streamId, onEvent }: ChatStreamCallbacks,
 ): Promise<void> {
   const id = streamId ?? `chat-${Date.now()}`;
   const response = await fetch("/api/chat/stream", {
@@ -126,13 +134,15 @@ export async function sendChatStream(
     body: JSON.stringify({
       message,
       request_id: requestId ?? id,
-      stream_id: id
+      stream_id: id,
     }),
-    signal
+    signal,
   });
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
-    throw new Error(data.message || `Streaming chat failed: ${response.status}`);
+    throw new Error(
+      data.message || `Streaming chat failed: ${response.status}`,
+    );
   }
   if (!response.body) {
     throw new Error("Streaming chat response did not include a readable body.");
@@ -172,7 +182,7 @@ export function abortChatStream(streamId: string): Promise<{
 }> {
   return apiJson(`/api/chat/abort/${encodeURIComponent(streamId)}`, {
     method: "POST",
-    body: JSON.stringify({})
+    body: JSON.stringify({}),
   });
 }
 
@@ -181,11 +191,11 @@ export function fetchLLMSettings(): Promise<LLMSettingsResponse> {
 }
 
 export function saveLLMSettings(
-  payload: LLMSettingsPayload
+  payload: LLMSettingsPayload,
 ): Promise<LLMSettingsResponse> {
   return apiJson<LLMSettingsResponse>("/api/settings/llm", {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 }
 
@@ -193,7 +203,7 @@ export function testLLMSettings(): Promise<LLMSettingsResponse> {
   return apiJson<LLMSettingsResponse>(
     "/api/settings/llm/test",
     { method: "POST", body: JSON.stringify({}) },
-    { allowNotReadyBody: true }
+    { allowNotReadyBody: true },
   );
 }
 
@@ -205,7 +215,7 @@ export function submitTask(task: string): Promise<{
 }> {
   return apiJson("/api/tasks/submit", {
     method: "POST",
-    body: JSON.stringify({ task })
+    body: JSON.stringify({ task }),
   });
 }
 
@@ -217,7 +227,7 @@ export function proposeAction(action: ActionItem): Promise<{
 }> {
   return apiJson("/api/actions/propose", {
     method: "POST",
-    body: JSON.stringify(action)
+    body: JSON.stringify(action),
   });
 }
 
@@ -225,23 +235,28 @@ export function searchMemory(
   query: string,
   limit: number,
   tags?: string,
-  sourceType?: string
+  sourceType?: string,
 ): Promise<SearchResponse> {
   return apiJson("/api/search-memory", {
     method: "POST",
     body: JSON.stringify({
       query,
       limit,
-      tags: tags ? tags.split(",").map((item) => item.trim()).filter(Boolean) : null,
-      source_type: sourceType || null
-    })
+      tags: tags
+        ? tags
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
+        : null,
+      source_type: sourceType || null,
+    }),
   });
 }
 
 export async function uploadBrowserFile(
   file: File,
   tags: string,
-  importance: number
+  importance: number,
 ): Promise<UploadResponse> {
   const form = new FormData();
   form.append("file", file);
@@ -252,7 +267,7 @@ export async function uploadBrowserFile(
 
   const response = await fetch("/api/upload", {
     method: "POST",
-    body: form
+    body: form,
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data.ok === false) {

@@ -79,6 +79,7 @@ def fake_openai(monkeypatch):
     FakeOpenAI.instances = []
     FakeOpenAI.chat_outputs = []
     FakeOpenAI.responses_outputs = []
+    monkeypatch.setenv("PA_LLM_TRACE", "0")
     monkeypatch.setattr(
         openai_compatible,
         "openai",
@@ -354,6 +355,100 @@ def test_chat_completion_create_calls_openai_sdk(fake_openai):
     assert payload["messages"][0]["role"] == "user"
     assert payload["metadata"]["physical_agent_surface"] == "test"
     assert "extra_body" not in payload
+
+
+def test_llm_trace_records_chat_completion_jsonl(fake_openai, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PA_LLM_TRACE", raising=False)
+    fake_openai.chat_outputs = [
+        {
+            "choices": [{"message": {"role": "assistant", "content": "pong"}}],
+            "usage": {"total_tokens": 7},
+        }
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    OpenAICompatibleClient(settings).chat_completion_create(
+        [{"role": "user", "content": "ping"}],
+        metadata={"physical_agent_surface": "trace_test"},
+    )
+
+    files = list((tmp_path / "workspace" / "llm-trace").glob("*.jsonl"))
+    assert len(files) == 1
+    record = json.loads(files[0].read_text(encoding="utf-8").strip())
+    assert record["surface"] == "trace_test"
+    assert record["model"] == "test-model"
+    assert record["messages"][0]["content"] == "ping"
+    assert record["response"]["choices"][0]["message"]["content"] == "pong"
+    assert record["usage"] == {"total_tokens": 7}
+    assert isinstance(record["latency_ms"], int)
+    assert record["error"] is None
+
+
+def test_llm_trace_records_structured_json_and_stream(fake_openai, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PA_LLM_TRACE", raising=False)
+    fake_openai.chat_outputs = [
+        _chat_text(json.dumps({"answer": "pong"})),
+        [_chat_delta("hel"), _chat_delta("lo")],
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+    client = OpenAICompatibleClient(settings)
+
+    assert client.structured_json(
+        [{"role": "user", "content": "ping"}],
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["answer"],
+            "properties": {"answer": {"type": "string"}},
+        },
+        schema_name="ping_response",
+        metadata={"physical_agent_surface": "structured_trace"},
+    ) == {"answer": "pong"}
+    assert list(
+        client.stream_chat_text(
+            [{"role": "user", "content": "hello"}],
+            metadata={"physical_agent_surface": "stream_trace"},
+        )
+    ) == ["hel", "lo"]
+
+    records = []
+    for path in (tmp_path / "workspace" / "llm-trace").glob("*.jsonl"):
+        records.extend(
+            json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+        )
+    assert [record["surface"] for record in records] == [
+        "structured_trace",
+        "stream_trace",
+    ]
+    assert records[1]["response"] == {"text": "hello"}
+
+
+def test_llm_trace_disabled_writes_nothing(fake_openai, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PA_LLM_TRACE", "0")
+    fake_openai.chat_outputs = [_chat_text("pong")]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    OpenAICompatibleClient(settings).chat_completion_create(
+        [{"role": "user", "content": "ping"}],
+        metadata={"physical_agent_surface": "trace_disabled"},
+    )
+
+    assert not (tmp_path / "workspace" / "llm-trace").exists()
 
 
 def test_chat_completion_create_passes_reasoning_extra_body_when_configured(fake_openai):

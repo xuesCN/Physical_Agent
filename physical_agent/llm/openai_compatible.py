@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -311,16 +314,53 @@ class OpenAICompatibleClient:
         if metadata:
             payload["metadata"] = metadata
         reasoning_applied = _apply_chat_reasoning(payload, self.settings)
+        started = time.perf_counter()
+        parsed: dict[str, Any] | None = None
+        trace_error: str | None = None
         try:
             response = self._client.chat.completions.create(**payload)
         except Exception as exc:  # noqa: BLE001 - normalize SDK errors for callers.
             error = self._to_compatible_error(exc)
             if reasoning_applied and _is_reasoning_unsupported_error(error):
-                response = self._retry_chat_without_reasoning(payload)
-                parsed = _ensure_dict(_to_plain_data(response))
-                return _annotate_reasoning_fallback(parsed)
+                try:
+                    response = self._retry_chat_without_reasoning(payload)
+                    parsed = _ensure_dict(_to_plain_data(response))
+                    return _annotate_reasoning_fallback(parsed)
+                except Exception as retry_exc:
+                    trace_error = str(retry_exc)
+                    raise
+                finally:
+                    _write_llm_trace(
+                        surface=_surface_from_metadata(metadata),
+                        model=self.settings.model,
+                        messages=messages,
+                        response=parsed,
+                        usage=_extract_usage(parsed),
+                        latency_ms=_elapsed_ms(started),
+                        error=trace_error,
+                    )
+            trace_error = str(error)
+            _write_llm_trace(
+                surface=_surface_from_metadata(metadata),
+                model=self.settings.model,
+                messages=messages,
+                response=None,
+                usage=None,
+                latency_ms=_elapsed_ms(started),
+                error=trace_error,
+            )
             raise error from exc
-        return _ensure_dict(_to_plain_data(response))
+        parsed = _ensure_dict(_to_plain_data(response))
+        _write_llm_trace(
+            surface=_surface_from_metadata(metadata),
+            model=self.settings.model,
+            messages=messages,
+            response=parsed,
+            usage=_extract_usage(parsed),
+            latency_ms=_elapsed_ms(started),
+            error=None,
+        )
+        return parsed
 
     def _stream_chat_completions_text(
         self,
@@ -343,12 +383,18 @@ class OpenAICompatibleClient:
 
         stream = None
         yielded = False
+        started = time.perf_counter()
+        chunks: list[str] = []
+        usage: Any = None
+        trace_error: str | None = None
         try:
             stream = self._client.chat.completions.create(**payload)
             for chunk in stream:
+                usage = _extract_usage(chunk) or usage
                 for content in _chat_delta_contents(chunk):
                     if content:
                         yielded = True
+                        chunks.append(content)
                         yield content
         except Exception as exc:  # noqa: BLE001 - normalize SDK and iterator errors.
             error = self._to_compatible_error(exc)
@@ -357,15 +403,29 @@ class OpenAICompatibleClient:
                 stream = self._retry_chat_stream_without_reasoning(payload)
                 try:
                     for chunk in stream:
+                        usage = _extract_usage(chunk) or usage
                         for content in _chat_delta_contents(chunk):
                             if content:
+                                chunks.append(content)
                                 yield content
                     return
                 except Exception as retry_exc:  # noqa: BLE001
-                    raise self._to_compatible_error(retry_exc) from retry_exc
+                    retry_error = self._to_compatible_error(retry_exc)
+                    trace_error = str(retry_error)
+                    raise retry_error from retry_exc
+            trace_error = str(error)
             raise error from exc
         finally:
             _close_stream(stream)
+            _write_llm_trace(
+                surface=_surface_from_metadata(metadata),
+                model=self.settings.model,
+                messages=messages,
+                response={"text": "".join(chunks)},
+                usage=usage,
+                latency_ms=_elapsed_ms(started),
+                error=trace_error,
+            )
 
     def responses_create_input(
         self,
@@ -393,16 +453,53 @@ class OpenAICompatibleClient:
         if metadata:
             payload["metadata"] = metadata
         reasoning_applied = _apply_responses_reasoning(payload, self.settings)
+        started = time.perf_counter()
+        parsed: dict[str, Any] | None = None
+        trace_error: str | None = None
         try:
             response = self._client.responses.create(**payload)
         except Exception as exc:  # noqa: BLE001 - normalize SDK errors for callers.
             error = self._to_compatible_error(exc)
             if reasoning_applied and _is_reasoning_unsupported_error(error):
-                response = self._retry_responses_without_reasoning(payload)
-                parsed = _ensure_dict(_to_plain_data(response))
-                return _annotate_reasoning_fallback(parsed)
+                try:
+                    response = self._retry_responses_without_reasoning(payload)
+                    parsed = _ensure_dict(_to_plain_data(response))
+                    return _annotate_reasoning_fallback(parsed)
+                except Exception as retry_exc:
+                    trace_error = str(retry_exc)
+                    raise
+                finally:
+                    _write_llm_trace(
+                        surface=_surface_from_metadata(metadata),
+                        model=self.settings.model,
+                        messages=_trace_messages_from_responses(instructions, input_items),
+                        response=parsed,
+                        usage=_extract_usage(parsed),
+                        latency_ms=_elapsed_ms(started),
+                        error=trace_error,
+                    )
+            trace_error = str(error)
+            _write_llm_trace(
+                surface=_surface_from_metadata(metadata),
+                model=self.settings.model,
+                messages=_trace_messages_from_responses(instructions, input_items),
+                response=None,
+                usage=None,
+                latency_ms=_elapsed_ms(started),
+                error=trace_error,
+            )
             raise error from exc
-        return _ensure_dict(_to_plain_data(response))
+        parsed = _ensure_dict(_to_plain_data(response))
+        _write_llm_trace(
+            surface=_surface_from_metadata(metadata),
+            model=self.settings.model,
+            messages=_trace_messages_from_responses(instructions, input_items),
+            response=parsed,
+            usage=_extract_usage(parsed),
+            latency_ms=_elapsed_ms(started),
+            error=None,
+        )
+        return parsed
 
     def _stream_responses_text(
         self,
@@ -428,14 +525,20 @@ class OpenAICompatibleClient:
 
         stream = None
         yielded = False
+        started = time.perf_counter()
+        chunks: list[str] = []
+        usage: Any = None
+        trace_error: str | None = None
         try:
             stream = self._client.responses.create(**payload)
             for event in stream:
+                usage = _extract_usage(event) or usage
                 event_type = _event_type(event)
                 if event_type == "response.output_text.delta":
                     delta = _event_field(event, "delta")
                     if isinstance(delta, str) and delta:
                         yielded = True
+                        chunks.append(delta)
                         yield delta
                 elif event_type in {"response.completed", "response.output_text.done"}:
                     return
@@ -447,20 +550,26 @@ class OpenAICompatibleClient:
                 stream = self._retry_responses_stream_without_reasoning(payload)
                 try:
                     for event in stream:
+                        usage = _extract_usage(event) or usage
                         event_type = _event_type(event)
                         if event_type == "response.output_text.delta":
                             delta = _event_field(event, "delta")
                             if isinstance(delta, str) and delta:
+                                chunks.append(delta)
                                 yield delta
                         elif event_type in {"response.completed", "response.output_text.done"}:
                             return
                         elif event_type in {"error", "response.failed"}:
                             raise _stream_event_error(event, self.settings)
                     return
-                except OpenAICompatibleError:
+                except OpenAICompatibleError as retry_error:
+                    trace_error = str(retry_error)
                     raise
                 except Exception as retry_exc:  # noqa: BLE001
-                    raise self._to_compatible_error(retry_exc) from retry_exc
+                    retry_error = self._to_compatible_error(retry_exc)
+                    trace_error = str(retry_error)
+                    raise retry_error from retry_exc
+            trace_error = str(exc)
             raise
         except Exception as exc:  # noqa: BLE001 - normalize SDK and iterator errors.
             error = self._to_compatible_error(exc)
@@ -469,23 +578,38 @@ class OpenAICompatibleClient:
                 stream = self._retry_responses_stream_without_reasoning(payload)
                 try:
                     for event in stream:
+                        usage = _extract_usage(event) or usage
                         event_type = _event_type(event)
                         if event_type == "response.output_text.delta":
                             delta = _event_field(event, "delta")
                             if isinstance(delta, str) and delta:
+                                chunks.append(delta)
                                 yield delta
                         elif event_type in {"response.completed", "response.output_text.done"}:
                             return
                         elif event_type in {"error", "response.failed"}:
                             raise _stream_event_error(event, self.settings)
                     return
-                except OpenAICompatibleError:
+                except OpenAICompatibleError as retry_error:
+                    trace_error = str(retry_error)
                     raise
                 except Exception as retry_exc:  # noqa: BLE001
-                    raise self._to_compatible_error(retry_exc) from retry_exc
+                    retry_error = self._to_compatible_error(retry_exc)
+                    trace_error = str(retry_error)
+                    raise retry_error from retry_exc
+            trace_error = str(error)
             raise error from exc
         finally:
             _close_stream(stream)
+            _write_llm_trace(
+                surface=_surface_from_metadata(metadata),
+                model=self.settings.model,
+                messages=_trace_messages_from_responses(instructions, input_items),
+                response={"text": "".join(chunks)},
+                usage=usage,
+                latency_ms=_elapsed_ms(started),
+                error=trace_error,
+            )
 
     def test_connection(self, *, prompt: str = "Reply with exactly: pong") -> dict[str, Any]:
         content = self.chat(
@@ -590,6 +714,77 @@ class OpenAICompatibleClient:
             return self._client.responses.create(**retry_payload)
         except Exception as exc:  # noqa: BLE001
             raise self._to_compatible_error(exc) from exc
+
+
+def _write_llm_trace(
+    *,
+    surface: str | None,
+    model: str,
+    messages: list[dict[str, Any]],
+    response: Any,
+    usage: Any,
+    latency_ms: int,
+    error: str | None,
+) -> None:
+    if not _llm_trace_enabled():
+        return
+    try:
+        trace_dir = Path("workspace") / "llm-trace"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        record = {
+            "ts": datetime.now(UTC).isoformat(),
+            "surface": surface,
+            "model": model,
+            "messages": messages,
+            "response": _to_plain_data(response),
+            "usage": _to_plain_data(usage),
+            "latency_ms": latency_ms,
+            "error": error,
+        }
+        path = trace_dir / f"{datetime.now(UTC).strftime('%Y%m%d')}.jsonl"
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        return
+
+
+def _llm_trace_enabled() -> bool:
+    value = os.environ.get("PA_LLM_TRACE", "1").strip().lower()
+    return value not in {"0", "false", "no", "off", "disabled"}
+
+
+def _surface_from_metadata(metadata: dict[str, str] | None) -> str | None:
+    if not metadata:
+        return None
+    value = metadata.get("physical_agent_surface")
+    return str(value) if value is not None else None
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, round((time.perf_counter() - started) * 1000))
+
+
+def _extract_usage(value: Any) -> Any:
+    plain = _to_plain_data(value)
+    if isinstance(plain, dict):
+        usage = plain.get("usage")
+        if usage is not None:
+            return usage
+        response = plain.get("response")
+        if isinstance(response, dict):
+            return response.get("usage")
+    return None
+
+
+def _trace_messages_from_responses(
+    instructions: str | None,
+    input_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    if instructions:
+        messages.append({"role": "system", "content": instructions})
+    messages.extend(dict(item) for item in input_items)
+    return messages
 
 
 def _validate_api_root(base_url: str) -> str:

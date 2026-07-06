@@ -17,3 +17,6 @@ frontend/dist/
 frontend/.vite/
 frontend/playwright-report/
 frontend/test-results/
+
+# LLM trace contains prompt plaintext (explicit; workspace/ already covers it)
+workspace/llm-trace/

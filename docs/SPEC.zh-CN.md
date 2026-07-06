@@ -60,7 +60,7 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 
 | 编号 | 内容 | 归属 | 状态 |
 | --- | --- | --- | --- |
-| F0 | LLM planner + 本地调用留痕 + 坏任务实验报告 | §2 | 🟡 第一轮完成；`.env` 补测 15 条：10 完成、5 无提案、0 Gate 拦截；Gate 对抗样本仍不足，见 F0 report |
+| F0 | LLM planner + 本地调用留痕 + 坏任务实验报告 | §2 | 🟡 第一轮完成；15 条：10 完成、5 无提案、0 Gate 拦截。**Review 复核（2026-07-06）**：trace 证实 bounds 在 prompt 内、拒绝为知情拒绝——报告"F3 优先"论据不成立，顺序维持 F1→F3；遗留=Gate 直击组（绕 planner 直接 propose 坏动作留 LLM 时代审计样本，小活可并入 F1 轮） |
 | B6 | 退役 markdown 后端（保留 renderer 与迁移命令） | §2 | ⚪ 排 F0 后、F1.3 前 |
 | F1 | 提案卡片 + Approve + 审批流（F1.3 需 brief） | §2 | ⚪ |
 | F2 | feedback 时间线 + world 视图 + JSON 树 | §2 | ⚪ |

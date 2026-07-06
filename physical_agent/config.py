@@ -38,6 +38,10 @@ class WatchConfig(BaseModel):
     halt_on_shutdown: bool = True
     heartbeat_failure_threshold: int = Field(default=3, ge=1)
     halt_on_heartbeat_failure: bool = True
+    action_timeout_s: float = Field(default=30.0, gt=0)
+    observe_timeout_s: float = Field(default=10.0, gt=0)
+    heartbeat_timeout_s: float = Field(default=5.0, gt=0)
+    halt_timeout_s: float = Field(default=5.0, gt=0)
 
 
 class AgentConfig(BaseModel):
@@ -88,6 +92,10 @@ def default_config_dict() -> dict[str, Any]:
             "halt_on_shutdown": True,
             "heartbeat_failure_threshold": 3,
             "halt_on_heartbeat_failure": True,
+            "action_timeout_s": 30.0,
+            "observe_timeout_s": 10.0,
+            "heartbeat_timeout_s": 5.0,
+            "halt_timeout_s": 5.0,
         },
         "agent": {
             "planner": "rule_based",

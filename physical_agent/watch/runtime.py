@@ -15,6 +15,19 @@ ACTION_LEASE_SECONDS = 300
 CLAIM_OWNER = "watch"
 
 
+class DriverCallTimeout(Exception):
+    """A driver call exceeded its watch-side timeout budget."""
+
+
+async def _call_with_timeout(coro: Any, timeout_s: float, description: str) -> Any:
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout_s)
+    except asyncio.TimeoutError as exc:
+        raise DriverCallTimeout(
+            f"{description} timed out after {timeout_s}s"
+        ) from exc
+
+
 class WatchRuntime:
     def __init__(self, config_path: str | Path = DEFAULT_CONFIG_NAME):
         self.config_path = Path(config_path).resolve()
@@ -68,8 +81,20 @@ class WatchRuntime:
 
     async def shutdown(self) -> None:
         await self._halt_loaded_drivers()
-        for loaded in self.loaded_drivers.values():
-            await loaded.driver.disconnect()
+        for robot_id, loaded in self.loaded_drivers.items():
+            try:
+                await _call_with_timeout(
+                    loaded.driver.disconnect(),
+                    self._halt_timeout_s(),
+                    f"Driver disconnect for robot `{robot_id}`",
+                )
+            except Exception as exc:
+                if self.workspace is not None:
+                    self.workspace.append_log(
+                        f"Driver disconnect failed for `{robot_id}`: "
+                        f"{type(exc).__name__}: {exc}",
+                        actor="watch",
+                    )
         if self.workspace is not None:
             self.workspace.append_log("`physical-agent watch` stopped.", actor="watch")
         self.started = False
@@ -123,8 +148,27 @@ class WatchRuntime:
                 continue
 
             loaded = self.loaded_drivers[action.robot]
+            timeout_s = self._action_timeout_s(action)
             try:
-                result = await loaded.driver.execute(action)
+                result = await _call_with_timeout(
+                    loaded.driver.execute(action),
+                    timeout_s,
+                    f"Driver execute for action `{action.id}`",
+                )
+            except DriverCallTimeout as exc:
+                result = ActionResult(
+                    status="failed",
+                    message=(
+                        f"Driver execute timed out: {exc}. Hardware state is "
+                        "unknown; attempting best-effort halt."
+                    ),
+                    result={"error_type": "DriverCallTimeout", "timeout_s": timeout_s},
+                )
+                workspace.mark_action_cancelled(action)
+                executed_count += 1
+                await self._record_action_result(action, result)
+                await self._halt_robot_after_timeout(action.robot, loaded)
+                continue
             except Exception as exc:
                 result = ActionResult(
                     status="failed",
@@ -148,7 +192,26 @@ class WatchRuntime:
         return executed_count
 
     async def update_world(self) -> Observation:
-        observations = [await loaded.driver.observe() for loaded in self.loaded_drivers.values()]
+        timeout_s = (
+            self.config.watch.observe_timeout_s if self.config is not None else 10.0
+        )
+        observations: list[Observation] = []
+        for robot_id, loaded in self.loaded_drivers.items():
+            try:
+                observations.append(
+                    await _call_with_timeout(
+                        loaded.driver.observe(),
+                        timeout_s,
+                        f"Driver observe for robot `{robot_id}`",
+                    )
+                )
+            except DriverCallTimeout as exc:
+                # Log-only: a hung sensor at tick rate would flood feedback.
+                # Persistent failure is escalated by the heartbeat watchdog.
+                self._workspace().append_log(
+                    f"Skipped observation for `{robot_id}`: {exc}",
+                    actor="watch",
+                )
         merged = merge_observations(observations)
         self._workspace().write_world(merged)
         return merged
@@ -191,9 +254,14 @@ class WatchRuntime:
     async def _heartbeat_loaded_drivers(self) -> None:
         if self.config is None or not self.config.watch.heartbeat_enabled:
             return
+        heartbeat_timeout_s = self.config.watch.heartbeat_timeout_s
         for robot_id, loaded in self.loaded_drivers.items():
             try:
-                await loaded.driver.heartbeat()
+                await _call_with_timeout(
+                    loaded.driver.heartbeat(),
+                    heartbeat_timeout_s,
+                    f"Driver heartbeat for robot `{robot_id}`",
+                )
             except Exception as exc:
                 failure_count = self._heartbeat_failure_counts.get(robot_id, 0) + 1
                 self._heartbeat_failure_counts[robot_id] = failure_count
@@ -221,9 +289,43 @@ class WatchRuntime:
             return
         for robot_id, loaded in self.loaded_drivers.items():
             try:
-                await loaded.driver.halt()
+                await _call_with_timeout(
+                    loaded.driver.halt(),
+                    self._halt_timeout_s(),
+                    f"Driver halt for robot `{robot_id}`",
+                )
             except Exception as exc:
                 self._record_driver_hook_failure(robot_id, "halt", exc)
+
+    async def _halt_robot_after_timeout(self, robot_id: str, loaded: LoadedDriver) -> None:
+        try:
+            await _call_with_timeout(
+                loaded.driver.halt(),
+                self._halt_timeout_s(),
+                f"Driver halt after execute timeout for robot `{robot_id}`",
+            )
+        except Exception as exc:
+            self._record_driver_hook_failure(robot_id, "halt", exc)
+        else:
+            self._workspace().append_log(
+                f"Best-effort halt completed for `{robot_id}` after execute timeout.",
+                actor="watch",
+            )
+
+    def _action_timeout_s(self, action: Action) -> float:
+        default_timeout = (
+            self.config.watch.action_timeout_s if self.config is not None else 30.0
+        )
+        profile = self.profiles.get(action.robot)
+        if profile is None:
+            return default_timeout
+        for capability in profile.capabilities:
+            if capability.name == action.capability and capability.timeout_s:
+                return float(capability.timeout_s)
+        return default_timeout
+
+    def _halt_timeout_s(self) -> float:
+        return self.config.watch.halt_timeout_s if self.config is not None else 5.0
 
     async def _maybe_halt_for_heartbeat_failure(
         self,

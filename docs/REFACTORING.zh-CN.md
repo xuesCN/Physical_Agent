@@ -24,7 +24,7 @@
 | E0 | GUI 功能对齐（重置/硬件面板/配置注册） | E0 提交 + `29fb512` |
 | W1 | 驱动调用超时保护 | `2f00615` |
 | F0 | LLM planner 启用实验 + 本地 JSONL trace + 坏任务报告 | `d39e8f6` `caa4fa0` |
-| B6 | 退役 MarkdownStateStore 后端 | 本轮提交 |
+| B6 | 退役 MarkdownStateStore 后端 | `9072b4e` |
 
 ## 2. 分阶段过程记录
 

@@ -801,6 +801,37 @@ def test_structured_json_strict_400_falls_back_to_json_object(fake_openai):
     assert "test-key" not in str(calls)
 
 
+def test_structured_json_json_object_400_falls_back_to_plain_json_prompt(fake_openai):
+    fake_openai.chat_outputs = [
+        FakeBadRequestError("schema unsupported"),
+        FakeBadRequestError("response_format.type json_object is not supported"),
+        _chat_text(json.dumps({"answer": "pong"})),
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    result = OpenAICompatibleClient(settings).structured_json(
+        [{"role": "user", "content": "ping"}],
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["answer"],
+            "properties": {"answer": {"type": "string"}},
+        },
+        schema_name="ping_response",
+    )
+
+    assert result == {"answer": "pong"}
+    calls = fake_openai.instances[0].calls
+    assert calls[0]["payload"]["response_format"]["type"] == "json_schema"
+    assert calls[1]["payload"]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in calls[2]["payload"]
+    assert "JSON" in calls[2]["payload"]["messages"][0]["content"]
+
+
 def test_structured_json_fallback_still_validates_schema(fake_openai):
     fake_openai.chat_outputs = [
         FakeBadRequestError("schema unsupported"),
@@ -885,6 +916,38 @@ def test_structured_json_responses_strict_400_falls_back_to_json_object(fake_ope
     assert calls[0]["payload"]["text"]["format"]["type"] == "json_schema"
     assert calls[1]["payload"]["text"]["format"] == {"type": "json_object"}
     assert "JSON" in calls[1]["payload"]["instructions"]
+
+
+def test_structured_json_responses_json_object_400_falls_back_to_plain_json_prompt(fake_openai):
+    fake_openai.responses_outputs = [
+        FakeBadRequestError("strict schema unsupported"),
+        FakeBadRequestError("text.format.type json_object is not supported"),
+        _responses_text(json.dumps({"answer": "pong"})),
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+
+    result = OpenAICompatibleClient(settings).structured_json(
+        [{"role": "user", "content": "ping"}],
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["answer"],
+            "properties": {"answer": {"type": "string"}},
+        },
+        schema_name="ping_response",
+    )
+
+    assert result == {"answer": "pong"}
+    calls = fake_openai.instances[0].calls
+    assert calls[0]["payload"]["text"]["format"]["type"] == "json_schema"
+    assert calls[1]["payload"]["text"]["format"] == {"type": "json_object"}
+    assert "text" not in calls[2]["payload"]
+    assert "JSON" in calls[2]["payload"]["instructions"]
 
 
 def test_error_mapping_redacts_api_key(fake_openai):

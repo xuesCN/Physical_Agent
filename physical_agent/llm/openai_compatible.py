@@ -258,13 +258,23 @@ class OpenAICompatibleClient:
                 schema=schema,
                 schema_name=schema_name,
             )
-            content = self.chat(
-                fallback_messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                response_format={"type": "json_object"},
-                metadata=metadata,
-            )
+            try:
+                content = self.chat(
+                    fallback_messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format={"type": "json_object"},
+                    metadata=metadata,
+                )
+            except OpenAICompatibleError as json_mode_exc:
+                if not _is_response_format_unsupported_error(json_mode_exc):
+                    raise
+                content = self.chat(
+                    fallback_messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    metadata=metadata,
+                )
         return _parse_and_validate_json(content, schema=schema)
 
     def responses_create(
@@ -884,6 +894,30 @@ def _is_reasoning_unsupported_error(error: OpenAICompatibleError) -> bool:
             "not allowed",
             "不支持",
             "未知",
+            "无效",
+        )
+    )
+
+
+def _is_response_format_unsupported_error(error: OpenAICompatibleError) -> bool:
+    if not error.is_bad_request:
+        return False
+    text = str(error).lower()
+    format_terms = ("response_format", "text.format", "json_object", "json_schema")
+    if not any(term in text for term in format_terms):
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "unsupported",
+            "not support",
+            "does not support",
+            "not valid",
+            "invalidparameter",
+            "invalid parameter",
+            "invalid",
+            "unrecognized",
+            "不支持",
             "无效",
         )
     )

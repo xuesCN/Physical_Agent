@@ -12,12 +12,12 @@
 **坑**：trace 含 prompt 明文，留在 workspace 别提交；实验用 mock_arm 即可，别等仿真。Langfuse 已挂起（重启条件见 SPEC 挂起清单）——别在 F0 引入。
 **验收**：llm-trace 里能对出三条调用路径的完整记录；产出 `docs/f0-report.zh-CN.md`（失败模式分类 + 对 F1/F3/F4 的排序建议）。
 
-## B6 退役 markdown 后端（排 F0 后、F1.3 前）
+## B6 退役 markdown 后端（已完成，维护约束）
 
-**思路**：退役的是 `MarkdownStateStore` 这个**后端选项**，不是 markdown 协议代码全家。删除：`state/markdown.py`、`state/factory.py` 的 markdown 分支、`config.py` 的 `_apply_legacy_markdown_backend` 自动探测、`tests/test_e2e_markdown_loop.py`、backend 矩阵测试的 markdown 参数化侧。**保留**：`protocol/markdown.py` 与 parsers/renderers（SAFETY.md 文件真源、SQLite 的 LOG.md 镜像、audit export 都依赖它们）；`migrate-md-to-sqlite` CLI 保留一个版本周期后再删（README 注明）。改写 `docs/state-backends.zh-CN.md` 为单后端说明。
-**坑**：`state/base.py` Protocol 里为 markdown 妥协的接口语义（如 `recover_stale_actions` 返回 0 的约定）可顺手收紧为 SQLite 语义；grep `backend` 全仓确认 GUI/state-check 的 `backend_role: legacy` 分支同步清理；旧 GUI（gui/server.py）如仍引用需一并核对。
-**验收**：`workspace.backend: markdown` 的配置给出清晰报错与迁移指引；全量测试绿（用例数会因删除矩阵 md 侧而减少，属预期）；SAFETY.md/LOG.md/audit export 行为不变。
-**顺带 docs 收尾（truth pass 残余）**：`sqlite-readiness.zh-CN.md` 并入改写后的 `state-backends.zh-CN.md`（其"建议下一步"多为已完成项）；`xiaozhi-driver-tutorial.zh-CN.md` 从 v1 markdown 协议口径（CAPABILITIES.md/ACTIONS.md 轮询）更新为 SQLite 黑板口径。
+**完成状态**：`MarkdownStateStore` / runtime Markdown backend 已退役；active backend 只支持 SQLite。`workspace.backend: markdown` 和"省略 backend 但存在完整 legacy Markdown workspace"都必须报迁移指引，不能静默打开旧后端。
+**保留边界**：`protocol/markdown.py` 与 parsers/renderers 仍服务 SAFETY.md 文件真源、SQLite 的 LOG.md 人类可读镜像、audit export，以及旧 workspace 迁移输入解析。不要把这类协议工具误删成"markdown 全家退役"。
+**禁止回流**：`LegacyMarkdownWorkspaceReader` 只服务 `migrate-md-to-sqlite`，不得被 runtime factory、watch、API、GUI、agent、chat、planner 或 MCP 直接使用；不得实现 `StateStore`，不得承接新功能字段。后续删除 `migrate-md-to-sqlite` 时，应一并删除 `LegacyMarkdownWorkspaceReader`。
+**维护检查**：新增状态字段时只改 SQLite 与审计导出；全仓 grep `LegacyMarkdownWorkspaceReader`、`MarkdownStateStore`、`workspace.backend: markdown`、`backend_role: legacy`，确认旧后端只出现在迁移/历史说明语境。
 
 ## F1 提案卡片 + Approve + 审批流
 

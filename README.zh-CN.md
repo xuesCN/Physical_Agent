@@ -4,7 +4,7 @@
 
 Physical Agent is a safe runtime for physical-world agents with a SQLite default state store and Markdown audit compatibility.
 
-Physical Agent 是一个面向安全物理世界 agent 的本地运行时。新项目默认使用 SQLite 作为状态真源，同时保留 Markdown backend、Markdown parser / renderer 和可读审计导出。v1 的重点不是堆功能，而是把认知侧 agent、物理侧 watch、driver 接入协议和安全边界拆清楚。
+Physical Agent 是一个面向安全物理世界 agent 的本地运行时。运行态 active backend 只支持 SQLite；Markdown parser / renderer 仍服务 SAFETY.md 文件真源、LOG.md 镜像、audit export 和旧 workspace 迁移输入。v1 的重点不是堆功能，而是把认知侧 agent、物理侧 watch、driver 接入协议和安全边界拆清楚。
 
 核心原则：
 
@@ -32,15 +32,15 @@ StateStore: new projects use workspace/state.db by default; SAFETY.md remains a 
 - 初始化 `workspace/`
 - 加载机器人或硬件 driver
 - 连接硬件或 simulator
-- 发布 `CAPABILITIES.md`
-- 更新 `WORLD.md`
-- 监听 action board（默认 SQLite；Markdown backend 下为 `ACTIONS.md`）
+- 发布 capabilities 到 SQLite 黑板
+- 更新 world 到 SQLite 黑板
+- 原子领取 SQLite action board
 - 在执行前做 safety gate 校验
 - 调用 `driver.execute(action)`
-- 写入 `FEEDBACK.md`
+- 写入 feedback
 - 追加 `LOG.md`
 
-`physical-agent run` 和 `physical-agent chat` 是认知侧入口，负责读取当前 StateStore、理解任务、生成结构化 action intent，并写入 pending action。显式使用 Markdown backend 时，这对应写入 `ACTIONS.md`。
+`physical-agent run` 和 `physical-agent chat` 是认知侧入口，负责读取当前 StateStore、理解任务、生成结构化 action intent，并写入 pending action。
 
 现在 `physical-agent chat` 也会自动识别代码类请求，比如“修改这个文件”“写测试”“修复这个 bug”“帮我接入这个 SDK”。命中后，它会切换到代码技能：在当前仓库根目录内直接写文件、运行测试、记录 lessons，并返回修改结果。这个能力仍然不改变物理执行边界，真正能接触硬件的只有 `physical-agent watch`。
 
@@ -178,18 +178,18 @@ workspace/
 
 旧协议 Markdown 文件使用 YAML front matter。正文可以有自然语言摘要，机器可读数据放在 fenced YAML code block 中。它们现在只作为迁移输入格式和审计/安全相关工具链的一部分保留。
 
-文件职责：
+旧格式中的文件职责：
 
-- `TASK.md`：当前任务和人类约束
-- `CAPABILITIES.md`：watch 根据 driver capabilities 自动生成，agent 只读
-- `WORLD.md`：watch 写入的当前世界状态
-- `ACTIONS.md`：agent 写入的 pending / completed / cancelled action board
-- `FEEDBACK.md`：watch 写入的执行反馈
-- `SAFETY.md`：人类拥有，watch 强制执行
-- `LOG.md`：审计日志
-- `CHAT.md`：人类和 agent 的对话历史
-- `PLAN.md`：chat agent 当前意图、步骤和 proposed actions
-- `MEMORY.md`：chat agent 跨轮次保留的小型记忆
+- `TASK.md`：记录当前任务和人类约束。
+- `CAPABILITIES.md`：由 watch 根据 driver capabilities 生成，agent 只读。
+- `WORLD.md`：记录 watch 写入的世界状态。
+- `ACTIONS.md`：记录 agent 写入的 pending / completed / cancelled action board。
+- `FEEDBACK.md`：记录 watch 写入的执行反馈。
+- `SAFETY.md`：仍由人类拥有，watch 强制执行。
+- `LOG.md`：仍作为人类可读日志镜像。
+- `CHAT.md`：记录人类和 agent 的对话历史。
+- `PLAN.md`：记录 chat agent 当前意图、步骤和 proposed actions。
+- `MEMORY.md`：记录 chat agent 跨轮次保留的小型记忆。
 
 静态启动配置放在 `physical-agent.yaml`。动态运行状态放在 `workspace/state.db`。项目没有 `JsonStateStore`，也没有 “JSON backend”：JSON 是 SQLite payload、API 响应和 GUI 渲染的数据格式。
 
@@ -430,7 +430,7 @@ pytest -q
 
 - Markdown front matter 和 fenced YAML parser / renderer
 - workspace 初始化、revision 递增、log append
-- StateStore backend matrix（Markdown / SQLite）
+- SQLite StateStore 的原子动作、lease recovery、迁移、state-check、audit export
 - 默认 SQLite init / setup / state-check / export-audit
 - driver manifest 和 config schema 校验
 - built-in driver 与本地 driver loader
@@ -440,7 +440,7 @@ pytest -q
 - mock arm pick/place 状态变化
 - rule-based planner
 - watch runtime step
-- 端到端 Markdown loop 和 SQLite loop
+- 端到端 SQLite loop
 - 一条命令 setup 和 smoke test
 - doctor 健康检查
 - GUI HTTP endpoints

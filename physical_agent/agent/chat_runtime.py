@@ -1009,7 +1009,7 @@ class ChatRuntime:
                     "Watch will validate them before anything touches the physical world."
                 ),
                 "intent": "act",
-                "steps": ["Interpret the task.", "Write proposed actions to ACTIONS.md."],
+                "steps": ["Interpret the task.", "Write proposed actions to StateStore."],
                 "actions": [action.model_dump(mode="json") for action in actions],
                 "memory": [],
             }

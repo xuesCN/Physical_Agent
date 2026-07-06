@@ -227,7 +227,7 @@ class XiaozhiMcpDriver(PhysicalDriver):
     """Physical Agent driver for a Xiaozhi-style MCP device adapter.
 
     The driver deliberately lives on the watch side. The agent only sees the
-    capabilities rendered into CAPABILITIES.md and never calls the MCP endpoint
+    capabilities published through StateStore and never calls the MCP endpoint
     directly.
     """
 

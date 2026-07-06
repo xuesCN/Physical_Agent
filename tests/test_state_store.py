@@ -16,6 +16,8 @@ from physical_agent.cli import app
 from physical_agent.config import PhysicalAgentConfig, load_config, write_default_config
 from physical_agent.protocol.schemas import Action, ChatPlan, Observation
 from physical_agent.protocol.workspace import Workspace
+from physical_agent.state.base import StateStore
+from physical_agent.state.legacy_markdown import LegacyMarkdownWorkspaceReader
 from physical_agent.state import SqliteStateStore, open_state_store
 from physical_agent.state import factory as state_factory
 from physical_agent.watch.runtime import WatchRuntime
@@ -84,6 +86,22 @@ def test_open_state_store_sqlite_backend(tmp_path):
 
     assert isinstance(store, SqliteStateStore)
     assert store.path == (tmp_path / "workspace").resolve()
+
+
+def test_legacy_markdown_reader_is_migration_only_not_state_store(tmp_path):
+    reader = LegacyMarkdownWorkspaceReader(tmp_path / "workspace")
+
+    assert not isinstance(reader, StateStore)
+    for runtime_method in (
+        "initialize",
+        "append_pending_action",
+        "claim_next_ready_action",
+        "mark_action_completed",
+        "mark_action_cancelled",
+        "append_log",
+        "export_human_view",
+    ):
+        assert not hasattr(reader, runtime_method)
 
 
 def test_sqlite_state_store_protocol_roundtrip(tmp_path):

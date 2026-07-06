@@ -11,15 +11,15 @@ from typer.testing import CliRunner
 
 import physical_agent.cli as cli_module
 from physical_agent.agent.chat_runtime import ChatRuntime
-from physical_agent.config import load_config, write_default_config
+from physical_agent.config import RETIRED_MARKDOWN_BACKEND_GUIDANCE, load_config, write_default_config
 from physical_agent.mcp.server import PhysicalAgentMCP
 from physical_agent.protocol.schemas import Action, Observation
 from physical_agent.protocol.workspace import Workspace
-from physical_agent.state import MarkdownStateStore, SqliteStateStore, open_state_store
+from physical_agent.state import SqliteStateStore, open_state_store
 from physical_agent.watch.runtime import WatchRuntime
 
 
-BACKENDS = ("markdown", "sqlite")
+BACKENDS = ("sqlite",)
 
 
 class _NoSkills:
@@ -78,19 +78,22 @@ def test_default_init_setup_and_state_check_use_sqlite_with_safety_file(tmp_path
         assert "Audit export writable: yes" in check.output
 
 
-def test_load_config_autodetects_legacy_markdown_workspace_when_backend_omitted(tmp_path):
+def test_load_config_rejects_legacy_markdown_workspace_when_backend_omitted(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     del data["workspace"]["backend"]
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     Workspace(tmp_path / "workspace").initialize()
 
-    config = load_config(config_path)
-    store = open_state_store(config_path=config_path)
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    message = str(exc_info.value)
+    assert "migrate-md-to-sqlite" in message
+    assert "workspace.backend: sqlite" in message
+    assert message == RETIRED_MARKDOWN_BACKEND_GUIDANCE
 
-    assert config.workspace.backend == "markdown"
-    assert isinstance(store, MarkdownStateStore)
-    assert store.exists()
+    with pytest.raises(ValueError, match="migrate-md-to-sqlite"):
+        open_state_store(config_path=config_path)
 
 
 def test_load_config_keeps_sqlite_default_without_legacy_markdown_workspace(tmp_path):
@@ -286,6 +289,7 @@ def test_markdown_to_sqlite_migration_preserves_readiness_state_and_audit(tmp_pa
     )
 
     assert migrate_result.exit_code == 0, migrate_result.output
+    assert "workspace.backend: sqlite" in migrate_result.output
     assert yaml.safe_load(config_path.read_text(encoding="utf-8"))["workspace"]["backend"] == "markdown"
 
     sqlite_store = SqliteStateStore(tmp_path / "workspace")
@@ -326,6 +330,33 @@ def test_markdown_to_sqlite_migration_preserves_readiness_state_and_audit(tmp_pa
     assert audit_memory["tags"] == ["readiness"]
     assert audit_memory["importance"] == 7
     assert _read_json(audit_dir / "log.json")["entries"][0]["message"] == "readiness log"
+
+
+def test_markdown_to_sqlite_migration_reads_legacy_workspace_when_backend_omitted(
+    tmp_path,
+):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    del data["workspace"]["backend"]
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    workspace = Workspace(tmp_path / "workspace")
+    workspace.initialize()
+    workspace.write_task("Migrate omitted backend", ["legacy reader only"])
+    workspace.write_actions([Action(id="act_omitted", robot="arm_1", capability="observe")])
+
+    migrate_result = CliRunner().invoke(
+        cli_module.app,
+        ["migrate-md-to-sqlite", "--config", str(config_path)],
+    )
+
+    assert migrate_result.exit_code == 0, migrate_result.output
+    assert "workspace.backend: sqlite" in migrate_result.output
+    assert "backend" not in yaml.safe_load(config_path.read_text(encoding="utf-8"))[
+        "workspace"
+    ]
+    sqlite_store = SqliteStateStore(tmp_path / "workspace")
+    assert sqlite_store.read_task()["task"] == "Migrate omitted backend"
+    assert _ids(sqlite_store.read_actions()["pending"]) == ["act_omitted"]
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -389,16 +420,12 @@ def test_state_check_reports_backend_readiness_without_mutating_state(
 
     assert result.exit_code == 0, result.output
     assert f"Backend: {backend}" in result.output
-    assert f"Backend role: {'recommended' if backend == 'sqlite' else 'legacy'}" in result.output
+    assert "Backend role: recommended" in result.output
     assert "Workspace initialized: yes" in result.output
     assert "Audit export writable: yes" in result.output
-    if backend == "sqlite":
-        assert "SQLite schema complete: yes" in result.output
-        assert "workspace/state.db" in result.output.replace("\\", "/")
-        assert "SAFETY.md remains the file source" in result.output
-    else:
-        assert "SQLite schema complete: n/a" in result.output
-        assert "Legacy compatibility backend" in result.output
+    assert "SQLite schema complete: yes" in result.output
+    assert "workspace/state.db" in result.output.replace("\\", "/")
+    assert "SAFETY.md remains the file source" in result.output
     assert config_path.read_text(encoding="utf-8") == before_config
     assert _ids(store.read_actions()["pending"]) == _ids(before_actions["pending"])
 

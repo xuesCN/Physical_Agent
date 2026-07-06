@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 from physical_agent.config import load_config, write_default_config
 from physical_agent.protocol.schemas import Action
-from physical_agent.protocol.workspace import Workspace
 from physical_agent.state import open_state_store
 from physical_agent.watch.runtime import WatchRuntime
 
@@ -34,12 +33,12 @@ def _feedback_events(store, event: str):
 
 def test_watch_runtime_step_executes_action(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    _write_config_backend(config_path, "markdown")
+    _write_config_backend(config_path, "sqlite")
     runtime = WatchRuntime(config_path)
     asyncio.run(runtime.setup())
-    workspace = Workspace(tmp_path / "workspace")
-    assert workspace.read_capabilities()["robots"]["arm_1"]["driver"] == "mock_arm"
-    workspace.write_actions(
+    store = open_state_store(config_path=config_path)
+    assert store.read_capabilities()["robots"]["arm_1"]["driver"] == "mock_arm"
+    store.write_actions(
         [
             Action(
                 id="act_001",
@@ -53,10 +52,10 @@ def test_watch_runtime_step_executes_action(tmp_path):
     )
     count = asyncio.run(runtime.step(setup=False))
     assert count == 1
-    actions = workspace.read_actions()
+    actions = store.read_actions()
     assert actions["pending"] == []
     assert actions["completed"][0].id == "act_001"
-    assert workspace.read_feedback()["latest"]["status"] == "completed"
+    assert store.read_feedback()["latest"]["status"] == "completed"
 
 
 def test_watch_runtime_driver_exception_cancels_sqlite_action(tmp_path, monkeypatch):

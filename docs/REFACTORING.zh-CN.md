@@ -5,7 +5,7 @@
 
 ## 0. 基线与纪律
 
-起点是一个 Markdown 黑板协议的双进程原型（agent 写提案文件、watch 读文件执行）。全程冻结四条红线：**agent/llm/gui 只提案；watch 唯一执行；SafetyGate 不被绕过；新能力默认关闭或向后兼容**。每轮 session 遵循 brief → 实现 → 测试 → handoff 循环，小步可回滚。
+起点是一个 Markdown 黑板协议的双进程原型（agent 写提案文件、watch 读文件执行）。全程冻结四条红线：**agent/llm/gui 只提案；watch 唯一执行；SafetyGate 不被绕过；新能力默认关闭或向后兼容**。每轮 session 遵循 brief → 实现 → 测试 → REFACTORING 收口，小步可回滚。
 
 ## 1. 阶段速查表
 
@@ -24,6 +24,7 @@
 | E0 | GUI 功能对齐（重置/硬件面板/配置注册） | E0 提交 + `29fb512` |
 | W1 | 驱动调用超时保护 | `2f00615` |
 | F0 | LLM planner 启用实验 + 本地 JSONL trace + 坏任务报告 | `d39e8f6` `caa4fa0` |
+| B6 | 退役 MarkdownStateStore 后端 | 本轮提交 |
 
 ## 2. 分阶段过程记录
 
@@ -81,6 +82,10 @@ A1 最初被跳过（工具循环建在自研 urllib 客户端上"够用"），�
 
 补测结果：后续按用户要求以项目 `.env` 的 `GPT_URL/GPT_KEY/GPT_MODEL` 作为测试源，并用空 settings workspace 避免旧 `workspace/.llm.json` 覆盖；provider 连通后暴露出当前模型不支持 `response_format` 的 `json_schema/json_object`，因此 `structured_json()` 增加第三档无 `response_format` 的 JSON-only prompt fallback，仍由本地 `jsonschema` 做最终校验。补测 15 条：10 条完成、5 条无提案、0 条 planner 异常、0 条 Gate 拦截。结论要改写为：LLM planner 已能产出中文/多步合法提案，但越界与部分幻觉能力被 planner 直接拒绝为无提案，没有形成 Gate 拒绝样本；模糊指令会激进规约成 pick/place，F1/F3/F4 仍需围绕"不确定性展示、上下文解耦、执行后断言"继续排。
 
+### B6：退役 MarkdownStateStore 后端
+
+动机：B3.8 后 SQLite 已是默认且经原子动作/lease/audit 硬化；F1.3 审批流即将扩展 action 元数据，继续维护 MarkdownStateStore 会让新审批字段为死后端重复实现。过程：删除 active backend 的 `state/markdown.py` 与 factory markdown 分支，`load_config()` 不再自动探测 legacy Markdown workspace；显式 `workspace.backend: markdown` 或省略 backend 但存在完整旧 Markdown workspace 时均报清晰迁移指引。`migrate-md-to-sqlite` 保留一个版本周期，但改走 `LegacyMarkdownWorkspaceReader` 迁移专用只读路径，不实现 `StateStore`，避免运行态绕回旧后端。测试侧删除 markdown e2e 与 backend 矩阵 md 侧，保留 SQLite 的原子领取、lease recovery、并发 proposal、SAFETY 文件真源、LOG 镜像、audit export 与迁移回归。文档同步：`state-backends` 改为 SQLite-only，`sqlite-readiness` 并入删除，bring-up 与 xiaozhi 教程改成 SQLite 黑板口径，旧独立 handoff 删除。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -93,6 +98,7 @@ A1 最初被跳过（工具循环建在自研 urllib 客户端上"够用"），�
 8. **审批目前是死胡同**：requires_approval 只会拒绝，无放行通道——SPEC F1.3 待办。
 9. **项目根 `physical-agent.yaml` 是 ignored 本地运行配置**（F0）：本轮按要求切到 `planner: llm` 但不强行纳入版本库；共享默认仍以 `config.py` 的 `rule_based` 与模板为准。
 10. **F0 补测凭据源固定为 `.env`**：真实 provider 测试使用项目 `.env`，实验命令用空 settings workspace 避免旧 `workspace/.llm.json` 覆盖；GUI/runtime 的本地设置机制暂不重构，留给后续配置收口。
+11. **退役 active backend 与保留迁移 reader 分离**（B6）：运行态只支持 SQLite；旧 Markdown 文件只作为迁移输入读取，迁移 reader 不实现 `StateStore`，不进入 factory，也不承担新功能字段。
 
 ## 4. 经验教训（流程侧）
 
@@ -101,5 +107,6 @@ A1 最初被跳过（工具循环建在自研 urllib 客户端上"够用"），�
 - **git/CI 基建要跟上纪律**：长期单分支不 push、无 CI、测试对宿主环境敏感（代理变量/Python 版本），均记为工程欠账。
 - **mock 测不出阻塞类缺陷**（W1 的教训）：凡是"永不失败"的测试替身，都在掩盖一类真实故障模式；需要故意注入挂死/超时的对抗性测试。
 - **LLM 实验先固定凭据源与 provider 能力，再谈 planner 质量**（F0 的教训）：同一个 OpenAI-compatible 入口可能不支持 `response_format`/JSON mode；批量实验要先用 `.env` 连通、记录模型能力，再靠本地 schema 校验兜底，否则会把 provider 兼容问题误读成 planner/Gate 问题。
+- **后端退役要同时保迁移旁路与清 UI 口径**（B6 的教训）：删除 factory 分支不够，CLI 迁移、state-check、前端说明、e2e mock、操作手册和旧 handoff 都可能继续暴露退役后端。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

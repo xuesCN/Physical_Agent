@@ -395,7 +395,7 @@ def test_chat_runtime_tool_loop_retrieval_payload_respects_enabled_flag(
         server.server_close()
 
 
-def test_search_memory_cli_is_read_only_for_sqlite_and_markdown(
+def test_search_memory_cli_is_read_only_for_sqlite(
     tmp_path,
     monkeypatch,
 ):
@@ -405,42 +405,39 @@ def test_search_memory_cli_is_read_only_for_sqlite_and_markdown(
 
     monkeypatch.setattr(cli_module, "WatchRuntime", ExplodingWatchRuntime)
 
-    for backend in ("sqlite", "markdown"):
-        root = tmp_path / backend
-        root.mkdir()
-        config_path = write_default_config(root / "physical-agent.yaml", overwrite=True)
-        _set_backend(config_path, backend)
-        store = open_state_store(config_path=config_path)
-        store.initialize()
-        store.write_actions([Action(id=f"act_{backend}", robot="arm_1", capability="observe")])
-        store.append_memory_chunk(
-            {
-                "source_type": "memory",
-                "source_id": f"note-{backend}",
-                "chunk_index": 0,
-                "content": f"{backend} retrieval contract",
-                "tags": ["contract"],
-                "trust_level": "trusted",
-            }
-        )
-        before_config = config_path.read_text(encoding="utf-8")
-        before_pending = [action.id for action in store.read_actions()["pending"]]
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _set_backend(config_path, "sqlite")
+    store = open_state_store(config_path=config_path)
+    store.initialize()
+    store.write_actions([Action(id="act_sqlite", robot="arm_1", capability="observe")])
+    store.append_memory_chunk(
+        {
+            "source_type": "memory",
+            "source_id": "note-sqlite",
+            "chunk_index": 0,
+            "content": "sqlite retrieval contract",
+            "tags": ["contract"],
+            "trust_level": "trusted",
+        }
+    )
+    before_config = config_path.read_text(encoding="utf-8")
+    before_pending = [action.id for action in store.read_actions()["pending"]]
 
-        result = CliRunner().invoke(
-            app,
-            [
-                "search-memory",
-                "retrieval contract",
-                "--config",
-                str(config_path),
-                "--limit",
-                "5",
-            ],
-        )
+    result = CliRunner().invoke(
+        app,
+        [
+            "search-memory",
+            "retrieval contract",
+            "--config",
+            str(config_path),
+            "--limit",
+            "5",
+        ],
+    )
 
-        assert result.exit_code == 0, result.output
-        assert "Found 1 chunk(s)." in result.output
-        assert f"note-{backend}" in result.output
-        assert config_path.read_text(encoding="utf-8") == before_config
-        assert [action.id for action in store.read_actions()["pending"]] == before_pending
-        assert yaml.safe_load(before_config)["workspace"]["backend"] == backend
+    assert result.exit_code == 0, result.output
+    assert "Found 1 chunk(s)." in result.output
+    assert "note-sqlite" in result.output
+    assert config_path.read_text(encoding="utf-8") == before_config
+    assert [action.id for action in store.read_actions()["pending"]] == before_pending
+    assert yaml.safe_load(before_config)["workspace"]["backend"] == "sqlite"

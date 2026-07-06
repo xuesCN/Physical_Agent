@@ -496,7 +496,7 @@ def migrate_md_to_sqlite(
         help="Replace an existing workspace/state.db file.",
     ),
 ) -> None:
-    cfg = load_config(config)
+    cfg = load_config(config, allow_retired_markdown=True)
     workspace_path = cfg.workspace_path(config.resolve().parent)
     try:
         result = migrate_markdown_workspace_to_sqlite(
@@ -527,7 +527,8 @@ def migrate_md_to_sqlite(
     )
     typer.echo(
         "Config was not changed. To use this SQLite database, set "
-        "`workspace.backend: sqlite` in physical-agent.yaml."
+        "`workspace.backend: sqlite` in physical-agent.yaml before starting "
+        "CLI/API/GUI/watch."
     )
 
 

@@ -1,42 +1,10 @@
-import yaml
-
 from physical_agent.config import write_default_config
 from physical_agent.mcp.server import PhysicalAgentMCP
-from physical_agent.protocol.workspace import Workspace
 from physical_agent.state import open_state_store
-
-
-def test_mcp_propose_action_only_writes_pending_board(tmp_path):
-    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    data["workspace"]["backend"] = "markdown"
-    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
-    mcp = PhysicalAgentMCP(config_path)
-
-    result = mcp.propose_action(
-        {
-            "id": "act_mcp_001",
-            "robot": "arm_1",
-            "capability": "observe",
-            "params": {},
-            "reason": "Tool caller wants observation.",
-        }
-    )
-
-    assert result["ok"] is True
-    assert result["action_id"] == "act_mcp_001"
-    actions = workspace.read_actions()
-    assert [action.id for action in actions["pending"]] == ["act_mcp_001"]
-    assert actions["completed"] == []
 
 
 def test_mcp_propose_action_sqlite_only_writes_pending_board(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    data["workspace"]["backend"] = "sqlite"
-    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     store = open_state_store(config_path=config_path)
     store.initialize()
     mcp = PhysicalAgentMCP(config_path)

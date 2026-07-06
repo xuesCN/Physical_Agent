@@ -50,8 +50,8 @@
 
 ## 3. 已完成里程碑（速查）
 
-P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态存储全套（SQLite 默认/原子动作/lease/审计）· B4a-c 记忆摄入检索地基 · C1-C3.2 FastAPI+SSE+React 仪表盘 · D1-D3.1 传输层+心跳看门狗 · D4 实机文档 · A1.0-A1.6a 官方 SDK/流式/abort/设置/深思考 · B5 后端口径收口 · E0.1-E0.3 GUI 对齐（重置/硬件面板/配置注册）· W1 驱动调用超时保护。
-逐项提交号与决策见 `REFACTORING.zh-CN.md` §1-§2。测试基线 246 用例。
+P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态存储全套（SQLite 默认/原子动作/lease/审计）· B4a-c 记忆摄入检索地基 · C1-C3.2 FastAPI+SSE+React 仪表盘 · D1-D3.1 传输层+心跳看门狗 · D4 实机文档 · A1.0-A1.6a 官方 SDK/流式/abort/设置/深思考 · B5 后端口径收口 · E0.1-E0.3 GUI 对齐（重置/硬件面板/配置注册）· W1 驱动调用超时保护 · B6 退役 MarkdownStateStore 后端。
+逐项提交号与决策见 `REFACTORING.zh-CN.md` §1-§2。测试基线 243 用例。
 
 ## 4. 待办矩阵（backlog，活账本）
 
@@ -61,7 +61,7 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | 编号 | 内容 | 归属 | 状态 |
 | --- | --- | --- | --- |
 | F0 | LLM planner + 本地调用留痕 + 坏任务实验报告 | §2 | 🟡 第一轮完成；15 条：10 完成、5 无提案、0 Gate 拦截。**Review 复核（2026-07-06）**：trace 证实 bounds 在 prompt 内、拒绝为知情拒绝——报告"F3 优先"论据不成立，顺序维持 F1→F3；遗留=Gate 直击组（绕 planner 直接 propose 坏动作留 LLM 时代审计样本，小活可并入 F1 轮） |
-| B6 | 退役 markdown 后端（保留 renderer 与迁移命令） | §2 | ⚪ 排 F0 后、F1.3 前 |
+| B6 | 退役 markdown 后端（保留 renderer 与迁移命令） | §2 | ✅ 2026-07-06 完成：active backend 只剩 SQLite；旧 Markdown 仅迁移 reader 可读 |
 | F1 | 提案卡片 + Approve + 审批流（F1.3 需 brief） | §2 | ⚪ |
 | F2 | feedback 时间线 + world 视图 + JSON 树 | §2 | ⚪ |
 | F3 | context_builder 解耦 | §2 | ⚪ 接实机前必做 |

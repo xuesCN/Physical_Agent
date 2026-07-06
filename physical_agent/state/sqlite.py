@@ -1543,9 +1543,9 @@ def migrate_markdown_workspace_to_sqlite(
     *,
     overwrite: bool = False,
 ) -> dict[str, Any]:
-    from physical_agent.state.markdown import MarkdownStateStore
+    from physical_agent.state.legacy_markdown import LegacyMarkdownWorkspaceReader
 
-    source = MarkdownStateStore(workspace_path)
+    source = LegacyMarkdownWorkspaceReader(workspace_path)
     if not source.exists():
         raise FileNotFoundError(f"Markdown workspace is not initialized at {source.path}.")
 

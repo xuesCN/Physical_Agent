@@ -303,23 +303,23 @@ test("settings panel saves and tests LLM settings with mocked API", async ({
   expectNoConsoleErrors(consoleErrors);
 });
 
-test("settings panel explains markdown legacy backend without live switching", async ({
+test("settings panel explains sqlite backend without live switching", async ({
   page,
 }) => {
   const consoleErrors = collectConsoleErrors(page);
   await mockReadyApiWithRobot(page, {
-    backend: "markdown",
-    workspace_path: "C:/tmp/physical-agent-markdown-workspace",
+    backend: "sqlite",
+    workspace_path: "C:/tmp/physical-agent-sqlite-workspace",
   });
 
   await page.goto("/");
   await page.getByTestId("nav-settings").click();
 
   await expect(page.getByTestId("state-backend-summary")).toContainText(
-    "Legacy backend",
+    "Recommended backend",
   );
   await expect(page.getByTestId("state-backend-summary")).toContainText(
-    "migrate-md-to-sqlite",
+    "state.db is source of truth",
   );
   await expect(page.getByTestId("state-backend-summary")).toContainText(
     "no GUI live backend switch",
@@ -708,41 +708,31 @@ async function mockApiSnapshot(page: Page, snapshot: Record<string, unknown>) {
 }
 
 function stateCheckForSnapshot(snapshot: Record<string, unknown>) {
-  const backend = String(snapshot.backend ?? "sqlite");
   const workspacePath = String(
     snapshot.workspace_path ?? "C:/tmp/physical-agent-workspace",
   );
-  const isSqlite = backend === "sqlite";
   return {
     ok: true,
     ready: Boolean(snapshot.ready ?? true),
     message: "State backend is ready.",
-    backend,
-    backend_role: isSqlite ? "recommended" : "legacy",
-    backend_label: isSqlite
-      ? "SQLite recommended backend"
-      : "Markdown legacy backend",
-    source_of_truth: isSqlite ? `${workspacePath}/state.db` : workspacePath,
-    payload_format: isSqlite
-      ? "JSON payloads inside SQLite tables"
-      : "Markdown protocol files",
-    human_view: isSqlite
-      ? "export-audit creates a read-only audit view"
-      : "Markdown files are directly human-editable",
+    backend: "sqlite",
+    backend_role: "recommended",
+    backend_label: "SQLite recommended backend",
+    source_of_truth: `${workspacePath}/state.db`,
+    payload_format: "JSON payloads inside SQLite tables",
+    human_view: "export-audit creates a read-only audit view",
     safety_source: `${workspacePath}/SAFETY.md`,
     runtime_switch_supported: false,
-    switching_model: isSqlite
-      ? "Change workspace.backend in config and restart the process; there is no GUI live backend switch."
-      : "Migrate with migrate-md-to-sqlite, update workspace.backend, then restart the process; there is no GUI live backend switch.",
-    recommendation: isSqlite
-      ? "Use workspace/state.db as the state source of truth; SAFETY.md remains the file source for safety rules."
-      : "Legacy compatibility backend; migrate to SQLite for the recommended state source of truth.",
+    switching_model:
+      "Change workspace.backend in config and restart the process; there is no GUI live backend switch.",
+    recommendation:
+      "Use workspace/state.db as the state source of truth; SAFETY.md remains the file source for safety rules.",
     workspace_path: workspacePath,
     workspace_initialized: Boolean(snapshot.ready ?? true),
     audit_dir: `${workspacePath}/audit`,
     audit_export_writable: true,
-    sqlite_schema_complete: isSqlite ? true : null,
-    sqlite_chunk_schema_complete: isSqlite ? true : null,
+    sqlite_schema_complete: true,
+    sqlite_chunk_schema_complete: true,
     sqlite_missing_tables: [],
     sqlite_missing_action_columns: [],
     sqlite_missing_memory_columns: [],

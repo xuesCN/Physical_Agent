@@ -151,17 +151,15 @@ workspace:
   backend: sqlite
 ```
 
-运行时通过 `StateStore` Protocol 打开**一个且仅一个 active backend**。默认情况下，动态运行状态写入 `workspace/state.db`；SQLite 表里的 payload 是 JSON。API/GUI 返回的 JSON 是结构化传输与渲染视图，不是另一套独立存储层。`SAFETY.md` 仍是人类拥有的文件真源，watch 每次执行前都会读取并强制执行。`export-audit` 可以把当前 backend 的状态导出为可读审计视图到 `workspace/audit/`。
+运行时通过 `StateStore` Protocol 打开**一个且仅一个 active backend**：SQLite。动态运行状态写入 `workspace/state.db`；SQLite 表里的 payload 是 JSON。API/GUI 返回的 JSON 是结构化传输与渲染视图，不是另一套独立存储层。`SAFETY.md` 仍是人类拥有的文件真源，watch 每次执行前都会读取并强制执行。`export-audit` 可以把当前 SQLite 状态导出为可读审计视图到 `workspace/audit/`。
 
-Markdown backend 仍然保留。已有项目如果显式配置：
+旧 Markdown workspace 已不能作为 active backend 打开。已有旧项目先迁移：
 
-```yaml
-workspace:
-  path: ./workspace
-  backend: markdown
+```powershell
+physical-agent migrate-md-to-sqlite --config physical-agent.yaml
 ```
 
-则 `workspace/*.md` 仍是状态真源。这个 backend 作为 legacy 兼容路径保留，适合已有 Markdown workspace 和人工编辑场景。
+迁移完成后，把 `physical-agent.yaml` 改成 `workspace.backend: sqlite`，再启动 CLI/API/GUI/watch。迁移命令保留一个版本周期，使用迁移专用 legacy reader 读取旧文件。
 
 ```text
 workspace/
@@ -178,7 +176,7 @@ workspace/
   artifacts/
 ```
 
-每个协议 Markdown 文件都使用 YAML front matter。正文可以有自然语言摘要，机器可读数据放在 fenced YAML code block 中。
+旧协议 Markdown 文件使用 YAML front matter。正文可以有自然语言摘要，机器可读数据放在 fenced YAML code block 中。它们现在只作为迁移输入格式和审计/安全相关工具链的一部分保留。
 
 文件职责：
 
@@ -193,9 +191,9 @@ workspace/
 - `PLAN.md`：chat agent 当前意图、步骤和 proposed actions
 - `MEMORY.md`：chat agent 跨轮次保留的小型记忆
 
-静态启动配置放在 `physical-agent.yaml`。动态运行状态默认放在 `workspace/state.db`；显式 `backend: markdown` 时放在 Markdown workspace。项目没有 `JsonStateStore`，也没有 “JSON backend”：JSON 是 SQLite payload、API 响应和 GUI 渲染的数据格式。
+静态启动配置放在 `physical-agent.yaml`。动态运行状态放在 `workspace/state.db`。项目没有 `JsonStateStore`，也没有 “JSON backend”：JSON 是 SQLite payload、API 响应和 GUI 渲染的数据格式。
 
-切换 backend 是运维动作：修改 `workspace.backend` 后重启相关进程。GUI 不支持 live backend switch，也没有“迁移并自动切换”API。`migrate-md-to-sqlite` 只做 Markdown -> SQLite 迁移，不会自动修改已有 config；`export-audit` 只导出审计视图，不会修改 backend 或 action board。本轮不提供 SQLite -> Markdown 反向迁移。
+GUI 不支持 live backend switch，也没有“迁移并自动切换”API。`migrate-md-to-sqlite` 只做 Markdown -> SQLite 迁移，不会自动修改已有 config；`export-audit` 只导出审计视图，不会修改 backend 或 action board。不提供 SQLite -> Markdown 反向迁移。
 
 更完整的 backend 说明见 [`docs/state-backends.zh-CN.md`](docs/state-backends.zh-CN.md)。
 

@@ -26,8 +26,8 @@ agent / gui / chat / api
 ## 当前状态
 
 - 新项目默认使用 SQLite backend，运行态状态写入 `workspace/state.db`。
-- 旧 Markdown workspace 可在 `physical-agent.yaml` 中显式配置 `workspace.backend: markdown`。
-- 如果配置省略 `workspace.backend`，且目标 workspace 已存在完整 legacy Markdown 协议文件，当前代码会自动识别为 Markdown backend。
+- `workspace.backend: markdown` 已退役；显式配置会被拒绝，并提示先运行 `migrate-md-to-sqlite` 再改成 `workspace.backend: sqlite`。
+- 如果配置省略 `workspace.backend`，且目标 workspace 已存在完整 legacy Markdown 协议文件，当前代码也会拒绝自动探测，不会打开旧 backend。
 - `SAFETY.md` 仍是文件真源。即使默认状态 backend 是 SQLite，watch 执行前仍读取并强制执行 `SAFETY.md`。
 - GUI/API/agent/chat 只提交动作提案，不直接执行硬件。
 - 上传文件、memory、retrieval chunk 只能作为不可信上下文；它们不是安全事实，也不能替代 `SAFETY.md`、人工确认或硬件急停。
@@ -51,7 +51,7 @@ py -3.12 -m venv .venv
 基础验证：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q tests\test_safety_boundaries.py tests\test_backend_matrix.py::test_load_config_autodetects_legacy_markdown_workspace_when_backend_omitted
+.\.venv\Scripts\python.exe -m pytest -q tests\test_safety_boundaries.py tests\test_backend_matrix.py::test_load_config_rejects_legacy_markdown_workspace_when_backend_omitted
 ```
 
 时间允许时再跑全量：

@@ -8,6 +8,11 @@ from pydantic import BaseModel, Field
 
 
 DEFAULT_CONFIG_NAME = "physical-agent.yaml"
+RETIRED_MARKDOWN_BACKEND_GUIDANCE = (
+    "Markdown workspace backend has been retired. Run "
+    "`physical-agent migrate-md-to-sqlite --config physical-agent.yaml`, then "
+    "set `workspace.backend: sqlite` in physical-agent.yaml."
+)
 LEGACY_MARKDOWN_WORKSPACE_FILES = (
     "TASK.md",
     "CAPABILITIES.md",
@@ -138,7 +143,11 @@ def default_config_dict() -> dict[str, Any]:
     }
 
 
-def load_config(path: str | Path = DEFAULT_CONFIG_NAME) -> PhysicalAgentConfig:
+def load_config(
+    path: str | Path = DEFAULT_CONFIG_NAME,
+    *,
+    allow_retired_markdown: bool = False,
+) -> PhysicalAgentConfig:
     config_path = Path(path)
     if not config_path.exists():
         raise FileNotFoundError(
@@ -146,7 +155,8 @@ def load_config(path: str | Path = DEFAULT_CONFIG_NAME) -> PhysicalAgentConfig:
         )
     with config_path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
-    _apply_legacy_markdown_backend(data, config_path)
+    if not allow_retired_markdown:
+        _reject_retired_markdown_backend(data, config_path)
     return PhysicalAgentConfig.model_validate(data)
 
 
@@ -160,12 +170,15 @@ def write_default_config(path: str | Path = DEFAULT_CONFIG_NAME, *, overwrite: b
     return config_path.resolve()
 
 
-def _apply_legacy_markdown_backend(data: Any, config_path: Path) -> None:
+def _reject_retired_markdown_backend(data: Any, config_path: Path) -> None:
     if not isinstance(data, dict):
         return
     workspace_data = data.get("workspace")
     if workspace_data is not None and not isinstance(workspace_data, dict):
         return
+    backend = (workspace_data or {}).get("backend")
+    if isinstance(backend, str) and backend.strip().lower() == "markdown":
+        raise ValueError(RETIRED_MARKDOWN_BACKEND_GUIDANCE)
     if workspace_data is not None and "backend" in workspace_data:
         return
 
@@ -175,14 +188,12 @@ def _apply_legacy_markdown_backend(data: Any, config_path: Path) -> None:
     if not workspace_path.is_absolute():
         workspace_path = config_path.resolve().parent / workspace_path
     workspace_path = workspace_path.resolve()
-    if not workspace_path.exists():
-        return
-    if not all(
+    if _looks_like_legacy_markdown_workspace(workspace_path):
+        raise ValueError(RETIRED_MARKDOWN_BACKEND_GUIDANCE)
+
+
+def _looks_like_legacy_markdown_workspace(workspace_path: Path) -> bool:
+    return workspace_path.exists() and all(
         (workspace_path / filename).exists()
         for filename in LEGACY_MARKDOWN_WORKSPACE_FILES
-    ):
-        return
-
-    data.setdefault("workspace", {})
-    data["workspace"]["backend"] = "markdown"
-
+    )

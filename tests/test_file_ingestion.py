@@ -19,12 +19,6 @@ from physical_agent.protocol.schemas import Action
 from physical_agent.state import open_state_store
 
 
-def _set_backend(config_path: Path, backend: str) -> None:
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    data["workspace"]["backend"] = backend
-    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-
-
 def _read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -67,23 +61,20 @@ def test_sqlite_file_ingestion_copies_text_records_metadata_memory_and_audit(tmp
     assert _read_json(audit_dir / "memory.json")["notes"][0]["source"] == "upload"
 
 
-def test_markdown_file_ingestion_records_manifest_and_memory(tmp_path):
+def test_text_file_ingestion_records_manifest_and_memory(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    _set_backend(config_path, "markdown")
     store = open_state_store(config_path=config_path)
     store.initialize()
     source = tmp_path / "notes.txt"
-    source.write_text("markdown backend upload note", encoding="utf-8")
+    source.write_text("sqlite backend upload note", encoding="utf-8")
 
-    result = ingest_file(source, store, tags="md-backend")
+    result = ingest_file(source, store, tags="sqlite-backend")
 
     metadata = result["metadata"]
-    manifest = store.uploads_path / "manifest.json"
-    assert manifest.exists()
-    assert _read_json(manifest)["uploads"][0]["sha256"] == metadata["sha256"]
+    assert store.read_uploads()["uploads"][0]["sha256"] == metadata["sha256"]
     assert Path(metadata["stored_path"]).exists()
     memory = store.read_memory(source="upload")["notes"][0]
-    assert memory["tags"] == ["upload", ".txt", "md-backend"]
+    assert memory["tags"] == ["upload", ".txt", "sqlite-backend"]
     assert "UNTRUSTED UPLOAD EXCERPT" in memory["content"]
 
     audit_dir = Path(store.export_human_view()["out_dir"])

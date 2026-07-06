@@ -184,28 +184,21 @@ export function SettingsPanel({ health, state, onWorkspaceReset }: SettingsPanel
   }
 
   const activeBackend = stateCheck?.backend ?? state?.backend ?? health?.backend ?? "-";
-  const backendRole = stateCheck?.backend_role ?? (activeBackend === "sqlite" ? "recommended" : activeBackend === "markdown" ? "legacy" : undefined);
-  const backendTagColor = backendRole === "recommended" ? "green" : backendRole === "legacy" ? "gold" : "default";
+  const backendRole = stateCheck?.backend_role ?? (activeBackend === "sqlite" ? "recommended" : undefined);
+  const backendTagColor = backendRole === "recommended" ? "green" : "default";
   const backendNotice =
-    backendRole === "legacy"
+    backendRole === "recommended"
       ? {
-          type: "warning" as const,
-          message: "Legacy backend",
+          type: "success" as const,
+          message: "Recommended backend",
           description:
-            "Markdown is retained for compatibility. Migrate with CLI migrate-md-to-sqlite, set workspace.backend to sqlite, and restart; there is no GUI live backend switch."
+            "state.db is source of truth; SQLite payloads are JSON; SAFETY.md remains file source."
         }
-      : backendRole === "recommended"
-        ? {
-            type: "success" as const,
-            message: "Recommended backend",
-            description:
-              "state.db is source of truth; SQLite payloads are JSON; SAFETY.md remains file source."
-          }
-        : {
-            type: "info" as const,
-            message: "State backend",
-            description: "State-check is loading or unavailable."
-          };
+      : {
+          type: "info" as const,
+          message: "State backend",
+          description: "State-check is loading or unavailable."
+        };
   const stateCheckStatus = stateCheck
     ? stateCheck.ok
       ? "ready"

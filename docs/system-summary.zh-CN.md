@@ -20,7 +20,7 @@
 | `api/server.py`（FastAPI，22 端点） | proposal-only REST + chat(stream/reset/abort) + settings/llm + upload + events(SSE) + **workspace/reset + integrate + config + config/robots**(E0) | ✅ 🟢 |
 | `api/watch_service.py` | `--watch` opt-in 常驻 watch + SSE broker | ✅ |
 | `frontend/`（React+AntD，14 组件 9 页面） | Overview/Actions/World/Robots/**Hardware**/Memory/Safety/Events/Settings；懒加载+chunk 拆分；chat 基础 markdown 渲染（react-markdown）；ConfigPanel 只读 + 注册 robot | ✅ 🟢 |
-| `gui/server.py`（旧内联 GUI） | ThreadingHTTPServer 单文件版 | 🟡 legacy，B6 时评估去留 |
+| `gui/server.py`（旧内联 GUI） | ThreadingHTTPServer 单文件版，经同一 SQLite-only state factory 读写 | 🟡 legacy UI |
 | `mcp/server.py` | MCP facade：submit_task/get_state/list_robots/propose_action（提案专用） | ✅ |
 | Ink 终端 UI | 第五入口（计划中，SPEC T 系列） | ⚪ 未建 |
 
@@ -34,7 +34,7 @@
 
 ## 4. 状态 · 协议层
 
-SQLite 默认后端（原子动作/lease/恢复/WAL）✅ · markdown 后端 legacy 🟡（退役已立项 B6）· `SAFETY.md` 文件真源 ✅ · audit export 人类可读导出 ✅ · state-check 诊断（含 backend 语义字段）✅ · rolling summary 上下文压缩 ✅ · pydantic 协议模型 ✅。
+SQLite 唯一 active 后端（原子动作/lease/恢复/WAL）✅ · retired Markdown workspace 仅可经 `migrate-md-to-sqlite` 读取迁移 ✅ · `SAFETY.md` 文件真源 ✅ · audit export 人类可读导出 ✅ · state-check 诊断 ✅ · rolling summary 上下文压缩 ✅ · pydantic 协议模型 ✅。
 
 ## 5. 摄入 · 记忆 · 检索
 

@@ -22,7 +22,7 @@ export interface StateCheckResult {
   ready?: boolean;
   message?: string;
   backend: string;
-  backend_role?: "recommended" | "legacy" | "unsupported" | string;
+  backend_role?: "recommended" | "unsupported" | string;
   backend_label?: string;
   source_of_truth?: string;
   payload_format?: string;

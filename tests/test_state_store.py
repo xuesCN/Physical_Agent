@@ -13,10 +13,10 @@ import physical_agent.watch.runtime as watch_runtime_module
 from physical_agent.agent.chat_runtime import ChatRuntime
 from physical_agent.agent.runtime import AgentRuntime
 from physical_agent.cli import app
-from physical_agent.config import PhysicalAgentConfig, write_default_config
+from physical_agent.config import PhysicalAgentConfig, load_config, write_default_config
 from physical_agent.protocol.schemas import Action, ChatPlan, Observation
 from physical_agent.protocol.workspace import Workspace
-from physical_agent.state import MarkdownStateStore, SqliteStateStore, open_state_store
+from physical_agent.state import SqliteStateStore, open_state_store
 from physical_agent.state import factory as state_factory
 from physical_agent.watch.runtime import WatchRuntime
 
@@ -49,14 +49,21 @@ def test_open_state_store_defaults_to_sqlite(tmp_path):
     assert store.path == (tmp_path / "workspace").resolve()
 
 
-def test_open_state_store_explicit_markdown_backend(tmp_path):
+def test_open_state_store_rejects_explicit_markdown_backend(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     _set_config_backend(config_path, "markdown")
 
-    store = open_state_store(config_path=config_path)
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    message = str(exc_info.value)
+    assert "migrate-md-to-sqlite" in message
+    assert "workspace.backend: sqlite" in message
 
-    assert isinstance(store, MarkdownStateStore)
-    assert store.path == (tmp_path / "workspace").resolve()
+    config = PhysicalAgentConfig.model_validate(
+        {"workspace": {"path": "./workspace", "backend": "markdown"}}
+    )
+    with pytest.raises(ValueError, match="migrate-md-to-sqlite"):
+        open_state_store(config, base_dir=tmp_path)
 
 
 def test_open_state_store_rejects_unsupported_backend(tmp_path):
@@ -64,7 +71,7 @@ def test_open_state_store_rejects_unsupported_backend(tmp_path):
         {"workspace": {"path": "./workspace", "backend": "unknown"}}
     )
 
-    with pytest.raises(ValueError, match="Supported backends"):
+    with pytest.raises(ValueError, match="Supported backend: sqlite"):
         open_state_store(config, base_dir=tmp_path)
 
 
@@ -177,40 +184,6 @@ def test_sqlite_state_store_protocol_roundtrip(tmp_path):
     with sqlite3.connect(store.db_path) as conn:
         count = conn.execute("SELECT count(*) FROM log_entries").fetchone()[0]
     assert count == 1
-
-
-def test_markdown_append_pending_action_preserves_action_board(tmp_path):
-    store = MarkdownStateStore(tmp_path / "workspace")
-    store.initialize()
-    store.write_actions(
-        [Action(id="act_001", robot="arm_1", capability="observe")],
-        [Action(id="act_done", robot="arm_1", capability="pick")],
-        [Action(id="act_cancel", robot="arm_1", capability="place")],
-    )
-
-    appended = store.append_pending_action(
-        {
-            "id": "act_002",
-            "robot": "arm_1",
-            "capability": "move_to",
-            "params": {"x": 1, "y": 2, "z": 3},
-            "reason": "compatible append",
-        }
-    )
-
-    assert appended.id == "act_002"
-    actions = store.read_actions()
-    assert [action.id for action in actions["pending"]] == ["act_001", "act_002"]
-    assert [action.id for action in actions["completed"]] == ["act_done"]
-    assert [action.id for action in actions["cancelled"]] == ["act_cancel"]
-
-    claimed = store.claim_next_ready_action()
-    assert claimed is not None
-    assert claimed.id == "act_001"
-    store.mark_action_completed(claimed)
-    actions = store.read_actions()
-    assert [action.id for action in actions["pending"]] == ["act_002"]
-    assert [action.id for action in actions["completed"]] == ["act_done", "act_001"]
 
 
 def test_sqlite_append_pending_action_writes_pending(tmp_path):
@@ -460,44 +433,6 @@ def test_sqlite_state_store_chat_rolling_summary(tmp_path):
     assert "message 12" in chat["running_summary"]
 
 
-def test_markdown_state_store_export_human_view(tmp_path):
-    store = MarkdownStateStore(tmp_path / "workspace")
-    store.initialize()
-    store.write_task("Export the markdown state", ["keep markdown backend"])
-    store.write_actions([Action(id="act_md", robot="arm_1", capability="observe")])
-    store.write_chat(
-        [{"role": "user", "content": "audit please"}],
-        running_summary="markdown summary",
-        compact=False,
-    )
-    store.append_memory_note(
-        "markdown memory",
-        source="test",
-        kind="lesson",
-        tags=["audit", "markdown"],
-        importance=4,
-    )
-    store.append_log("markdown log", actor="test")
-
-    result = store.export_human_view()
-    audit_dir = store.path / "audit"
-
-    assert result["backend"] == "markdown"
-    assert result["out_dir"] == str(audit_dir.resolve())
-    assert _read_json(audit_dir / "task.json")["task"] == "Export the markdown state"
-    assert _read_json(audit_dir / "actions.json")["pending"][0]["id"] == "act_md"
-    assert _read_json(audit_dir / "chat.json")["running_summary"] == "markdown summary"
-    memory = _read_json(audit_dir / "memory.json")["notes"][0]
-    assert memory["content"] == "markdown memory"
-    assert memory["kind"] == "lesson"
-    assert memory["tags"] == ["audit", "markdown"]
-    assert memory["importance"] == 4
-    assert _read_json(audit_dir / "log.json")["entries"][0]["message"] == "markdown log"
-    assert (audit_dir / "SAFETY.md").read_text(encoding="utf-8") == store.file(
-        "safety"
-    ).read_text(encoding="utf-8")
-
-
 def test_sqlite_state_store_export_human_view_reads_sqlite_state(tmp_path):
     store = SqliteStateStore(tmp_path / "workspace")
     store.initialize()
@@ -566,6 +501,7 @@ def test_migrate_markdown_to_sqlite_cli_does_not_switch_backend(tmp_path):
 
     assert result.exit_code == 0, result.output
     assert "Config was not changed" in result.output
+    assert "workspace.backend: sqlite" in result.output
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert data["workspace"]["backend"] == "markdown"
 

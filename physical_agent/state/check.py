@@ -157,24 +157,6 @@ def _backend_guidance(backend: str, workspace: Any) -> dict[str, Any]:
                 "SAFETY.md remains the file source for safety rules."
             ),
         }
-    if backend == "markdown":
-        return {
-            "backend_role": "legacy",
-            "backend_label": "Markdown legacy backend",
-            "source_of_truth": str(workspace.path),
-            "payload_format": "Markdown protocol files",
-            "human_view": "Markdown files are directly human-editable",
-            "safety_source": safety_source,
-            "runtime_switch_supported": False,
-            "switching_model": (
-                "Migrate with migrate-md-to-sqlite, update workspace.backend, "
-                "then restart the process; there is no GUI live backend switch."
-            ),
-            "recommendation": (
-                "Legacy compatibility backend; migrate to SQLite for the "
-                "recommended state source of truth."
-            ),
-        }
     return {
         "backend_role": "unsupported",
         "backend_label": f"Unsupported backend: {backend}",
@@ -184,7 +166,7 @@ def _backend_guidance(backend: str, workspace: Any) -> dict[str, Any]:
         "safety_source": safety_source,
         "runtime_switch_supported": False,
         "switching_model": "",
-        "recommendation": "Use workspace.backend: sqlite or workspace.backend: markdown.",
+        "recommendation": "Use workspace.backend: sqlite.",
     }
 
 

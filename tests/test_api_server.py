@@ -317,23 +317,13 @@ def test_api_endpoints_cover_state_proposals_memory_ingest_search_and_audit(tmp_
     assert board["cancelled"] == []
 
 
-@pytest.mark.parametrize(
-    ("backend", "role", "expected_source"),
-    [
-        ("markdown", "legacy", "workspace"),
-        ("sqlite", "recommended", "state.db"),
-    ],
-)
 def test_api_state_check_reports_backend_guidance_without_watch(
     tmp_path,
     monkeypatch,
-    backend,
-    role,
-    expected_source,
 ):
     TestClient = _client_or_skip()
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    _set_config_backend(config_path, backend)
+    _set_config_backend(config_path, "sqlite")
     store = open_state_store(config_path=config_path)
     store.initialize()
 
@@ -350,19 +340,14 @@ def test_api_state_check_reports_backend_guidance_without_watch(
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True
-    assert body["backend"] == backend
-    assert body["backend_role"] == role
-    assert expected_source in body["source_of_truth"]
+    assert body["backend"] == "sqlite"
+    assert body["backend_role"] == "recommended"
+    assert "state.db" in body["source_of_truth"]
     assert body["runtime_switch_supported"] is False
     assert "GUI live backend switch" in body["switching_model"]
-    if backend == "sqlite":
-        assert "state.db" in body["recommendation"]
-        assert "SAFETY.md" in body["recommendation"]
-        assert body["sqlite_schema_complete"] is True
-    else:
-        assert "Legacy compatibility backend" in body["recommendation"]
-        assert "migrate" in body["switching_model"]
-        assert body["sqlite_schema_complete"] is None
+    assert "state.db" in body["recommendation"]
+    assert "SAFETY.md" in body["recommendation"]
+    assert body["sqlite_schema_complete"] is True
 
 
 def test_api_llm_settings_endpoints_do_not_leak_key(tmp_path):

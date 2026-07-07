@@ -116,6 +116,27 @@ def test_gui_homepage_has_language_toggle(tmp_path):
         server.server_close()
 
 
+def test_gui_serves_static_assets(tmp_path):
+    server = make_server(tmp_path / "physical-agent.yaml", port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        css = _read_text(f"{base_url}/static/styles.css")
+        api_js = _read_text(f"{base_url}/static/api.js")
+        app_js = _read_text(f"{base_url}/static/app.js")
+        render_js = _read_text(f"{base_url}/static/render.js")
+        i18n_js = _read_text(f"{base_url}/static/i18n.js")
+        assert ".chat-log" in css
+        assert "window.GuiApi" in api_js
+        assert "window.GuiRender" in render_js
+        assert "sendChat" in app_js
+        assert "window.I18N" in i18n_js
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_gui_http_demo_endpoint(tmp_path):
     server = make_server(tmp_path / "physical-agent.yaml", port=0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -132,7 +153,51 @@ def test_gui_http_demo_endpoint(tmp_path):
 
         state = _request(f"{base_url}/api/state")
         assert state["ready"] is True
+        assert state["runtime"]["mode"] == "mock"
+        assert state["runtime"]["requires_confirmation"] is False
+        assert state["runtime"]["drivers"] == [
+            {"robot_id": "arm_1", "driver": "mock_arm", "mode": "mock"}
+        ]
         assert state["actions"]["completed"][-1]["capability"] == "place"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_gui_state_marks_non_mock_driver_as_hardware(tmp_path):
+    config_path = tmp_path / "physical-agent.yaml"
+    config_path.write_text(
+        """
+project:
+  name: hardware-test
+workspace:
+  path: ./workspace
+watch:
+  tick_ms: 500
+  require_human_approval: false
+agent:
+  planner: rule_based
+  model: fake/local
+  max_steps: 8
+  feedback_timeout_s: 30
+robots:
+  arm_1:
+    driver: xiaozhi_mcp
+    config: {}
+""",
+        encoding="utf-8",
+    )
+    server = make_server(config_path, port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        state = _request(f"{base_url}/api/state")
+        assert state["runtime"]["mode"] == "hardware"
+        assert state["runtime"]["requires_confirmation"] is True
+        assert state["runtime"]["drivers"] == [
+            {"robot_id": "arm_1", "driver": "xiaozhi_mcp", "mode": "hardware"}
+        ]
     finally:
         server.shutdown()
         server.server_close()

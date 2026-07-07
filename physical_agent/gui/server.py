@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import threading
 import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from physical_agent.agent.chat_runtime import ChatRuntime
 from physical_agent.agent.driver_coder import DriverCodingAgent
@@ -232,7 +230,10 @@ def make_server(
         def do_GET(self) -> None:
             route = urlparse(self.path).path
             if route == "/":
-                self._send_html(INDEX_HTML)
+                self._send_static("index.html")
+                return
+            if route.startswith("/static/"):
+                self._send_static(unquote(route.removeprefix("/static/")))
                 return
             if route == "/api/state":
                 self._send_json(controller.state())
@@ -324,10 +325,22 @@ def make_server(
                 return {}
             return json.loads(self.rfile.read(length).decode("utf-8"))
 
-        def _send_html(self, html: str) -> None:
-            payload = html.encode("utf-8")
+        def _send_static(self, relative_path: str) -> None:
+            try:
+                target = (STATIC_DIR / relative_path).resolve()
+                target.relative_to(STATIC_DIR.resolve())
+            except ValueError:
+                self._send_json({"ok": False, "message": "Not found."}, HTTPStatus.NOT_FOUND)
+                return
+            if not target.is_file():
+                self._send_json({"ok": False, "message": "Not found."}, HTTPStatus.NOT_FOUND)
+                return
+
+            payload = target.read_bytes()
+            content_type = STATIC_CONTENT_TYPES.get(target.suffix.lower(), "application/octet-stream")
             self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)

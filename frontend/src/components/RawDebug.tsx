@@ -1,7 +1,7 @@
 import { CodeOutlined } from "@ant-design/icons";
-import { Card, Collapse, Space, Typography } from "antd";
+import { Card, Space, Typography } from "antd";
 import type { AgentState } from "../types";
-import { compactJson } from "./utils";
+import { RawJsonFallback } from "./JsonTreeLazy";
 
 interface RawDebugProps {
   state: AgentState | null;
@@ -19,16 +19,7 @@ export function RawDebug({ state }: RawDebugProps) {
         </Space>
       }
     >
-      <Collapse
-        ghost
-        items={[
-          {
-            key: "state",
-            label: "JSON state",
-            children: <pre className="pre-block">{compactJson(state, "{}")}</pre>
-          }
-        ]}
-      />
+      <RawJsonFallback label="Full state JSON" value={state ?? {}} />
     </Card>
   );
 }

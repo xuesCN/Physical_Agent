@@ -30,7 +30,9 @@
 
 **原则**：只做"读"。已知协议字段（pydantic schema 锁定）写定制组件；未知/raw/driver 私有字段用 JSON 树兜底；全应用 `<pre>` 裸 JSON 逐步清零。**不引表单库**（rjsf/JSON Forms 已挂起，见 SPEC 挂起清单）——产品没有手写 JSON 的需求，数据来源是 SDK 文件和 yaml。
 **首批落地**（改 `ContextTabs.tsx` 为主）：① feedback 时间线：antd Timeline/Table，`status` 红绿灯 Tag，**失败原因读 `message` 字段**（不是 detail），`action_id` 点击跳 Actions 页（复用 setActivePage），事件类条目（`event: driver_*`）用不同图标；② world：objects 转表格（id/type/location/pose），environment 用 Descriptions，summary 置顶；③ raw 兜底：react18-json-view，**懒加载独立 chunk**（照 191f8b5 模式）。
-**后续批次**：capabilities 卡片化（每能力一张：名称/描述/参数要点/requires_approval 徽章）、integration 结果与 state-check 的可读化复查、audit 导出内容的页内预览（远期）。
+**实现口径（2026-07-07 已落地）**：`ContextTabs` 拆出 world/feedback/safety/capabilities 四个可读 tab；`FeedbackTimeline` 合并 feedback history、action approval/source metadata 与 chat `refusal_reason`；`WorldObjectsTable` 展示 objects/environment/robots/artifacts，未知 object 字段折叠进 raw；`JsonTreeLazy` 懒加载 `react18-json-view` 并由 Vite 拆出 `json-view` chunk；`ActionBoard`、`ChatPanel`、`ConfigPanel`、`SettingsPanel`、`RawDebug` 不再用裸 `<pre>` 展示状态 JSON。
+**实现经验**：status 颜色映射、pose/location/schema 摘要应集中在 formatter，避免各面板各写一套；JSON tree 只作为折叠兜底，首屏仍优先放人能直接读的 message、action、robot、capability、approval 与 world summary；Playwright mocked 场景比 live workspace 更适合锁 UI 可读性，live smoke 继续覆盖真实 API 拼接。
+**后续批次**：integration 结果与 state-check 可继续补更细的诊断分组；audit 导出内容的页内预览（远期）；若 F6 SceneView 落地，world 表格可与图形视图联动但不替代 raw 兜底。
 **验收**：mock 跑 demo 全程不点 Raw Debug 能看懂发生了什么；坏任务拒绝原因在时间线直接可读；全应用 `<pre>` 出现次数下降可统计。
 
 ## F3 context_builder 解耦

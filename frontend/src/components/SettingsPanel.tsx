@@ -28,7 +28,8 @@ import {
   testLLMSettings
 } from "../api";
 import type { AgentState, ExportAuditResponse, HealthState, LLMSettingsSummary, StateCheckResult } from "../types";
-import { compactJson, oneLine } from "./utils";
+import { RawJsonFallback } from "./JsonTreeLazy";
+import { oneLine } from "./utils";
 
 interface SettingsPanelProps {
   health: HealthState | null;
@@ -383,7 +384,7 @@ export function SettingsPanel({ health, state, onWorkspaceReset }: SettingsPanel
       </Space>
       <div className="panel-divider" />
       <Typography.Text strong>Plan</Typography.Text>
-      <pre className="pre-block settings-pre">{compactJson(state?.plan, "{}")}</pre>
+      <RawJsonFallback label="Plan JSON" value={state?.plan ?? {}} />
       <div className="panel-divider" />
       <Space
         direction="vertical"

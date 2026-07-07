@@ -4,6 +4,8 @@ import type { ColumnsType } from "antd/es/table";
 import { useEffect, useState } from "react";
 import { fetchConfig } from "../api";
 import type { ConfigResponse } from "../types";
+import { RawJsonFallback } from "./JsonTreeLazy";
+import { formatObjectValue } from "./readableFormatters";
 
 interface ConfigPanelProps {
   refreshToken?: number;
@@ -13,7 +15,7 @@ interface ConfigRobotRow {
   key: string;
   id: string;
   driver: string;
-  config: string;
+  config: Record<string, unknown>;
 }
 
 export function ConfigPanel({ refreshToken = 0 }: ConfigPanelProps) {
@@ -45,7 +47,7 @@ export function ConfigPanel({ refreshToken = 0 }: ConfigPanelProps) {
     key: id,
     id,
     driver: robot.driver,
-    config: JSON.stringify(robot.config ?? {})
+    config: robot.config ?? {}
   }));
 
   const columns: ColumnsType<ConfigRobotRow> = [
@@ -60,10 +62,13 @@ export function ConfigPanel({ refreshToken = 0 }: ConfigPanelProps) {
       title: "Config",
       dataIndex: "config",
       ellipsis: true,
-      render: (value: string) => (
-        <Typography.Text type="secondary" style={{ fontFamily: "monospace", fontSize: 12 }}>
-          {value}
-        </Typography.Text>
+      render: (value: Record<string, unknown>) => (
+        <Space direction="vertical" size={4} className="full-width">
+          <Typography.Text type="secondary" className="schema-summary">
+            {formatObjectValue(value, "No config")}
+          </Typography.Text>
+          <RawJsonFallback label="Robot config" value={value} />
+        </Space>
       )
     }
   ];

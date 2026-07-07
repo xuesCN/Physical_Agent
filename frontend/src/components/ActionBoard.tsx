@@ -7,7 +7,8 @@ import {
 import { Button, Card, Popconfirm, Segmented, Space, Table, Tag, Typography } from "antd";
 import { useMemo, useState } from "react";
 import type { ActionItem, AgentState } from "../types";
-import { compactJson } from "./utils";
+import { RawJsonFallback } from "./JsonTreeLazy";
+import { asRecord, formatObjectValue, isNonEmptyRecord } from "./readableFormatters";
 
 type BoardKey = "pending" | "completed" | "cancelled";
 
@@ -95,9 +96,14 @@ export function ActionBoard({
             dataIndex: "params",
             width: 300,
             render: (value) => (
-              <Typography.Text className="mono-cell">
-                {compactJson(value, "{}")}
-              </Typography.Text>
+              <Space direction="vertical" size={4} className="full-width">
+                <Typography.Text className="mono-cell">
+                  {formatObjectValue(value, "No params")}
+                </Typography.Text>
+                {isNonEmptyRecord(asRecord(value)) && (
+                  <RawJsonFallback label="Params raw" value={value} />
+                )}
+              </Space>
             )
           },
           {

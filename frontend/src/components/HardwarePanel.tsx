@@ -14,6 +14,7 @@ import {
 import { useEffect, useState } from "react";
 import { integrateHardware, registerRobot } from "../api";
 import type { AgentState, IntegrateResult, SchemaProperty } from "../types";
+import { compactSchemaSummary } from "./readableFormatters";
 
 interface HardwarePanelProps {
   onStateChange: (state: AgentState) => void;
@@ -256,6 +257,21 @@ export function HardwarePanel({ onStateChange, onError, onRobotRegistered }: Har
               <Space size={5} wrap>
                 {generatedFiles.map((file) => (
                   <Tag key={file}>{file}</Tag>
+                ))}
+              </Space>
+            )}
+            {profile?.capabilities && profile.capabilities.length > 0 && (
+              <Space direction="vertical" size={4} className="full-width">
+                <Typography.Text strong>Detected capabilities</Typography.Text>
+                {profile.capabilities.map((capability, index) => (
+                  <Space key={`${String(capability.name ?? "capability")}-${index}`} wrap size={5}>
+                    <Tag color={capability.requires_approval ? "gold" : "default"}>
+                      {String(capability.name ?? "capability")}
+                    </Tag>
+                    <Typography.Text type="secondary" className="schema-summary">
+                      {compactSchemaSummary(capability.params_schema)}
+                    </Typography.Text>
+                  </Space>
                 ))}
               </Space>
             )}

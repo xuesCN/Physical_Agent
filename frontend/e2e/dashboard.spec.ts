@@ -258,6 +258,141 @@ test("proposal params validation stays visible in the form", async ({
   expectNoConsoleErrors(consoleErrors);
 });
 
+test("F2 readable context shows feedback world and capabilities without raw debug", async ({
+  page,
+}) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await mockReadyApiWithRobot(page, {
+    capabilities: {
+      robots: {
+        arm_1: {
+          kind: "arm",
+          driver: "mock_arm",
+          status: "connected",
+          capabilities: [
+            {
+              name: "pick",
+              description: "Pick up a known object.",
+              params_schema: {
+                type: "object",
+                properties: { object_id: { type: "string" } },
+                required: ["object_id"],
+              },
+              constraints: { object_must_exist: true },
+              requires_approval: true,
+            },
+          ],
+        },
+      },
+    },
+    world: {
+      summary: "The arm is idle. Visible objects: red_block, tray.",
+      state: {
+        objects: {
+          red_block: {
+            type: "block",
+            location: "table",
+            pose: { x: 0.2, y: 0.1, z: 0.0 },
+            status: "available",
+            container: "workspace",
+            color: "red",
+          },
+          tray: {
+            type: "tray",
+            location: "bench",
+            pose: { x: 0.5, y: 0.2, z: 0.0 },
+          },
+        },
+        environment: {
+          bounds: { x_min: 0, x_max: 1, y_min: 0, y_max: 1 },
+        },
+        raw: { driver_note: "mock-arm snapshot" },
+      },
+    },
+    actions: {
+      pending: [
+        {
+          id: "act_pick_1",
+          robot: "arm_1",
+          capability: "pick",
+          params: { object_id: "red_block" },
+          reason: "Pick the red block.",
+          metadata: {
+            source: "chat_draft",
+            user_message: "pick the red block",
+            approval: {
+              required: true,
+              status: "approved",
+              by: "gui",
+              at: "2026-07-07T00:00:00Z",
+              reason: "Approved from Actions board.",
+            },
+          },
+        },
+      ],
+      completed: [],
+      cancelled: [],
+    },
+    feedback: {
+      latest: {
+        action_id: "act_pick_1",
+        status: "failed",
+        robot: "arm_1",
+        capability: "pick",
+        message: "SafetyGate rejected the action: object is outside bounds.",
+        result: { error_type: "SafetyViolation", error_message: "outside bounds" },
+      },
+      history: [
+        {
+          action_id: "act_pick_1",
+          status: "failed",
+          robot: "arm_1",
+          capability: "pick",
+          message: "SafetyGate rejected the action: object is outside bounds.",
+          result: { error_type: "SafetyViolation", error_message: "outside bounds" },
+        },
+      ],
+    },
+    chat: {
+      messages: [
+        {
+          role: "assistant",
+          content: "I cannot draft that action.",
+          created_at: "2026-07-07T00:01:00Z",
+          metadata: {
+            refusal_reason: "No listed capability can pour coffee.",
+          },
+        },
+      ],
+    },
+  });
+
+  await page.goto("/");
+  await expectHealthyShell(page);
+  await expect(page.getByTestId("context-tabs")).toContainText("red_block");
+  await expect(page.getByTestId("context-tabs")).toContainText("x=0.2");
+  await expect(page.getByTestId("context-tabs")).toContainText("workspace");
+
+  await page.getByRole("tab", { name: /Feedback/ }).click();
+  await expect(page.getByTestId("context-tabs")).toContainText(
+    "SafetyGate rejected the action",
+  );
+  await expect(page.getByTestId("context-tabs")).toContainText(
+    "Execution approved",
+  );
+  await expect(page.getByTestId("context-tabs")).toContainText(
+    "No listed capability can pour coffee",
+  );
+  await page.getByRole("button", { name: /action act_pick_1/ }).first().click();
+  await expect(page.getByTestId("page-actions")).toBeVisible();
+
+  await page.getByRole("tab", { name: /Capabilities/ }).click();
+  await expect(page.getByTestId("context-tabs")).toContainText("pick");
+  await expect(page.getByTestId("context-tabs")).toContainText("object_id*: string");
+  await expect(page.getByTestId("context-tabs")).toContainText("approval required");
+  expectNoConsoleErrors(consoleErrors);
+});
+
 test("settings panel saves and tests LLM settings with mocked API", async ({
   page,
 }) => {

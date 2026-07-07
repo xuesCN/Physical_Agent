@@ -276,6 +276,88 @@ body {
   gap: 8px;
 }
 
+.world-readable,
+.feedback-timeline,
+.capability-grid,
+.capability-card-list {
+  min-width: 0;
+}
+
+.world-section,
+.capability-grid,
+.capability-card-list {
+  display: grid;
+  gap: 8px;
+}
+
+.capability-card-list {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.capability-card {
+  border-radius: 6px;
+}
+
+.schema-summary {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.feedback-timeline {
+  padding-top: 4px;
+}
+
+.feedback-timeline .ant-timeline-item-last {
+  padding-bottom: 0;
+}
+
+.feedback-timeline-item {
+  min-width: 0;
+}
+
+.action-link-button {
+  height: auto;
+  padding: 0;
+}
+
+.raw-json-collapse {
+  max-width: 100%;
+}
+
+.raw-json-collapse .ant-collapse-header {
+  align-items: center !important;
+  padding: 2px 0 !important;
+}
+
+.raw-json-collapse .ant-collapse-content-box {
+  padding: 4px 0 0 !important;
+}
+
+.raw-json-label,
+.json-tree-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.json-tree-loading {
+  padding: 8px 0;
+}
+
+.json-tree {
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px;
+  background: #f7f9fc;
+  border: 1px solid #e1e6ef;
+  border-radius: 6px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
 .mono-cell {
   display: block;
   max-width: 420px;

@@ -402,6 +402,13 @@ function Dashboard() {
     setConfigVersion((current) => current + 1);
   }
 
+  function handleOpenAction(actionId: string) {
+    setActivePage("actions");
+    if (actionId) {
+      message.info(`Opened Actions for ${actionId}`);
+    }
+  }
+
   return (
     <Layout className="app-shell" data-testid="dashboard-shell">
       <SidebarNav
@@ -453,6 +460,7 @@ function Dashboard() {
                   onWorkspaceReset: handleWorkspaceReset,
                   onRobotRegistered: handleRobotRegistered,
                   configVersion,
+                  onOpenAction: handleOpenAction,
                   onError: (error) => showError(message, error)
                 })}
               </Suspense>
@@ -513,6 +521,7 @@ interface RenderPageProps {
   onWorkspaceReset: (state: AgentState, message: string) => void;
   onRobotRegistered: () => void;
   configVersion: number;
+  onOpenAction: (actionId: string) => void;
   onError: (error: Error) => void;
 }
 
@@ -599,6 +608,7 @@ function renderPageContent({
   onWorkspaceReset,
   onRobotRegistered,
   configVersion,
+  onOpenAction,
   onError
 }: RenderPageProps) {
   if (activePage === "actions") {
@@ -610,7 +620,11 @@ function renderPageContent({
           onApprove={onApproveAction}
           onReject={onRejectAction}
         />
-        <ContextTabs state={state} defaultActiveKey="feedback" />
+        <ContextTabs
+          state={state}
+          defaultActiveKey="feedback"
+          onOpenAction={onOpenAction}
+        />
       </div>
     );
   }
@@ -618,7 +632,7 @@ function renderPageContent({
   if (activePage === "world") {
     return (
       <div className="page-stack">
-        <ContextTabs state={state} defaultActiveKey="world" />
+        <ContextTabs state={state} defaultActiveKey="world" onOpenAction={onOpenAction} />
       </div>
     );
   }
@@ -653,7 +667,7 @@ function renderPageContent({
   if (activePage === "safety") {
     return (
       <div className="page-stack">
-        <ContextTabs state={state} defaultActiveKey="safety" />
+        <ContextTabs state={state} defaultActiveKey="safety" onOpenAction={onOpenAction} />
       </div>
     );
   }
@@ -698,7 +712,7 @@ function renderPageContent({
         />
       </div>
       <div className="context-column">
-        <ContextTabs state={state} />
+        <ContextTabs state={state} onOpenAction={onOpenAction} />
         <RobotsPanel state={state} />
       </div>
     </div>

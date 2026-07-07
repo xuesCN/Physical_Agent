@@ -26,6 +26,7 @@
 | F0 | LLM planner 启用实验 + 本地 JSONL trace + 坏任务报告 | `d39e8f6` `caa4fa0` |
 | B6 | 退役 MarkdownStateStore 后端 | `9072b4e` |
 | F1 | 提案卡片 + Add to Actions + action 级审批流 | `0f49a3c` |
+| F2 | 结构化信息可读化：feedback/world/capabilities + lazy JSON tree | `F2_COMMIT` |
 
 ## 2. 分阶段过程记录
 
@@ -91,6 +92,10 @@ A1 最初被跳过（工具循环建在自研 urllib 客户端上"够用"），�
 
 动机：F0 证明 LLM planner 会把部分模糊任务激进规约成合法动作，也会在坏任务上拒绝不产出，单靠 planner 无法替代人对"是否想要这个动作"的确认；同时 `requires_approval` 之前只有拒绝没有放行通道，形成审批死胡同。过程：chat 侧把 draft 固化为 `action-draft` fence，`ChatPanel` 用纯函数解析并渲染 draft 卡片，展示任务原文、提案动作、robot/capability/params/reason；卡片按钮改为 Add to Actions，只创建 pending action，Edit 回填手动提案表单，坏 JSON 降级为普通 Markdown。后端把 action metadata 纳入协议与 SQLite 持久化，记录 source/original task/draft reason/approval；`approval.required` 永远由后端按 robot/capability `requires_approval` 和 SAFETY 文件真源计算，覆盖 caller 伪造值。新增 approve/reject API 与 Actions 板审批控件，approve 幂等、不重复写混乱日志，reject 只允许 pending 并写原因后转 cancelled。watch 的 `claim_next_ready_action()` 在 SQLite `BEGIN IMMEDIATE` 事务中扫描 pending action，跳过未批准的 required action 但继续领取后续 ready action；SafetyGate 从"requires_approval 直接拒绝"改为"检查后端计算的 approval 是否 approved"，审批只解除等人放行，schema、bounds、capability、robot、SAFETY.md 仍照常校验。F0 遗留一并收口：planner/chat 无提案透出 `refusal_reason`，并补 Gate 直击测试绕 planner 直接 propose 坏动作，留下 Gate 拦截审计样本。验证：全量 `pytest` 251 例通过，`frontend npm run build` 通过，浏览器 GUI smoke 覆盖 chat draft → Add to Actions。
 
+### F2：结构化信息可读化
+
+动机：F1 后 approval/source/refusal_reason 已进入状态与审计，但 GUI 仍要求用户点 Raw Debug 才能拼出"提了什么、是否审批、是否被 Gate 拦、world 里有什么"。过程：前端新增 `readableFormatters` 集中处理 status 颜色、pose/location、schema 摘要与安全取字段；`ContextTabs` 改成 world/feedback/safety/capabilities 四个可读 tab。`FeedbackTimeline` 用 AntD Timeline 合并 feedback history、action approval/source metadata 与 chat `refusal_reason`，失败原因优先读 `message`，`action_id` 可跳 Actions 页；driver heartbeat/watchdog/expectation 类事件有可读标题。`WorldObjectsTable` 把 world objects 转成 id/type/location/pose/status/relations 表格，environment/robots/artifacts 单独展示，未知字段保留 raw。`CapabilityCard` 展示 capability 名称、描述、params schema 摘要、constraints 与 approval 徽章；`ConfigPanel` 与 `HardwarePanel` 补配置/集成能力摘要。raw/debug 统一走 `JsonTreeLazy`，懒加载 `react18-json-view` 并在 Vite 中拆出 `json-view` chunk，`RawDebug`、Settings plan、Safety raw、Events payload 等均默认折叠。验证：`frontend npm run build` 通过且产物含独立 `json-view-*.js`；Playwright dashboard 14 例通过（含 F2 mocked readable context）；全量 `pytest -q` 251 passed；`frontend/src` 中 `<pre>` 从 6 处降至 0 处，`JSON.stringify` 从 19 处降至 18 处且剩余主要是 API 请求体/SSE 去重/表单初值/工具兜底。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -106,6 +111,7 @@ A1 最初被跳过（工具循环建在自研 urllib 客户端上"够用"），�
 11. **退役 active backend 与保留迁移 reader 分离**（B6）：运行态只支持 SQLite；旧 Markdown 文件只作为迁移输入读取，迁移 reader 不实现 `StateStore`，不进入 factory，也不承担新功能字段。
 12. **两个 Approve 必须拆语义**（F1）：Chat draft 的按钮叫 Add to Actions，只代表"创建 action"；Actions 板的 Approve execution 才代表"放行 requires_approval action 被 watch claim/execute"。
 13. **approval.required 不信任认知侧或 UI**（F1）：LLM draft、前端表单、API caller 都不能决定是否需要审批；后端每次写入/读取/claim 前按真实 robot/capability 重新归一化。
+14. **raw JSON tree 是兜底，不是主界面**（F2）：`react18-json-view` 允许作为折叠 raw/debug 后备，并必须懒加载拆包；已知协议字段仍写定制组件，避免把"漂亮 JSON"误当成可读产品。
 
 ## 4. 经验教训（流程侧）
 

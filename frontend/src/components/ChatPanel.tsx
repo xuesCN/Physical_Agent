@@ -12,7 +12,8 @@ import { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { parseActionDrafts } from "../actionDraft";
 import type { ActionItem, ChatMessage } from "../types";
-import { compactJson } from "./utils";
+import { RawJsonFallback } from "./JsonTreeLazy";
+import { asRecord, formatObjectValue, isNonEmptyRecord } from "./readableFormatters";
 
 interface ChatPanelProps {
   messages: ChatMessage[];
@@ -243,9 +244,14 @@ function DraftActionCard({
             </Typography.Text>
           </Descriptions.Item>
           <Descriptions.Item label="Params">
-            <Typography.Text className="mono-cell">
-              {compactJson(action.params, "{}")}
-            </Typography.Text>
+            <Space direction="vertical" size={4} className="full-width">
+              <Typography.Text className="mono-cell">
+                {formatObjectValue(action.params, "No params")}
+              </Typography.Text>
+              {isNonEmptyRecord(asRecord(action.params)) && (
+                <RawJsonFallback label="Draft params raw" value={action.params} />
+              )}
+            </Space>
           </Descriptions.Item>
           <Descriptions.Item label="Reason">
             <Typography.Text>{action.reason || "-"}</Typography.Text>

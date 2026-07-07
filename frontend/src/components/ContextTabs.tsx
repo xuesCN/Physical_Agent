@@ -1,17 +1,30 @@
-import { AlertOutlined, CompassOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
+import {
+  AlertOutlined,
+  CompassOutlined,
+  SafetyCertificateOutlined,
+  ToolOutlined
+} from "@ant-design/icons";
 import { Descriptions, Empty, Space, Tabs, Tag, Typography } from "antd";
 import type { TabsProps } from "antd";
 import type { AgentState } from "../types";
-import { compactJson, oneLine } from "./utils";
+import { CapabilitiesGrid } from "./CapabilityCard";
+import { FeedbackTimeline } from "./FeedbackTimeline";
+import { RawJsonFallback } from "./JsonTreeLazy";
+import { WorldObjectsTable } from "./WorldObjectsTable";
+import { FeedbackStatusTag } from "./FeedbackStatusTag";
+import { asRecord, formatObjectValue, statusText } from "./readableFormatters";
 
 interface ContextTabsProps {
   state: AgentState | null;
-  defaultActiveKey?: "world" | "feedback" | "safety";
+  defaultActiveKey?: "world" | "feedback" | "safety" | "capabilities";
+  onOpenAction?: (actionId: string) => void;
 }
 
-export function ContextTabs({ state, defaultActiveKey = "world" }: ContextTabsProps) {
-  const latest = (state?.feedback?.latest ?? {}) as Record<string, unknown>;
-  const history = (state?.feedback?.history ?? []) as Array<Record<string, unknown>>;
+export function ContextTabs({
+  state,
+  defaultActiveKey = "world",
+  onOpenAction
+}: ContextTabsProps) {
   const items: TabsProps["items"] = [
     {
       key: "world",
@@ -21,21 +34,7 @@ export function ContextTabs({ state, defaultActiveKey = "world" }: ContextTabsPr
           World
         </Space>
       ),
-      children: (
-        <div className="tab-pane-grid">
-          <Typography.Paragraph className="summary-text">
-            {oneLine(state?.world?.summary, "No world summary")}
-          </Typography.Paragraph>
-          <Descriptions size="small" column={1} className="tight-descriptions">
-            <Descriptions.Item label="Objects">
-              <pre className="inline-pre">{compactJson(state?.world?.state, "{}")}</pre>
-            </Descriptions.Item>
-            <Descriptions.Item label="Environment">
-              <pre className="inline-pre">{compactJson(state?.world?.environment, "{}")}</pre>
-            </Descriptions.Item>
-          </Descriptions>
-        </div>
-      )
+      children: <WorldObjectsTable world={state?.world} />
     },
     {
       key: "feedback",
@@ -45,27 +44,13 @@ export function ContextTabs({ state, defaultActiveKey = "world" }: ContextTabsPr
           Feedback
         </Space>
       ),
-      children: Object.keys(latest).length ? (
-        <div className="tab-pane-grid">
-          <Descriptions size="small" column={1} className="tight-descriptions">
-            <Descriptions.Item label="Status">
-              <Tag color={latest.status === "completed" ? "green" : "default"}>
-                {String(latest.status ?? "-")}
-              </Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="Action">
-              {String(latest.action_id ?? "-")}
-            </Descriptions.Item>
-            <Descriptions.Item label="Message">
-              {String(latest.message ?? "-")}
-            </Descriptions.Item>
-          </Descriptions>
-          {history.length > 0 && (
-            <pre className="inline-pre">{compactJson(history.slice(-5), "[]")}</pre>
-          )}
-        </div>
-      ) : (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No feedback" />
+      children: (
+        <FeedbackTimeline
+          feedback={state?.feedback}
+          actions={state?.actions}
+          chat={state?.chat}
+          onOpenAction={onOpenAction}
+        />
       )
     },
     {
@@ -76,7 +61,17 @@ export function ContextTabs({ state, defaultActiveKey = "world" }: ContextTabsPr
           Safety
         </Space>
       ),
-      children: <pre className="pre-block">{compactJson(state?.safety, "{}")}</pre>
+      children: <SafetyView safety={state?.safety} />
+    },
+    {
+      key: "capabilities",
+      label: (
+        <Space size={6}>
+          <ToolOutlined />
+          Capabilities
+        </Space>
+      ),
+      children: <CapabilitiesGrid capabilities={state?.capabilities} />
     }
   ];
 
@@ -84,5 +79,31 @@ export function ContextTabs({ state, defaultActiveKey = "world" }: ContextTabsPr
     <div className="panel context-tabs" data-testid="context-tabs">
       <Tabs defaultActiveKey={defaultActiveKey} items={items} />
     </div>
+  );
+}
+
+function SafetyView({ safety }: { safety: AgentState["safety"] | undefined }) {
+  const rules = asRecord(asRecord(safety).rules ?? safety);
+  const entries = Object.entries(rules).filter(([key]) => key !== "metadata");
+  if (!entries.length) {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No safety rules" />;
+  }
+  return (
+    <Space direction="vertical" size={8} className="full-width">
+      <Descriptions size="small" column={1} className="tight-descriptions">
+        {entries.map(([key, value]) => (
+          <Descriptions.Item key={key} label={key}>
+            {typeof value === "boolean" ? (
+              <FeedbackStatusTag status={value ? "ok" : "disabled"} />
+            ) : key.toLowerCase().includes("backend") ? (
+              <Tag>{statusText(value)}</Tag>
+            ) : (
+              <Typography.Text>{formatObjectValue(value)}</Typography.Text>
+            )}
+          </Descriptions.Item>
+        ))}
+      </Descriptions>
+      <RawJsonFallback label="Safety raw fields" value={safety ?? {}} />
+    </Space>
   );
 }

@@ -51,9 +51,9 @@
 
 ## W2 观察并发化 + 频率解耦
 
-**思路**：`update_world()` 的串行 for 改 `asyncio.gather(*[...], return_exceptions=True)`，超时/异常逐个处理（沿用 W1 的 log-only 策略）；`WatchConfig` 加 `observe_interval_ms`（默认=tick_ms 保持现状），`run_forever` 里观察与领动作分频。
-**坑**：gather 后 merge 顺序要稳定（按 robot_id 排序），否则 world diff 抖动。
-**验收**：双 mock 机器人下观察耗时 ≈ 单个的耗时；现有 246 用例全绿。
+**落地**（2026-07-07，`4e0f732`）：`update_world()` 对不同 robot 的 observe 使用 `asyncio.gather(..., return_exceptions=True)` 并发执行，timeout/异常逐 robot log-only 隔离；成功观测按 `robot_id` 稳定 merge，失败时以前一份 world 为底覆盖成功结果，避免单 robot 故障清空全局 world。
+**频率**：`WatchConfig.observe_interval_ms` 为可选正整数；未配置或模板为 `null` 时运行时使用 `tick_ms`。`step()` 维持单步入口的 idle refresh 直觉；`tick()`/`run_forever`/API watch 用 observe interval 控制 idle observe，action claim/execute 仍按 tick，动作后的 `update_world()` 不受分频限制，继续给 F4 expectation_check 提供新鲜 world。
+**验收**：并发启动、稳定 merge、单 robot observe exception 隔离、observe interval 默认/校验/分频、F4 post-action expected 回归均有测试；全量 `pytest` 277 passed。
 
 ## W3 transport 断线重连
 

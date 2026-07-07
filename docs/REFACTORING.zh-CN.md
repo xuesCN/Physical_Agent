@@ -28,7 +28,8 @@
 | F1 | 提案卡片 + Add to Actions + action 级审批流 | `0f49a3c` |
 | F2 | 结构化信息可读化：feedback/world/capabilities + lazy JSON tree | `58a75b0` |
 | F3 | context_builder 解耦：reply/proposal/planner/tool_loop 上下文统一 | `9cbb540` |
-| F4 | 期望-比对-回灌：expected 确定性比对、feedback 回灌、前端可见性 | 本轮 |
+| F4 | 期望-比对-回灌：expected 确定性比对、feedback 回灌、前端可见性 | `b5be3b7` |
+| W2 | 观察并发化 + observe 频率与 tick 解耦 | `4e0f732` |
 
 ## 2. 分阶段过程记录
 
@@ -107,6 +108,12 @@ A1 最初被跳过（工具循环建在自研 urllib 客户端上"够用"），�
 动机：F0/F1 之后，模型已经能生成合法动作，但“动作执行后是否达成意图”仍只靠 driver 成败消息，缺少确定性闭环证据。过程：新增 `physical_agent/protocol/expectations.py`，定义 expected schema、轻量归一化、路径解析与 `evaluate_expected()`；放在 protocol 而不是 watch 包内，是为了让 API/state/agent 可复用 schema 与归一化，同时不触碰 C1 的“请求侧顶层 import 不得加载 watch/drivers”边界。SQLite 写入 action metadata 时规范化 `expected`：单对象转 list，坏形状保留为后续 skipped，条数与序列化大小受限，坏 expected 不影响 action 合法性。chat draft、LLM planner、MCP 与 API proposal 都接受 `metadata.expected`，context_builder 系统文案明确 expected 只是执行后检查，不是安全规则。
 
 watch 侧只在 SafetyGate 通过、driver completed、并成功 `update_world()` 后跑 deterministic check；动作失败或 world 刷新失败时把 expected 标记为 skipped，SafetyGate 拒绝则不跑 expected。多条 check 的总状态固定为 violated > skipped > verified，每条 check 保留独立 `status/message/expected/actual`，总事件 `message` 摘第一条 violated/skipped，写入 `event: expectation_check` feedback。F2 时间线可直接读 feedback；F3 context_builder 在下一轮把 expectation feedback 回灌给 LLM，但自动重试仍默认关闭。前端在 Chat draft 与 Actions 表格补 expected 摘要/raw 折叠，防止模型生成的 expected 完全隐形。验证：新增 evaluator/SQLite/watch/chat/planner/MCP/API 覆盖，golden snapshot 更新，`pytest -q` 269 passed，`frontend npm run build` 通过。
+
+### W2：观察并发化 + 频率解耦
+
+动机：W1 把单个 driver 调用套上 timeout，但 `update_world()` 仍串行逐 robot observe；接多机或慢传感器时，一个慢 observe 会把整个 world refresh 拉长，同时 watch 长跑循环里 idle observe 与 action claim 绑定在同一 tick 上。过程：`WatchRuntime.update_world()` 改为按 `robot_id` 排序后对不同 robot 的 `observe()` 使用 `asyncio.gather(..., return_exceptions=True)` 并发执行，单 robot timeout/异常只写 watch log，不进入 feedback；gather 返回后稳定 merge robots/objects/environment/raw，artifact 保持确定性追加顺序。发生部分失败时，以当前 world 的 last known state 为底再覆盖成功观测，保证一个 robot 故障不会清空其他 robot 或全局 world；这不是 W4 的 ownership/observed_at 设计，只是 W2 的故障保守降级。
+
+配置侧 `WatchConfig.observe_interval_ms` 为可选正整数，模板写 `null`；运行时未配置时取 `tick_ms`，保持旧配置节奏。新增 `tick()` 作为长跑循环入口：heartbeat/recover/claim/execute 仍每 tick 运行，只有无动作时的 idle `update_world()` 受 observe interval 控制；`step()` 继续作为测试/CLI 单步入口，默认无动作即刷新 world。API watch 后台服务改为优先调用 `tick()`，旧 fake runtime 仍可回退 `step(setup=False)`。F4 关键语义保持不变：动作 completed 后立即 `update_world()` 并基于动作后的 world 运行 expectation_check，不受 idle observe 分频影响；SafetyGate 拒绝和 action 执行失败路径仍按 F4 规则跳过/标记 expected。验证：新增并发启动、稳定 merge、单 robot exception 隔离、observe interval 默认/非正校验/分频、tick 下 expected 回归测试；`pytest` 277 passed。
 
 ## 3. 关键决策与偏离（跨阶段汇总）
 

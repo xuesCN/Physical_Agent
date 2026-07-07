@@ -50,8 +50,8 @@
 
 ## 3. 已完成里程碑（速查）
 
-P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态存储全套（SQLite 默认/原子动作/lease/审计）· B4a-c 记忆摄入检索地基 · C1-C3.2 FastAPI+SSE+React 仪表盘 · D1-D3.1 传输层+心跳看门狗 · D4 实机文档 · A1.0-A1.6a 官方 SDK/流式/abort/设置/深思考 · B5 后端口径收口 · E0.1-E0.3 GUI 对齐（重置/硬件面板/配置注册）· W1 驱动调用超时保护 · B6 退役 MarkdownStateStore 后端 · F1 提案卡片与 action 级审批流 · F2 结构化信息可读化 · F3 context_builder 解耦 · F4 expected 确定性比对。
-逐项提交号与决策见 `REFACTORING.zh-CN.md` §1-§2。测试基线 269 用例。
+P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态存储全套（SQLite 默认/原子动作/lease/审计）· B4a-c 记忆摄入检索地基 · C1-C3.2 FastAPI+SSE+React 仪表盘 · D1-D3.1 传输层+心跳看门狗 · D4 实机文档 · A1.0-A1.6a 官方 SDK/流式/abort/设置/深思考 · B5 后端口径收口 · E0.1-E0.3 GUI 对齐（重置/硬件面板/配置注册）· W1 驱动调用超时保护 · B6 退役 MarkdownStateStore 后端 · F1 提案卡片与 action 级审批流 · F2 结构化信息可读化 · F3 context_builder 解耦 · F4 expected 确定性比对 · W2 观察并发化与 observe 分频。
+逐项提交号与决策见 `REFACTORING.zh-CN.md` §1-§2。测试基线 277 用例。
 
 ## 4. 待办矩阵（backlog，活账本）
 
@@ -66,7 +66,7 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | F2 | feedback 时间线 + world 视图 + JSON 树 | §2 | ✅ 2026-07-07 完成：feedback/action approval/refusal_reason 时间线可读，world objects 表格化，capabilities/config/integration 轻量可读；raw JSON 改懒加载树兜底。提交 `58a75b0` |
 | F3 | context_builder 解耦 | §2 | ✅ 2026-07-07 完成 `9cbb540`：新增只读 `context_builder`，统一 chat reply/proposal/tool_loop 与 LLM planner payload；planner 使用独立 purpose；golden snapshot 覆盖四路；memory 改按 importance/created_at 注入 |
 | F4 | 期望-比对-回灌 | §2 | ✅ 2026-07-07 完成：action metadata 接收 `expected`；watch 在动作完成并刷新 world 后写 `expectation_check`；多 check 状态按 violated > skipped > verified 聚合；坏 expected 不影响 action 合法性；Chat/Actions 可见 expected 摘要 |
-| W2 | 观察并发化（gather）+ 频率与 tick 解耦 | W1 欠账 | ⚪ 接实机前 |
+| W2 | 观察并发化（gather）+ 频率与 tick 解耦 | W1 欠账 | ✅ 2026-07-07 完成 `4e0f732`：`update_world()` 按 robot 并发 observe、按 `robot_id` 稳定 merge；`observe_interval_ms` 未配置时等价 `tick_ms`；长跑 watch/API watch 中 claim 仍按 tick，idle observe 分频，动作后 world refresh 仍立即服务 F4 expectation_check |
 | W3 | transport 断线重连（backoff） | W1 欠账 | ⚪ 接实机前 |
 | W4 | 多机器人并行执行 + world 带 observed_at | W1 欠账 | ⚪ 接实机/多机前；F4 当前使用执行后 `update_world()` 的新鲜观测，未扩 `observed_at` |
 | W5 | driver 编写守则：阻塞调用须带超时或走 to_thread（写进 driver 模板与生成规则） | 讨论产出 | ⚪ 轻 |

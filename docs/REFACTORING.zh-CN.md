@@ -12,7 +12,7 @@
 | 阶段 | 里程碑 | 提交 |
 | --- | --- | --- |
 | P | 安全边界冻结 + 工具循环 + driver 钩子预留 | `8261e93` |
-| A3 | rolling summary 上下文压缩 | `0a67ebb` |
+| A3 | rolling summary 上下文压缩 | `0a67ebb` `c2e7e76` |
 | B1-B3 | StateStore 抽象 → SQLite 后端 → audit export | `b193321` `f9728e4` `d3be149` |
 | B3.5-B3.8 | 原子动作 → lease 恢复 → 就绪矩阵 → 默认切 SQLite | `4698fa0` `46f4079` `1a3c3a4` `2d33bb4` |
 | B4a-c | 结构化记忆 → 文件摄入 → 检索地基 | `5192bc8` `3c68d94` `35c0058` |
@@ -39,7 +39,7 @@
 
 ### A3：上下文压缩
 
-动机：CHAT 无限增长会撑爆 LLM 上下文。过程：`protocol/chat_summary.py` 实现 rolling summary——保留最近 12 条原文，超过 24 条阈值时把更早消息压成 `running_summary` 字段（simple 模式，不依赖 LLM，确定性可测）；CHAT 协议文档扩展 summary 字段；LLM/tool_loop 的上下文组装统一改读"summary + 近期原文"。
+动机：CHAT 无限增长会撑爆 LLM 上下文。过程：`protocol/chat_summary.py` 实现 rolling summary——保留最近 12 条原文，超过 24 条阈值时把更早消息压成 `running_summary` 字段（simple 模式，不依赖 LLM，确定性可测）；CHAT 协议文档扩展 summary 字段；LLM/tool_loop 的上下文组装统一改读"summary + 近期原文"。后续补丁 `c2e7e76` 修复 `_trim_summary()` 在极小 `max_chars` 下因 `summary[-0:]` 返回全量文本而超预算的问题，并用单测锁住返回长度不超过预算。
 
 ### B1-B3：状态存储从文件到 SQLite
 

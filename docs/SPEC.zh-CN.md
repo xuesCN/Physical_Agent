@@ -51,7 +51,7 @@
 ## 3. 已完成里程碑（速查）
 
 P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态存储全套（SQLite 默认/原子动作/lease/审计）· B4a-c 记忆摄入检索地基 · C1-C3.2 FastAPI+SSE+React 仪表盘 · D1-D3.1 传输层+心跳看门狗 · D4 实机文档 · A1.0-A1.6a 官方 SDK/流式/abort/设置/深思考 · B5 后端口径收口 · E0.1-E0.3 GUI 对齐（重置/硬件面板/配置注册）· W1 驱动调用超时保护 · B6 退役 MarkdownStateStore 后端 · F1 提案卡片与 action 级审批流 · F2 结构化信息可读化 · F3 context_builder 解耦 · F4 expected 确定性比对 · W2 观察并发化与 observe 分频。
-逐项提交号与决策见 `REFACTORING.zh-CN.md` §1-§2。测试基线 277 用例。
+逐项提交号与决策见 `REFACTORING.zh-CN.md` §1-§2。测试基线 278 用例。
 
 ## 4. 待办矩阵（backlog，活账本）
 

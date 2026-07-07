@@ -158,7 +158,7 @@ def test_backend_matrix_mcp_propose_action_only_writes_pending(tmp_path, backend
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
-def test_backend_matrix_chat_runtime_proposes_actions_only(tmp_path, monkeypatch, backend):
+def test_backend_matrix_chat_runtime_drafts_actions_only(tmp_path, monkeypatch, backend):
     config_path = _config_for_backend(tmp_path, backend)
     watch = WatchRuntime(config_path)
     asyncio.run(watch.setup())
@@ -172,11 +172,12 @@ def test_backend_matrix_chat_runtime_proposes_actions_only(tmp_path, monkeypatch
 
     assert result["ok"] is True
     assert result["executed"] == 0
-    assert [action["capability"] for action in result["actions"]] == ["observe"]
-    assert _ids(actions["pending"]) == ["act_001"]
+    assert result["actions"] == []
+    assert [action["capability"] for action in result["draft_actions"]] == ["observe"]
+    assert _ids(actions["pending"]) == []
     assert actions["completed"] == []
     assert actions["cancelled"] == []
-    assert store.read_plan()["plan"].needs_watch is True
+    assert store.read_plan()["plan"].needs_watch is False
 
 
 @pytest.mark.parametrize("backend", BACKENDS)

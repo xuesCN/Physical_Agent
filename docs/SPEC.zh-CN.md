@@ -38,7 +38,7 @@
 | --- | --- | --- |
 | F0 | LLM planner 实验（立即） | yaml 切 `planner: llm`（代码默认不动）；**本地 JSONL 调用留痕**（llm-trace，零新服务，surface 标签区分三条调用路径）；坏任务实验集（越界/幻觉能力/中文/多步）→ 实验报告驱动后续排序 |
 | **B6（已完成历史收口项）** | 状态层收口 | 已删 `MarkdownStateStore`/factory 分支/config legacy 自动探测/矩阵测试 md 侧与 `test_e2e_markdown_loop`；**保留** markdown renderer/parser（SAFETY 真源、LOG 镜像、audit export 依赖）；`migrate-md-to-sqlite` 留一个版本周期仅为读取旧 Markdown workspace 迁移输入，**不代表 Markdown runtime backend 仍被支持**。已在 F1.3 前完成，避免审批元数据继续为退役后端重复实现 |
-| F1 | 提案卡片 + Approve | chat draft 结构化 → 卡片 Approve→propose API（人的点击才是提案）；**F1.3 审批流补全**（现为死胡同：awaiting_approval 状态 + approve/reject API + GUI 按钮，需独立 brief） |
+| F1 | 提案卡片 + Add to Actions + 审批流（已完成） | chat draft 固定为 `action-draft` fence，前端解析校验后渲染卡片；Chat 卡片按钮叫 Add to Actions，只创建 pending action，不等同执行审批。`requires_approval` 由后端按 robot/capability 计算，写入 action metadata；Actions 板的 Approve execution / Reject 才改变执行放行状态。watch claim 会原子跳过未批准动作但不阻塞后续 ready action；SafetyGate 仍照常校验 schema、bounds、capability、robot、SAFETY.md。 |
 | F2 | 结构化信息可读化（全应用原则） | **通用原则：已知协议字段一律定制组件呈现，未知/raw 字段 JSON 树兜底（懒加载），`<pre>` 裸 JSON 逐步清零**。首批落地：feedback 时间线（status 灯/action 跳转/失败原因用 `message` 字段）、world objects 表格、capabilities/config/integration 结果的卡片化；协议 schema 由 pydantic 锁定，定制组件不会白写 |
 | F3 | context_builder 解耦（接实机前必做） | 收拢 chat_runtime 3 处重复组装；ContextBudget 统一魔法数字；world/capabilities 超限摘要化；memory 按 importance 排序注入；golden-file 测试 |
 | F4 | 闭环地基 | 提案带 expected 断言 → 执行后**确定性比对**（不用 LLM 当裁判）→ violated 才回灌 LLM 诊断；自动重试默认关 |
@@ -50,8 +50,8 @@
 
 ## 3. 已完成里程碑（速查）
 
-P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态存储全套（SQLite 默认/原子动作/lease/审计）· B4a-c 记忆摄入检索地基 · C1-C3.2 FastAPI+SSE+React 仪表盘 · D1-D3.1 传输层+心跳看门狗 · D4 实机文档 · A1.0-A1.6a 官方 SDK/流式/abort/设置/深思考 · B5 后端口径收口 · E0.1-E0.3 GUI 对齐（重置/硬件面板/配置注册）· W1 驱动调用超时保护 · B6 退役 MarkdownStateStore 后端。
-逐项提交号与决策见 `REFACTORING.zh-CN.md` §1-§2。测试基线 244 用例。
+P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态存储全套（SQLite 默认/原子动作/lease/审计）· B4a-c 记忆摄入检索地基 · C1-C3.2 FastAPI+SSE+React 仪表盘 · D1-D3.1 传输层+心跳看门狗 · D4 实机文档 · A1.0-A1.6a 官方 SDK/流式/abort/设置/深思考 · B5 后端口径收口 · E0.1-E0.3 GUI 对齐（重置/硬件面板/配置注册）· W1 驱动调用超时保护 · B6 退役 MarkdownStateStore 后端 · F1 提案卡片与 action 级审批流。
+逐项提交号与决策见 `REFACTORING.zh-CN.md` §1-§2。测试基线 251 用例。
 
 ## 4. 待办矩阵（backlog，活账本）
 
@@ -60,9 +60,9 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 
 | 编号 | 内容 | 归属 | 状态 |
 | --- | --- | --- | --- |
-| F0 | LLM planner + 本地调用留痕 + 坏任务实验报告 | §2 | 🟡 第一轮完成；15 条：10 完成、5 无提案、0 Gate 拦截。**Review 复核（2026-07-06）**：trace 证实 bounds 在 prompt 内、拒绝为知情拒绝——报告"F3 优先"论据不成立，顺序维持 F1→F3；遗留=Gate 直击组（绕 planner 直接 propose 坏动作留 LLM 时代审计样本，小活可并入 F1 轮） |
+| F0 | LLM planner + 本地调用留痕 + 坏任务实验报告 | §2 | 🟡 第一轮完成；15 条：10 完成、5 无提案、0 Gate 拦截。**Review 复核（2026-07-06）**：trace 证实 bounds 在 prompt 内、拒绝为知情拒绝——报告"F3 优先"论据不成立，顺序维持 F1→F3；Gate 直击组已并入 F1 补齐 |
 | B6 | 退役 markdown 后端（保留 renderer 与迁移命令） | §2 | ✅ 2026-07-06 完成 `9072b4e`：active backend 只剩 SQLite；旧 Markdown 仅迁移 reader 可读 |
-| F1 | 提案卡片 + Approve + 审批流（F1.3 需 brief） | §2 | ⚪ |
+| F1 | 提案卡片 + Add to Actions + 审批流 | §2 | ✅ 2026-07-07 完成：Chat draft 卡片只提交动作板；Actions 板审批才放行 `requires_approval`；approval required 后端计算，SQLite 原子 claim 跳过未批准动作；拒绝/审批元数据进 LOG/audit |
 | F2 | feedback 时间线 + world 视图 + JSON 树 | §2 | ⚪ |
 | F3 | context_builder 解耦 | §2 | ⚪ 接实机前必做 |
 | F4 | 期望-比对-回灌 | §2 | ⚪ 依赖 F0 数据 |

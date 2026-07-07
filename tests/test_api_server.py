@@ -317,6 +317,105 @@ def test_api_endpoints_cover_state_proposals_memory_ingest_search_and_audit(tmp_
     assert board["cancelled"] == []
 
 
+def test_api_approve_reject_actions_are_idempotent_and_state_protected(tmp_path):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    store.write_capabilities(
+        {
+            "arm_1": {
+                "kind": "arm",
+                "driver": "mock_arm",
+                "status": "connected",
+                "capabilities": [
+                    {
+                        "name": "observe",
+                        "description": "Inspect with approval.",
+                        "params_schema": {"type": "object"},
+                        "requires_approval": True,
+                    }
+                ],
+            }
+        }
+    )
+    client = TestClient(create_app(config_path))
+
+    proposed = client.post(
+        "/api/actions/propose",
+        json={
+            "id": "act_api_approval",
+            "robot": "arm_1",
+            "capability": "observe",
+            "params": {},
+            "reason": "Needs human approval.",
+            "depends_on": [],
+            "metadata": {"source": "chat_draft", "user_message": "look around"},
+        },
+    )
+    assert proposed.status_code == 200
+    action = proposed.json()["action"]
+    assert action["metadata"]["source"] == "chat_draft"
+    assert action["metadata"]["approval"]["required"] is True
+    assert action["metadata"]["approval"]["status"] == "pending"
+
+    approved = client.post(
+        "/api/actions/act_api_approval/approve",
+        json={"reason": "Intentional.", "actor": "gui"},
+    )
+    approved_again = client.post("/api/actions/act_api_approval/approve", json={})
+
+    assert approved.status_code == 200
+    assert approved.json()["changed"] is True
+    assert approved.json()["action"]["metadata"]["approval"]["status"] == "approved"
+    assert approved_again.status_code == 200
+    assert approved_again.json()["changed"] is False
+
+    log_entries = store.export_human_view()["manifest"]
+    assert log_entries
+    audit_dir = store.path / "audit"
+    log_text = (audit_dir / "log.json").read_text(encoding="utf-8")
+    assert log_text.count("API approved action `act_api_approval`") == 1
+
+    store.mark_action_completed(store.read_actions()["pending"][0])
+    rejected_completed = client.post(
+        "/api/actions/act_api_approval/reject",
+        json={"reason": "Too late.", "actor": "gui"},
+    )
+    missing = client.post("/api/actions/missing_action/approve", json={})
+
+    assert rejected_completed.status_code == 409
+    assert missing.status_code == 404
+
+
+def test_api_reject_pending_action_moves_to_cancelled_with_reason(tmp_path):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    client = TestClient(create_app(config_path))
+    client.post(
+        "/api/actions/propose",
+        json={
+            "id": "act_reject_me",
+            "robot": "arm_1",
+            "capability": "observe",
+            "params": {},
+            "reason": "Maybe inspect.",
+            "depends_on": [],
+        },
+    )
+
+    rejected = client.post(
+        "/api/actions/act_reject_me/reject",
+        json={"reason": "Wrong target.", "actor": "gui"},
+    )
+
+    assert rejected.status_code == 200
+    cancelled = rejected.json()["state"]["actions"]["cancelled"][0]
+    assert cancelled["id"] == "act_reject_me"
+    assert cancelled["metadata"]["approval"]["status"] == "rejected"
+    assert cancelled["metadata"]["approval"]["reason"] == "Wrong target."
+
+
 def test_api_state_check_reports_backend_guidance_without_watch(
     tmp_path,
     monkeypatch,

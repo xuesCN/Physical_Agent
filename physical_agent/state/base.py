@@ -49,6 +49,22 @@ class StateStore(Protocol):
 
     def append_pending_action(self, action: Action | dict[str, Any]) -> Action: ...
 
+    def approve_action(
+        self,
+        action_id: str,
+        *,
+        actor: str = "local_user",
+        reason: str | None = None,
+    ) -> tuple[Action, bool]: ...
+
+    def reject_action(
+        self,
+        action_id: str,
+        *,
+        actor: str = "local_user",
+        reason: str | None = None,
+    ) -> Action: ...
+
     def claim_next_ready_action(self, *, claim_owner: str = "watch") -> Action | None: ...
 
     def recover_stale_actions(

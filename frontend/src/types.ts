@@ -70,6 +70,32 @@ export interface ActionItem {
   params?: Record<string, unknown>;
   reason?: string | null;
   depends_on?: string[];
+  metadata?: ActionMetadata;
+}
+
+export interface ActionMetadata {
+  source?: string;
+  proposed_by?: string;
+  original_task?: string;
+  user_message?: string;
+  draft_reason?: string;
+  planner_reason?: string | null;
+  draft_id?: string;
+  approval?: ActionApproval;
+  [key: string]: unknown;
+}
+
+export interface ActionApproval {
+  required?: boolean;
+  status?: "pending" | "approved" | "rejected" | "not_required" | string;
+  by?: string;
+  at?: string;
+  reason?: string;
+  approved_by?: string;
+  approved_at?: string;
+  rejected_by?: string;
+  rejected_at?: string;
+  [key: string]: unknown;
 }
 
 export interface ChatMessage {
@@ -162,6 +188,14 @@ export interface ApiEvent {
   type: "hello" | "state" | "watch_step" | "error" | string;
   ts: string;
   payload: Record<string, unknown>;
+}
+
+export interface ActionMutationResponse {
+  ok: boolean;
+  message: string;
+  action: ActionItem;
+  changed?: boolean;
+  state: AgentState;
 }
 
 export interface SearchResponse {

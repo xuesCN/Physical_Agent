@@ -56,7 +56,14 @@ class AgentRuntime:
         actions = self._renumber_actions(actions, workspace)
 
         for action in actions:
-            workspace.append_pending_action(action)
+            workspace.append_pending_action(
+                _with_proposal_metadata(
+                    action,
+                    source="planner",
+                    proposed_by="agent",
+                    original_task=task,
+                )
+            )
         workspace.append_log(
             f"`physical-agent run` submitted {len(actions)} action(s): "
             + ", ".join(f"`{action.id}`" for action in actions),
@@ -166,3 +173,21 @@ class AgentRuntime:
                 )
             )
         return renumbered
+
+
+def _with_proposal_metadata(
+    action: Action,
+    *,
+    source: str,
+    proposed_by: str,
+    original_task: str,
+) -> Action:
+    data = action.model_dump(mode="json")
+    metadata = dict(data.get("metadata") or {})
+    metadata.setdefault("source", source)
+    metadata.setdefault("proposed_by", proposed_by)
+    metadata.setdefault("original_task", original_task)
+    if action.reason:
+        metadata.setdefault("planner_reason", action.reason)
+    data["metadata"] = metadata
+    return Action.model_validate(data)

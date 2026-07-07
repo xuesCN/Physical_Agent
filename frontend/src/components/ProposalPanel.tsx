@@ -1,6 +1,6 @@
 import { AimOutlined, FormOutlined, PlusOutlined } from "@ant-design/icons";
 import { Button, Card, Form, Input, Select, Space, Typography } from "antd";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import type { ActionItem, AgentState, RobotInfo } from "../types";
 
 interface ProposalPanelProps {
@@ -8,6 +8,8 @@ interface ProposalPanelProps {
   loading: boolean;
   onSubmitTask: (task: string) => Promise<void>;
   onProposeAction: (action: ActionItem) => Promise<void>;
+  prefillAction?: ActionItem | null;
+  prefillVersion?: number;
 }
 
 interface TaskValues {
@@ -27,7 +29,9 @@ export function ProposalPanel({
   state,
   loading,
   onSubmitTask,
-  onProposeAction
+  onProposeAction,
+  prefillAction = null,
+  prefillVersion = 0
 }: ProposalPanelProps) {
   const [taskForm] = Form.useForm<TaskValues>();
   const [actionForm] = Form.useForm<ActionValues>();
@@ -50,6 +54,20 @@ export function ProposalPanel({
       })) ?? []
     ).filter((item) => item.value);
   }, [robotId, robots]);
+
+  useEffect(() => {
+    if (!prefillAction) {
+      return;
+    }
+    actionForm.setFieldsValue({
+      id: prefillAction.id,
+      robot: prefillAction.robot,
+      capability: prefillAction.capability,
+      params: JSON.stringify(prefillAction.params ?? {}, null, 2),
+      reason: prefillAction.reason ?? undefined,
+      depends_on: prefillAction.depends_on?.join(", ") ?? ""
+    });
+  }, [actionForm, prefillAction, prefillVersion]);
 
   async function submitTask(values: TaskValues) {
     await onSubmitTask(values.task.trim());
@@ -78,7 +96,8 @@ export function ProposalPanel({
       capability: values.capability,
       params: parsedParams,
       reason: values.reason?.trim() || "Proposed from GUI.",
-      depends_on: splitList(values.depends_on)
+      depends_on: splitList(values.depends_on),
+      metadata: prefillAction?.metadata
     });
     actionForm.resetFields(["id", "params", "reason", "depends_on"]);
   }

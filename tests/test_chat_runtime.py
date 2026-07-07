@@ -36,7 +36,7 @@ def test_chat_runtime_rule_based_remembers(tmp_path):
     assert len(store.read_chat()["messages"]) == 2
 
 
-def test_chat_runtime_rule_based_proposes_actions(tmp_path):
+def test_chat_runtime_rule_based_drafts_actions_without_writing_pending(tmp_path):
     config_path = tmp_path / "physical-agent.yaml"
     setup_project(config_path, publish=True)
 
@@ -45,13 +45,15 @@ def test_chat_runtime_rule_based_proposes_actions(tmp_path):
     )
 
     assert result["ok"] is True
-    assert [action["capability"] for action in result["actions"]] == ["pick", "place"]
+    assert result["actions"] == []
+    assert [action["capability"] for action in result["draft_actions"]] == ["pick", "place"]
+    assert "```action-draft" in result["reply"]
     store = open_state_store(config_path=config_path)
-    assert [action.capability for action in store.read_actions()["pending"]] == ["pick", "place"]
-    assert store.read_plan()["plan"].needs_watch is True
+    assert store.read_actions()["pending"] == []
+    assert store.read_plan()["plan"].needs_watch is False
 
 
-def test_chat_runtime_auto_step_executes_actions(tmp_path):
+def test_chat_runtime_auto_step_does_not_execute_chat_drafts(tmp_path):
     config_path = tmp_path / "physical-agent.yaml"
     setup_project(config_path, publish=True)
 
@@ -60,9 +62,9 @@ def test_chat_runtime_auto_step_executes_actions(tmp_path):
         auto_step=True,
     )
 
-    assert result["executed"] == 2
+    assert result["executed"] == 0
     store = open_state_store(config_path=config_path)
-    assert store.read_world()["state"]["objects"]["red_block"]["location"] == "tray"
+    assert store.read_world()["state"]["objects"]["red_block"]["location"] == "table"
     assert store.read_actions()["pending"] == []
 
 
@@ -238,6 +240,7 @@ def test_chat_runtime_stream_never_creates_pending_actions(tmp_path):
 
     assert events[-1]["type"] == "done"
     assert "did not create a pending action" in events[-1]["reply"]
+    assert "```action-draft" in events[-1]["reply"]
     assert '"capability": "pick"' in events[-1]["reply"]
     assert '"capability": "place"' in events[-1]["reply"]
     store = open_state_store(config_path=config_path)
@@ -268,6 +271,7 @@ def test_chat_runtime_stream_prompt_allows_copyable_action_drafts(tmp_path, monk
 
     assert events[-1]["type"] == "done"
     assert "Action Draft JSON" in captured["system"]
+    assert "```action-draft" in captured["system"]
     assert "Do not call tools" in captured["system"]
     assert "Do not return JSON" not in captured["system"]
     assert "capabilities" in captured["payload"]
@@ -397,7 +401,9 @@ def test_chat_runtime_llm_context_uses_summary_and_live_workspace_state(
     assert payload["feedback"]["latest"]["status"] == "completed"
     assert "unsafe_execute" not in json.dumps(payload["capabilities"])
     assert "stale" not in json.dumps(payload["world"])
-    assert [action["id"] for action in result["actions"]] == ["act_006"]
+    assert result["actions"] == []
+    assert result["draft_actions"][0]["capability"] == "observe"
+    assert "```action-draft" in result["reply"]
 
 
 def test_chat_runtime_llm_treats_upload_memory_as_untrusted_context(

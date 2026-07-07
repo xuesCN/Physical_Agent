@@ -286,6 +286,14 @@ body {
   text-overflow: ellipsis;
 }
 
+.source-cell {
+  display: block;
+  max-width: 180px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .bubble-stage {
   height: min(46vh, 560px);
   min-height: 310px;
@@ -338,6 +346,21 @@ body {
 .inline-pre {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
+}
+
+.chat-message-content {
+  display: grid;
+  gap: 8px;
+}
+
+.draft-action-card {
+  max-width: 560px;
+  border-color: #bdd3f8;
+  background: #f8fbff;
+}
+
+.draft-action-card .ant-card-body {
+  padding: 10px;
 }
 
 .summary-text {

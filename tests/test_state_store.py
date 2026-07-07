@@ -388,6 +388,106 @@ def test_sqlite_claim_next_ready_action_is_not_duplicated(tmp_path):
     assert [action.id for action in store.read_actions()["completed"]] == ["act_once"]
 
 
+def test_sqlite_claim_skips_unapproved_required_action_without_blocking_later_ready(
+    tmp_path,
+):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.write_capabilities(
+        {
+            "arm_1": {
+                "kind": "arm",
+                "driver": "mock_arm",
+                "capabilities": [
+                    {
+                        "name": "precise_move",
+                        "description": "Move with human approval.",
+                        "params_schema": {"type": "object"},
+                        "requires_approval": True,
+                    },
+                    {
+                        "name": "observe",
+                        "description": "Observe.",
+                        "params_schema": {"type": "object"},
+                    },
+                ],
+            }
+        }
+    )
+    store.append_pending_action(
+        Action(
+            id="act_needs_approval",
+            robot="arm_1",
+            capability="precise_move",
+            metadata={"approval": {"required": False}},
+        )
+    )
+    store.append_pending_action(Action(id="act_ready", robot="arm_1", capability="observe"))
+
+    pending = store.read_actions()["pending"]
+    assert pending[0].metadata["approval"]["required"] is True
+    assert pending[0].metadata["approval"]["status"] == "pending"
+    assert pending[1].metadata["approval"]["required"] is False
+
+    claimed = store.claim_next_ready_action(claim_owner="test-watch")
+
+    assert claimed is not None
+    assert claimed.id == "act_ready"
+    assert [action.id for action in store.read_actions()["pending"]] == [
+        "act_needs_approval"
+    ]
+    with sqlite3.connect(store.db_path) as conn:
+        rows = {
+            row[0]: row[1]
+            for row in conn.execute(
+                "SELECT id, status FROM actions ORDER BY seq"
+            ).fetchall()
+        }
+    assert rows == {"act_needs_approval": "pending", "act_ready": "in_progress"}
+
+
+def test_sqlite_approve_required_action_allows_claim_and_is_idempotent(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.write_capabilities(
+        {
+            "arm_1": {
+                "kind": "arm",
+                "driver": "mock_arm",
+                "capabilities": [
+                    {
+                        "name": "precise_move",
+                        "description": "Move with human approval.",
+                        "params_schema": {"type": "object"},
+                        "requires_approval": True,
+                    }
+                ],
+            }
+        }
+    )
+    store.append_pending_action(
+        Action(id="act_approval", robot="arm_1", capability="precise_move")
+    )
+
+    assert store.claim_next_ready_action(claim_owner="test-watch") is None
+    approved, changed = store.approve_action(
+        "act_approval",
+        actor="test_user",
+        reason="Looks intentional.",
+    )
+    again, changed_again = store.approve_action("act_approval", actor="test_user")
+
+    assert changed is True
+    assert changed_again is False
+    assert approved.metadata["approval"]["status"] == "approved"
+    assert approved.metadata["approval"]["by"] == "test_user"
+    assert again.metadata["approval"]["status"] == "approved"
+    claimed = store.claim_next_ready_action(claim_owner="test-watch")
+    assert claimed is not None
+    assert claimed.id == "act_approval"
+    assert claimed.metadata["approval"]["status"] == "approved"
+
+
 def test_sqlite_recover_stale_actions_releases_only_expired_claims(tmp_path):
     store = SqliteStateStore(tmp_path / "workspace")
     store.initialize()

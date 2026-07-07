@@ -67,6 +67,7 @@ ACTION_CLAIM_COLUMNS = {
     "claimed_at": "TEXT",
     "claim_owner": "TEXT",
     "attempts": "INTEGER DEFAULT 0",
+    "metadata": "TEXT DEFAULT '{}'",
 }
 
 MEMORY_NOTE_COLUMNS = {
@@ -258,28 +259,51 @@ class SqliteStateStore:
     def read_actions(self) -> dict[str, Any]:
         with self._connect() as conn:
             metadata = self._read_metadata_conn(conn, "actions")
+            capabilities = self._read_document_conn(conn, "capabilities")
+            safety_rules = self.read_safety().get("rules", {})
             return {
                 "metadata": metadata,
-                "pending": self._read_actions_by_status(conn, "pending"),
-                "completed": self._read_actions_by_status(conn, "completed"),
-                "cancelled": self._read_actions_by_status(conn, "cancelled"),
+                "pending": self._read_actions_by_status(
+                    conn,
+                    "pending",
+                    capabilities=capabilities,
+                    safety_rules=safety_rules,
+                ),
+                "completed": self._read_actions_by_status(
+                    conn,
+                    "completed",
+                    capabilities=capabilities,
+                    safety_rules=safety_rules,
+                ),
+                "cancelled": self._read_actions_by_status(
+                    conn,
+                    "cancelled",
+                    capabilities=capabilities,
+                    safety_rules=safety_rules,
+                ),
             }
 
     def append_pending_action(self, action: Action | dict[str, Any]) -> Action:
-        parsed = _coerce_action(action)
-        timestamp = _now()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            capabilities = self._read_document_conn(conn, "capabilities")
+            safety_rules = self.read_safety().get("rules", {})
+            parsed = _with_backend_approval_metadata(
+                _coerce_action(action),
+                capabilities=capabilities,
+                safety_rules=safety_rules,
+            )
             revision = self._next_revision_conn(conn, "actions")
             seq = self._next_action_seq_conn(conn)
+            timestamp = _now()
             conn.execute(
                 """
                 INSERT INTO actions(
                     id, robot, capability, params, reason, depends_on,
-                    status, result, seq, created_at, updated_at,
+                    metadata, status, result, seq, created_at, updated_at,
                     claimed_at, claim_owner, attempts
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     parsed.id,
@@ -288,6 +312,7 @@ class SqliteStateStore:
                     _json_dumps(parsed.params),
                     parsed.reason,
                     _json_dumps(parsed.depends_on),
+                    _json_dumps(parsed.metadata),
                     "pending",
                     _json_dumps({}),
                     seq,
@@ -306,6 +331,142 @@ class SqliteStateStore:
             )
         return parsed
 
+    def approve_action(
+        self,
+        action_id: str,
+        *,
+        actor: str = "local_user",
+        reason: str | None = None,
+    ) -> tuple[Action, bool]:
+        timestamp = _now()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT id, robot, capability, params, reason, depends_on, metadata, status
+                FROM actions
+                WHERE id = ?
+                """,
+                (action_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(action_id)
+            status = str(row["status"] or "")
+            if status in {"completed", "cancelled", "in_progress"}:
+                raise ValueError(f"Cannot approve action `{action_id}` in status `{status}`.")
+
+            capabilities = self._read_document_conn(conn, "capabilities")
+            safety_rules = self.read_safety().get("rules", {})
+            action = _with_backend_approval_metadata(
+                _action_from_row(row),
+                capabilities=capabilities,
+                safety_rules=safety_rules,
+            )
+            metadata = dict(action.metadata)
+            approval = dict(metadata.get("approval") or {})
+            if not approval.get("required"):
+                action = _replace_action_metadata(action, metadata)
+                self._update_action_metadata_conn(conn, action.id, action.metadata, updated_at=timestamp)
+                return action, False
+            if approval.get("status") == "approved":
+                self._update_action_metadata_conn(conn, action.id, action.metadata, updated_at=timestamp)
+                return action, False
+
+            approval.update(
+                {
+                    "required": True,
+                    "status": "approved",
+                    "by": actor,
+                    "at": timestamp,
+                    "approved_by": actor,
+                    "approved_at": timestamp,
+                }
+            )
+            if reason:
+                approval["reason"] = reason
+            metadata["approval"] = approval
+            action = _replace_action_metadata(action, metadata)
+            revision = self._next_revision_conn(conn, "actions")
+            self._update_action_metadata_conn(conn, action.id, action.metadata, updated_at=timestamp)
+            self._upsert_document_conn(
+                conn,
+                "actions",
+                {"metadata": self._metadata("actions", revision)},
+                revision,
+            )
+            return action, True
+
+    def reject_action(
+        self,
+        action_id: str,
+        *,
+        actor: str = "local_user",
+        reason: str | None = None,
+    ) -> Action:
+        timestamp = _now()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT id, robot, capability, params, reason, depends_on, metadata, status
+                FROM actions
+                WHERE id = ?
+                """,
+                (action_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(action_id)
+            status = str(row["status"] or "")
+            if status in {"completed", "cancelled", "in_progress"}:
+                raise ValueError(f"Cannot reject action `{action_id}` in status `{status}`.")
+
+            capabilities = self._read_document_conn(conn, "capabilities")
+            safety_rules = self.read_safety().get("rules", {})
+            action = _with_backend_approval_metadata(
+                _action_from_row(row),
+                capabilities=capabilities,
+                safety_rules=safety_rules,
+            )
+            metadata = dict(action.metadata)
+            approval = dict(metadata.get("approval") or {})
+            approval.update(
+                {
+                    "required": bool(approval.get("required")),
+                    "status": "rejected",
+                    "by": actor,
+                    "at": timestamp,
+                    "rejected_by": actor,
+                    "rejected_at": timestamp,
+                    "reason": reason or "Rejected by human reviewer.",
+                }
+            )
+            metadata["approval"] = approval
+            action = _replace_action_metadata(action, metadata)
+            revision = self._next_revision_conn(conn, "actions")
+            conn.execute(
+                """
+                UPDATE actions
+                SET metadata = ?,
+                    status = 'cancelled',
+                    claimed_at = NULL,
+                    claim_owner = NULL,
+                    updated_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (
+                    _json_dumps(action.metadata),
+                    timestamp,
+                    action.id,
+                ),
+            )
+            self._upsert_document_conn(
+                conn,
+                "actions",
+                {"metadata": self._metadata("actions", revision)},
+                revision,
+            )
+            return action
+
     def claim_next_ready_action(self, *, claim_owner: str = DEFAULT_CLAIM_OWNER) -> Action | None:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -313,31 +474,67 @@ class SqliteStateStore:
                 conn,
                 DEFAULT_ACTION_LEASE_SECONDS,
             )
-            row = conn.execute(
+            rows = conn.execute(
                 """
-                SELECT id, robot, capability, params, reason, depends_on
+                SELECT id, robot, capability, params, reason, depends_on, metadata
                 FROM actions
                 WHERE status = 'pending'
                 ORDER BY seq, id
-                LIMIT 1
                 """
-            ).fetchone()
-            if row is None:
+            ).fetchall()
+            if not rows:
+                return None
+
+            capabilities = self._read_document_conn(conn, "capabilities")
+            safety_rules = self.read_safety().get("rules", {})
+            timestamp = _now()
+            row = None
+            action = None
+            metadata_changed = False
+            for candidate in rows:
+                candidate_action = _with_backend_approval_metadata(
+                    _action_from_row(candidate),
+                    capabilities=capabilities,
+                    safety_rules=safety_rules,
+                )
+                candidate_metadata = _json_dumps(candidate_action.metadata)
+                if candidate_metadata != (candidate["metadata"] or "{}"):
+                    self._update_action_metadata_conn(
+                        conn,
+                        candidate_action.id,
+                        candidate_action.metadata,
+                        updated_at=timestamp,
+                    )
+                    metadata_changed = True
+                if _approval_required(candidate_action) and not _approval_approved(candidate_action):
+                    continue
+                row = candidate
+                action = candidate_action
+                break
+            if row is None or action is None:
+                if metadata_changed:
+                    revision = self._next_revision_conn(conn, "actions")
+                    self._upsert_document_conn(
+                        conn,
+                        "actions",
+                        {"metadata": self._metadata("actions", revision)},
+                        revision,
+                    )
                 return None
 
             revision = self._next_revision_conn(conn, "actions")
-            timestamp = _now()
             cursor = conn.execute(
                 """
                 UPDATE actions
                 SET status = 'in_progress',
+                    metadata = ?,
                     claimed_at = ?,
                     claim_owner = ?,
                     attempts = COALESCE(attempts, 0) + 1,
                     updated_at = ?
                 WHERE id = ? AND status = 'pending'
                 """,
-                (timestamp, claim_owner, timestamp, row["id"]),
+                (_json_dumps(action.metadata), timestamp, claim_owner, timestamp, row["id"]),
             )
             if cursor.rowcount != 1:
                 return None
@@ -347,7 +544,7 @@ class SqliteStateStore:
                 {"metadata": self._metadata("actions", revision)},
                 revision,
             )
-            return _action_from_row(row)
+            return action
 
     def recover_stale_actions(
         self,
@@ -739,6 +936,7 @@ class SqliteStateStore:
                 params TEXT,
                 reason TEXT,
                 depends_on TEXT,
+                metadata TEXT,
                 status TEXT,
                 result TEXT,
                 seq INTEGER,
@@ -955,6 +1153,8 @@ class SqliteStateStore:
         conn.execute("DELETE FROM actions")
         seq = 0
         timestamp = _now()
+        capabilities = self._read_document_conn(conn, "capabilities")
+        safety_rules = self.read_safety().get("rules", {})
         for status, items in (
             ("pending", pending),
             ("completed", completed),
@@ -962,15 +1162,19 @@ class SqliteStateStore:
         ):
             for item in items:
                 seq += 1
-                action = item if isinstance(item, Action) else Action.model_validate(item)
+                action = _with_backend_approval_metadata(
+                    item if isinstance(item, Action) else Action.model_validate(item),
+                    capabilities=capabilities,
+                    safety_rules=safety_rules,
+                )
                 conn.execute(
                     """
                     INSERT INTO actions(
                         id, robot, capability, params, reason, depends_on,
-                        status, result, seq, created_at, updated_at,
+                        metadata, status, result, seq, created_at, updated_at,
                         claimed_at, claim_owner, attempts
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         action.id,
@@ -979,6 +1183,7 @@ class SqliteStateStore:
                         _json_dumps(action.params),
                         action.reason,
                         _json_dumps(action.depends_on),
+                        _json_dumps(action.metadata),
                         status,
                         _json_dumps({}),
                         seq,
@@ -1001,6 +1206,13 @@ class SqliteStateStore:
         timestamp = _now()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            capabilities = self._read_document_conn(conn, "capabilities")
+            safety_rules = self.read_safety().get("rules", {})
+            parsed = _with_backend_approval_metadata(
+                parsed,
+                capabilities=capabilities,
+                safety_rules=safety_rules,
+            )
             revision = self._next_revision_conn(conn, "actions")
             existing = conn.execute(
                 "SELECT seq, created_at FROM actions WHERE id = ?",
@@ -1011,10 +1223,10 @@ class SqliteStateStore:
                     """
                     INSERT INTO actions(
                         id, robot, capability, params, reason, depends_on,
-                        status, result, seq, created_at, updated_at,
+                        metadata, status, result, seq, created_at, updated_at,
                         claimed_at, claim_owner, attempts
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         parsed.id,
@@ -1023,6 +1235,7 @@ class SqliteStateStore:
                         _json_dumps(parsed.params),
                         parsed.reason,
                         _json_dumps(parsed.depends_on),
+                        _json_dumps(parsed.metadata),
                         status,
                         _json_dumps({}),
                         self._next_action_seq_conn(conn),
@@ -1042,6 +1255,7 @@ class SqliteStateStore:
                         params = ?,
                         reason = ?,
                         depends_on = ?,
+                        metadata = ?,
                         status = ?,
                         claimed_at = NULL,
                         claim_owner = NULL,
@@ -1054,6 +1268,7 @@ class SqliteStateStore:
                         _json_dumps(parsed.params),
                         parsed.reason,
                         _json_dumps(parsed.depends_on),
+                        _json_dumps(parsed.metadata),
                         status,
                         timestamp,
                         parsed.id,
@@ -1075,6 +1290,25 @@ class SqliteStateStore:
             if name not in existing:
                 conn.execute(f"ALTER TABLE actions ADD COLUMN {name} {definition}")
         conn.execute("UPDATE actions SET attempts = 0 WHERE attempts IS NULL")
+        conn.execute("UPDATE actions SET metadata = '{}' WHERE metadata IS NULL")
+
+    def _update_action_metadata_conn(
+        self,
+        conn: sqlite3.Connection,
+        action_id: str,
+        metadata: dict[str, Any],
+        *,
+        updated_at: str,
+    ) -> None:
+        conn.execute(
+            """
+            UPDATE actions
+            SET metadata = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (_json_dumps(metadata), updated_at, action_id),
+        )
 
     def _ensure_memory_note_columns(self, conn: sqlite3.Connection) -> None:
         existing = {
@@ -1432,17 +1666,27 @@ class SqliteStateStore:
         self,
         conn: sqlite3.Connection,
         status: str,
+        *,
+        capabilities: dict[str, Any],
+        safety_rules: dict[str, Any],
     ) -> list[Action]:
         rows = conn.execute(
             """
-            SELECT id, robot, capability, params, reason, depends_on
+            SELECT id, robot, capability, params, reason, depends_on, metadata
             FROM actions
             WHERE status = ?
             ORDER BY seq, id
             """,
             (status,),
         ).fetchall()
-        return [_action_from_row(row) for row in rows]
+        return [
+            _with_backend_approval_metadata(
+                _action_from_row(row),
+                capabilities=capabilities,
+                safety_rules=safety_rules,
+            )
+            for row in rows
+        ]
 
     def _read_document(self, name: str) -> dict[str, Any]:
         with self._connect() as conn:
@@ -1620,7 +1864,74 @@ def _action_from_row(row: sqlite3.Row) -> Action:
         params=_json_loads(row["params"], default={}),
         reason=row["reason"],
         depends_on=_json_loads(row["depends_on"], default=[]),
+        metadata=_json_loads(_row_get(row, "metadata"), default={}),
     )
+
+
+def _row_get(row: sqlite3.Row, key: str) -> Any:
+    return row[key] if key in row.keys() else None
+
+
+def _with_backend_approval_metadata(
+    action: Action,
+    *,
+    capabilities: dict[str, Any],
+    safety_rules: dict[str, Any],
+) -> Action:
+    metadata = dict(action.metadata or {})
+    approval = dict(metadata.get("approval") or {})
+    required = _action_requires_approval(
+        action,
+        capabilities=capabilities,
+        safety_rules=safety_rules,
+    )
+    previous_status = str(approval.get("status") or "").strip().lower()
+    approval["required"] = required
+    if required:
+        if previous_status not in {"approved", "rejected"}:
+            approval["status"] = "pending"
+    else:
+        if previous_status not in {"approved", "rejected"}:
+            approval["status"] = "not_required"
+    metadata["approval"] = approval
+    return _replace_action_metadata(action, metadata)
+
+
+def _replace_action_metadata(action: Action, metadata: dict[str, Any]) -> Action:
+    data = action.model_dump(mode="json")
+    data["metadata"] = _as_plain(metadata)
+    return Action.model_validate(data)
+
+
+def _action_requires_approval(
+    action: Action,
+    *,
+    capabilities: dict[str, Any],
+    safety_rules: dict[str, Any],
+) -> bool:
+    robots = capabilities.get("robots") if isinstance(capabilities, dict) else {}
+    robot = robots.get(action.robot) if isinstance(robots, dict) else None
+    if not isinstance(robot, dict):
+        return False
+    if robot.get("requires_approval") and safety_rules.get(
+        "require_human_approval_for_real_hardware",
+        True,
+    ):
+        return True
+    for capability in robot.get("capabilities") or []:
+        if isinstance(capability, dict) and capability.get("name") == action.capability:
+            return bool(capability.get("requires_approval"))
+    return False
+
+
+def _approval_required(action: Action) -> bool:
+    approval = action.metadata.get("approval") if isinstance(action.metadata, dict) else None
+    return bool(isinstance(approval, dict) and approval.get("required"))
+
+
+def _approval_approved(action: Action) -> bool:
+    approval = action.metadata.get("approval") if isinstance(action.metadata, dict) else None
+    return bool(isinstance(approval, dict) and approval.get("status") == "approved")
 
 
 def _memory_note_from_row(row: sqlite3.Row) -> dict[str, Any]:

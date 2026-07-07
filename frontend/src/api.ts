@@ -1,5 +1,6 @@
 import type {
   ActionItem,
+  ActionMutationResponse,
   AgentState,
   ApiEvent,
   ConfigResponse,
@@ -229,6 +230,32 @@ export function proposeAction(action: ActionItem): Promise<{
     method: "POST",
     body: JSON.stringify(action),
   });
+}
+
+export function approveAction(
+  actionId: string,
+  reason?: string,
+): Promise<ActionMutationResponse> {
+  return apiJson<ActionMutationResponse>(
+    `/api/actions/${encodeURIComponent(actionId)}/approve`,
+    {
+      method: "POST",
+      body: JSON.stringify({ actor: "gui", reason: reason ?? null }),
+    },
+  );
+}
+
+export function rejectAction(
+  actionId: string,
+  reason: string,
+): Promise<ActionMutationResponse> {
+  return apiJson<ActionMutationResponse>(
+    `/api/actions/${encodeURIComponent(actionId)}/reject`,
+    {
+      method: "POST",
+      body: JSON.stringify({ actor: "gui", reason }),
+    },
+  );
 }
 
 export function searchMemory(

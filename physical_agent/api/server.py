@@ -79,6 +79,18 @@ class ActionProposalRequest(BaseModel):
         return data
 
 
+class ActionApprovalRequest(BaseModel):
+    actor: str | None = None
+    reason: str | None = None
+
+    def normalized_actor(self, default: str = "gui") -> str:
+        return (self.actor or default).strip() or default
+
+    def normalized_reason(self) -> str | None:
+        value = (self.reason or "").strip()
+        return value or None
+
+
 class SubmitTaskRequest(BaseModel):
     task: str
 
@@ -287,6 +299,20 @@ def create_app(
     def propose_action(payload: ActionProposalRequest) -> dict[str, Any]:
         try:
             return controller.propose_action(payload)
+        except ApiRequestError as exc:
+            return handle_error(exc)
+
+    @app.post("/api/actions/{action_id}/approve")
+    def approve_action(action_id: str, payload: ActionApprovalRequest | None = None) -> dict[str, Any]:
+        try:
+            return controller.approve_action(action_id, payload or ActionApprovalRequest())
+        except ApiRequestError as exc:
+            return handle_error(exc)
+
+    @app.post("/api/actions/{action_id}/reject")
+    def reject_action(action_id: str, payload: ActionApprovalRequest | None = None) -> dict[str, Any]:
+        try:
+            return controller.reject_action(action_id, payload or ActionApprovalRequest())
         except ApiRequestError as exc:
             return handle_error(exc)
 
@@ -555,7 +581,13 @@ class ApiController:
 
     def propose_action(self, payload: ActionProposalRequest) -> dict[str, Any]:
         _, store = self._store(initialize=True)
-        action = _validate_action(payload.action_payload())
+        action = _validate_action(
+            _with_proposal_metadata(
+                payload.action_payload(),
+                source="manual",
+                proposed_by="api",
+            )
+        )
         appended = store.append_pending_action(action)
         store.append_log(f"API proposed action `{appended.id}`.", actor="api")
         state = self.state()
@@ -564,6 +596,78 @@ class ApiController:
             "ok": True,
             "message": "Action proposed in the action board; watch must validate before execution.",
             "action": _json_safe(appended),
+            "state": state,
+        }
+
+    def approve_action(
+        self,
+        action_id: str,
+        payload: ActionApprovalRequest,
+    ) -> dict[str, Any]:
+        _, store = self._store(require_exists=True)
+        try:
+            action, changed = store.approve_action(
+                action_id,
+                actor=payload.normalized_actor(),
+                reason=payload.normalized_reason(),
+            )
+        except KeyError as exc:
+            raise ApiRequestError(
+                f"Action not found: {action_id}",
+                status_code=404,
+            ) from exc
+        except ValueError as exc:
+            raise ApiRequestError(str(exc), status_code=409) from exc
+        if changed:
+            store.append_log(
+                f"API approved action `{action.id}` for execution.",
+                actor="api",
+            )
+        state = self.state()
+        self._publish_state("action_approved", state)
+        return {
+            "ok": True,
+            "message": (
+                "Action approved for watch execution."
+                if changed
+                else "Action approval is already current."
+            ),
+            "action": _json_safe(action),
+            "changed": changed,
+            "state": state,
+        }
+
+    def reject_action(
+        self,
+        action_id: str,
+        payload: ActionApprovalRequest,
+    ) -> dict[str, Any]:
+        _, store = self._store(require_exists=True)
+        reason = payload.normalized_reason()
+        try:
+            action = store.reject_action(
+                action_id,
+                actor=payload.normalized_actor(),
+                reason=reason,
+            )
+        except KeyError as exc:
+            raise ApiRequestError(
+                f"Action not found: {action_id}",
+                status_code=404,
+            ) from exc
+        except ValueError as exc:
+            raise ApiRequestError(str(exc), status_code=409) from exc
+        store.append_log(
+            f"API rejected action `{action.id}`: "
+            f"{reason or 'Rejected by human reviewer.'}",
+            actor="api",
+        )
+        state = self.state()
+        self._publish_state("action_rejected", state)
+        return {
+            "ok": True,
+            "message": "Action rejected and moved to cancelled.",
+            "action": _json_safe(action),
             "state": state,
         }
 
@@ -582,6 +686,7 @@ class ApiController:
             )
         else:
             store.append_log(f"API submitted task `{task}` with no action proposal.", actor="api")
+        refusal_reason = getattr(self.planner, "last_refusal_reason", None)
         state = self._state(config, store)
         self._publish_state("task_submitted", state)
         return {
@@ -592,6 +697,7 @@ class ApiController:
                 else "Task recorded. No action proposal was created from current capabilities."
             ),
             "actions": _json_safe(actions),
+            "refusal_reason": refusal_reason,
             "state": state,
         }
 
@@ -619,6 +725,7 @@ class ApiController:
             "memory": _json_safe(response.get("memory", [])),
             "plan": _json_safe(response.get("plan")),
             "executed": 0,
+            "refusal_reason": response.get("refusal_reason"),
             "state": state,
         }
 
@@ -1228,12 +1335,30 @@ class ApiController:
             capabilities=store.read_capabilities(),
             world=store.read_world(),
         )
-        return self._append_planned_actions(actions, store)
+        return self._append_planned_actions(actions, store, original_task=task)
 
-    def _append_planned_actions(self, actions: list[Action], store: StateStore) -> list[Action]:
+    def _append_planned_actions(
+        self,
+        actions: list[Action],
+        store: StateStore,
+        *,
+        original_task: str,
+    ) -> list[Action]:
         if not actions:
             return []
         renumbered = _renumber_actions(actions, store)
+        renumbered = [
+            _validate_action(
+                _with_proposal_metadata(
+                    action.model_dump(mode="json"),
+                    source="planner",
+                    proposed_by="api",
+                    original_task=original_task,
+                    planner_reason=action.reason,
+                )
+            )
+            for action in renumbered
+        ]
         return [store.append_pending_action(action) for action in renumbered]
 
     def _rule_chat(self, message: str, store: StateStore) -> dict[str, Any]:
@@ -1307,6 +1432,9 @@ class ApiController:
 class SafeProposalPlanner:
     """Small request-side planner that only returns pending Action intents."""
 
+    def __init__(self) -> None:
+        self.last_refusal_reason: str | None = None
+
     def plan(
         self,
         *,
@@ -1314,6 +1442,7 @@ class SafeProposalPlanner:
         capabilities: dict[str, Any],
         world: dict[str, Any],
     ) -> list[Action]:
+        self.last_refusal_reason = None
         text = task.lower()
         robots = capabilities.get("robots", {})
         actions: list[Action] = []
@@ -1424,6 +1553,10 @@ class SafeProposalPlanner:
                     )
                 )
 
+        if not actions:
+            self.last_refusal_reason = (
+                "No supported robot capability matched the submitted task."
+            )
         return actions
 
     def _choose_robot(self, robots: dict[str, Any], required: list[str]) -> str | None:
@@ -1570,6 +1703,32 @@ def _validate_action(payload: dict[str, Any]) -> Action:
         return Action.model_validate(payload)
     except Exception as exc:
         raise ApiRequestError(f"Invalid action proposal: {exc}") from exc
+
+
+def _with_proposal_metadata(
+    payload: dict[str, Any],
+    *,
+    source: str,
+    proposed_by: str,
+    original_task: str | None = None,
+    user_message: str | None = None,
+    draft_reason: str | None = None,
+    planner_reason: str | None = None,
+) -> dict[str, Any]:
+    data = dict(payload)
+    metadata = dict(data.get("metadata") or {})
+    metadata.setdefault("source", source)
+    metadata.setdefault("proposed_by", proposed_by)
+    if original_task:
+        metadata.setdefault("original_task", original_task)
+    if user_message:
+        metadata.setdefault("user_message", user_message)
+    if draft_reason:
+        metadata.setdefault("draft_reason", draft_reason)
+    if planner_reason:
+        metadata.setdefault("planner_reason", planner_reason)
+    data["metadata"] = metadata
+    return data
 
 
 def _new_chat_runtime(

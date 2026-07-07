@@ -2,9 +2,11 @@ import { Alert, App as AntApp, ConfigProvider, Drawer, Layout, Spin, theme } fro
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   abortChatStream,
+  approveAction,
   fetchHealth,
   fetchState,
   proposeAction,
+  rejectAction,
   resetChat,
   sendChat,
   sendChatStream,
@@ -99,6 +101,8 @@ function Dashboard() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [configVersion, setConfigVersion] = useState(0);
+  const [prefillAction, setPrefillAction] = useState<ActionItem | null>(null);
+  const [prefillVersion, setPrefillVersion] = useState(0);
   const busyRef = useRef<BusyKey>("refresh");
   const lastEventSummaryRef = useRef<string | null>(null);
   const chatSseDisconnectNotifiedRef = useRef(false);
@@ -322,12 +326,45 @@ function Dashboard() {
     try {
       const response = await proposeAction(action);
       setState(response.state);
+      setPrefillAction(null);
       message.success(response.message);
     } catch (error) {
       showError(message, error);
     } finally {
       setBusy(null);
     }
+  }
+
+  async function handleApproveAction(actionId: string) {
+    setBusy("proposal");
+    try {
+      const response = await approveAction(actionId, "Approved from Actions board.");
+      setState(response.state);
+      message.success(response.message);
+    } catch (error) {
+      showError(message, error);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleRejectAction(actionId: string, reason: string) {
+    setBusy("proposal");
+    try {
+      const response = await rejectAction(actionId, reason);
+      setState(response.state);
+      message.success(response.message);
+    } catch (error) {
+      showError(message, error);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function handleEditDraft(action: ActionItem) {
+    setPrefillAction(action);
+    setPrefillVersion((current) => current + 1);
+    setInspectorOpen(true);
   }
 
   async function handleResetChat() {
@@ -406,6 +443,10 @@ function Dashboard() {
                   onChat: handleChat,
                   onStopChat: handleStopChat,
                   onResetChat: handleResetChat,
+                  onProposeAction: handleAction,
+                  onEditDraft: handleEditDraft,
+                  onApproveAction: handleApproveAction,
+                  onRejectAction: handleRejectAction,
                   chatError: chatStreamError,
                   onUploaded: handleUploaded,
                   onStateChange: handleStateChange,
@@ -422,6 +463,8 @@ function Dashboard() {
                 loading={busy === "proposal"}
                 onSubmitTask={handleTask}
                 onProposeAction={handleAction}
+                prefillAction={prefillAction}
+                prefillVersion={prefillVersion}
               />
             </aside>
           </div>
@@ -441,6 +484,8 @@ function Dashboard() {
             loading={busy === "proposal"}
             onSubmitTask={handleTask}
             onProposeAction={handleAction}
+            prefillAction={prefillAction}
+            prefillVersion={prefillVersion}
           />
         )}
       </Drawer>
@@ -458,6 +503,10 @@ interface RenderPageProps {
   onChat: (message: string) => Promise<void>;
   onStopChat: () => void;
   onResetChat: () => Promise<void>;
+  onProposeAction: (action: ActionItem) => Promise<void>;
+  onEditDraft: (action: ActionItem) => void;
+  onApproveAction: (actionId: string) => Promise<void>;
+  onRejectAction: (actionId: string, reason: string) => Promise<void>;
   chatError: string | null;
   onUploaded: (state: AgentState, response: UploadResponse) => void;
   onStateChange: (state: AgentState) => void;
@@ -540,6 +589,10 @@ function renderPageContent({
   onChat,
   onStopChat,
   onResetChat,
+  onProposeAction,
+  onEditDraft,
+  onApproveAction,
+  onRejectAction,
   chatError,
   onUploaded,
   onStateChange,
@@ -551,7 +604,12 @@ function renderPageContent({
   if (activePage === "actions") {
     return (
       <div className="page-stack">
-        <ActionBoard actions={state?.actions} />
+        <ActionBoard
+          actions={state?.actions}
+          loading={busy === "proposal"}
+          onApprove={onApproveAction}
+          onReject={onRejectAction}
+        />
         <ContextTabs state={state} defaultActiveKey="feedback" />
       </div>
     );
@@ -621,7 +679,12 @@ function renderPageContent({
   return (
     <div className="overview-grid">
       <div className="main-column">
-        <ActionBoard actions={state?.actions} />
+        <ActionBoard
+          actions={state?.actions}
+          loading={busy === "proposal"}
+          onApprove={onApproveAction}
+          onReject={onRejectAction}
+        />
         <ChatPanel
           messages={chatMessages}
           loading={busy === "chat"}
@@ -629,6 +692,9 @@ function renderPageContent({
           onSend={onChat}
           onStop={onStopChat}
           onReset={onResetChat}
+          onAddDraft={onProposeAction}
+          onEditDraft={onEditDraft}
+          actionLoading={busy === "proposal"}
         />
       </div>
       <div className="context-column">

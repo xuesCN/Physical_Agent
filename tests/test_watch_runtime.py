@@ -117,6 +117,44 @@ def test_watch_runtime_driver_exception_cancels_sqlite_action(tmp_path, monkeypa
     assert "boom" in log_message
 
 
+def test_watch_runtime_gate_rejects_direct_bad_proposal_before_driver(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    store.append_pending_action(
+        Action(
+            id="act_gate_direct",
+            robot="arm_1",
+            capability="move_to",
+            params={"x": 99.0, "y": 0.0, "z": 0.4},
+            metadata={"source": "f0_gate_direct"},
+        )
+    )
+
+    async def fail_execute(action):
+        raise AssertionError("SafetyGate must reject before driver.execute")
+
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "execute", fail_execute)
+
+    try:
+        count = asyncio.run(runtime.step(setup=False))
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert count == 0
+    actions = store.read_actions()
+    assert actions["pending"] == []
+    assert actions["cancelled"][0].id == "act_gate_direct"
+    assert actions["cancelled"][0].metadata["source"] == "f0_gate_direct"
+    feedback = store.read_feedback()["latest"]
+    assert feedback["action_id"] == "act_gate_direct"
+    assert feedback["status"] == "failed"
+    assert "Invalid params for move_to" in feedback["message"]
+
+
 def test_watch_runtime_step_calls_driver_heartbeat(tmp_path, monkeypatch):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     _write_config_backend(config_path, "sqlite")

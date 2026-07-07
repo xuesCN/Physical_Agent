@@ -43,7 +43,14 @@ class PhysicalAgentMCP:
 
         actions = runtime._renumber_actions(actions, workspace)
         for action in actions:
-            workspace.append_pending_action(action)
+            workspace.append_pending_action(
+                _with_proposal_metadata(
+                    action,
+                    source="planner",
+                    proposed_by="mcp",
+                    original_task=task,
+                )
+            )
         workspace.append_log(
             f"MCP submitted task `{task}` as {len(actions)} pending action(s): "
             + ", ".join(f"`{action.id}`" for action in actions),
@@ -77,7 +84,11 @@ class PhysicalAgentMCP:
         """
 
         workspace = self._workspace()
-        parsed = Action.model_validate(action)
+        parsed = _with_proposal_metadata(
+            Action.model_validate(action),
+            source="mcp",
+            proposed_by="mcp",
+        )
         workspace.append_pending_action(parsed)
         workspace.append_log(
             f"MCP proposed action `{parsed.id}`.",
@@ -158,4 +169,23 @@ class PhysicalAgentMCP:
 
     def _workspace(self) -> StateStore:
         return open_state_store(config_path=self.config_path)
+
+
+def _with_proposal_metadata(
+    action: Action,
+    *,
+    source: str,
+    proposed_by: str,
+    original_task: str | None = None,
+) -> Action:
+    data = action.model_dump(mode="json")
+    metadata = dict(data.get("metadata") or {})
+    metadata.setdefault("source", source)
+    metadata.setdefault("proposed_by", proposed_by)
+    if original_task:
+        metadata.setdefault("original_task", original_task)
+    if action.reason:
+        metadata.setdefault("planner_reason", action.reason)
+    data["metadata"] = metadata
+    return Action.model_validate(data)
 

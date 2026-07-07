@@ -21,10 +21,10 @@
 
 ## F1 提案卡片 + Approve + 审批流
 
-**思路**：三步走，前两步纯认知侧。① Draft 结构化（F1.1）：让 chat 的 Action Draft 走固定 fence 约定——system prompt 要求包在 \`\`\`action-draft 代码块里；前端正则抽取 + 按 `ActionItem` 形状校验，坏 JSON 静默降级为纯文本。② 卡片（F1.2）：`ChatPanel` 渲染 draft 卡片（robot/capability/params/reason），Approve 按钮调既有 `proposeAction()`，Edit 回填 ProposalPanel 表单。**人的点击才是提案**，LLM 仍写不了动作板。③ 审批流（F1.3，后端实活，先出独立 brief）：推荐**不加新状态机状态**——在 action payload 里放 `approval: {required, status, by, at}` 元数据；`claim_next_ready_action()` 跳过 `required && status != approved` 的条目（两后端都改，backend 矩阵测试盯着）；新端点 `POST /api/actions/{id}/approve|reject` 写审批记录 + append_log；Actions 板加按钮与醒目标记。
-**坑**：审批≠免检，SafetyGate 照跑（改 gate 的 requires_approval 分支：从"直接拒绝"改为"查 approval 元数据"）；审批记录必须进审计导出。
-**F0 实验追加的两个子项**：① **planner 拒绝理由透出**——结构化输出加可选 `refusal_reason`，无提案时 GUI 展示"为什么没方案"（当前只有干巴巴的 No action could be planned）；② **激进规约防线**——F0 实测 teleport→pick+place、"make it better"→捡方块放托盘：意图不明时模型不问不拒、直接执行最顺手的合法动作，**审批卡片是拦"合法但非所愿"提案的唯一闸口**，卡片上要显眼标注"任务原文 vs 提案动作"的对照，帮人一眼看出规约偏差。顺带做 Gate 直击组（绕 planner 直接 propose 越界/幻觉动作，留下 LLM 时代的 Gate 拦截审计样本）。
-**验收**：chat 起草→Approve→执行→feedback 全程 GUI；requires_approval 能力可放行；拒绝的动作进 cancelled 带原因。
+**实现口径（2026-07-07 已落地）**：① Draft 结构化（F1.1）：chat 的 Action Draft 固定走 `action-draft` fenced code block；前端用纯函数抽取并按 `ActionItem` 形状校验，坏 JSON/坏形状降级为普通 Markdown。② 卡片（F1.2）：`ChatPanel` 渲染 draft 卡片，对照"任务原文 vs 提案动作"，展示 robot/capability/params/reason；按钮文案用 **Add to Actions**，只调用既有 `proposeAction()` 创建 pending action，Edit 回填 `ProposalPanel`。**LLM/chat 不直接写动作板，只有人的提交会创建 action**。③ 审批流（F1.3）：不新增 runtime backend 状态机状态，approval 放在 action metadata；Actions 板的 **Approve execution / Reject** 才是执行审批。`approval.required` 由后端按 robot/capability 的 `requires_approval` 与 SAFETY 文件真源计算，不能信任 LLM、前端或 API caller；`claim_next_ready_action()` 在 SQLite 事务里跳过 `required && status != approved` 的 pending action，不阻塞后续 ready action。`POST /api/actions/{id}/approve|reject` 做幂等和非法终态保护，reject 写原因并转 cancelled。
+**坑**：两个 Approve 语义必须分开：Chat draft 是"提交到动作板"，Actions 板是"放行执行"。审批≠免检，SafetyGate 只把 `requires_approval` 从"等待人"推进到"继续校验"，schema、bounds、capability、robot、SAFETY.md 仍照跑；approved action 后续被 Gate 拒绝时，保留 approval 记录并记录 safety rejected feedback/log。B6 后只维护 SQLite，不恢复 `MarkdownStateStore`、markdown backend 矩阵或 legacy runtime backend。
+**F0 实验追加的两个子项**：① **planner 拒绝理由透出**——结构化输出加可选 `refusal_reason`，无提案时 GUI 展示"为什么没方案"，旧调用方缺字段仍兼容。② **Gate 直击组**——绕 planner 直接 propose 越界/幻觉动作，留下 LLM 时代 Gate 拦截审计样本，证明 planner 没产出时 Gate 仍能拦。
+**验收**：chat 起草→Add to Actions→Actions 板 Approve execution→watch 执行→feedback 全程 GUI；非 `requires_approval` 不被审批流程阻塞；`requires_approval` 未 approved 不被 claim，approved 后仍经过 SafetyGate；队首未批准动作不阻塞后续 ready action；拒绝动作进 cancelled 并带原因；approval/source/refusal_reason 进入 LOG 镜像与 audit export；全量 pytest 与前端 build 通过。
 
 ## F2 结构化信息可读化（全应用原则）
 

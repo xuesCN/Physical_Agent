@@ -16,6 +16,7 @@ ACTION_PLAN_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "required": ["actions"],
     "properties": {
+        "refusal_reason": {"type": "string"},
         "actions": {
             "type": "array",
             "items": {
@@ -54,6 +55,7 @@ class LLMPlanner(Planner):
         )
         self.client = OpenAICompatibleClient(self.settings)
         self.fallback = RuleBasedPlanner()
+        self.last_refusal_reason: str | None = None
 
     def plan(
         self,
@@ -70,7 +72,7 @@ class LLMPlanner(Planner):
                         "You convert physical-world tasks into JSON action intents. "
                         "Return only JSON with this shape: "
                         '{"actions":[{"robot":"...","capability":"...","params":{},'
-                        '"reason":"...","depends_on":[]}]} '
+                        '"reason":"...","depends_on":[]}],"refusal_reason":"optional reason when empty"} '
                         "Use only robots and capabilities present in the provided capability document. "
                         "Do not invent hardware calls. Do not include Markdown."
                     ),
@@ -94,6 +96,8 @@ class LLMPlanner(Planner):
             metadata={"physical_agent_surface": "planner"},
         )
         actions_data = payload.get("actions", [])
+        refusal_reason = payload.get("refusal_reason")
+        self.last_refusal_reason = str(refusal_reason) if refusal_reason else None
         if not isinstance(actions_data, list):
             raise ValueError("LLM planner response must contain an actions list.")
         normalized_items: list[dict[str, Any]] = []

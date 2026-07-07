@@ -25,7 +25,7 @@
 | W1 | 驱动调用超时保护 | `2f00615` |
 | F0 | LLM planner 启用实验 + 本地 JSONL trace + 坏任务报告 | `d39e8f6` `caa4fa0` |
 | B6 | 退役 MarkdownStateStore 后端 | `9072b4e` |
-| F1 | 提案卡片 + Add to Actions + action 级审批流 | `0acac9d` |
+| F1 | 提案卡片 + Add to Actions + action 级审批流 | `0f49a3c` |
 
 ## 2. 分阶段过程记录
 

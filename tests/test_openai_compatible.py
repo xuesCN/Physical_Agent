@@ -988,6 +988,15 @@ def test_llm_planner_parses_actions_from_chat_completion(fake_openai):
                             "params": {"target": "tray"},
                             "reason": "Place it on the tray.",
                             "depends_on": ["arm_1:pick:red_block"],
+                            "metadata": {
+                                "expected": [
+                                    {
+                                        "path": "objects.red_block.location",
+                                        "op": "eq",
+                                        "value": "tray",
+                                    }
+                                ]
+                            },
                         },
                     ]
                 }
@@ -1022,6 +1031,7 @@ def test_llm_planner_parses_actions_from_chat_completion(fake_openai):
     assert [action.capability for action in actions] == ["pick", "place"]
     assert actions[0].id == "act_001"
     assert actions[1].depends_on == ["act_001"]
+    assert actions[1].metadata["expected"][0]["value"] == "tray"
     payload = fake_openai.instances[0].calls[0]["payload"]
     assert payload["response_format"]["type"] == "json_schema"
 

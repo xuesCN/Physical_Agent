@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from physical_agent.config import DEFAULT_CONFIG_NAME
+from physical_agent.protocol.expectations import EXPECTED_JSON_SCHEMA
 from physical_agent.protocol.schemas import Action
 from physical_agent.state import StateStore, open_state_store
 
@@ -147,6 +148,13 @@ class PhysicalAgentMCP:
                         "params": {"type": "object", "additionalProperties": True},
                         "reason": {"type": "string"},
                         "depends_on": {"type": "array", "items": {"type": "string"}},
+                        "metadata": {
+                            "type": "object",
+                            "additionalProperties": True,
+                            "properties": {
+                                "expected": EXPECTED_JSON_SCHEMA,
+                            },
+                        },
                     },
                 },
             },

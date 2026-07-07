@@ -13,7 +13,12 @@ import ReactMarkdown from "react-markdown";
 import { parseActionDrafts } from "../actionDraft";
 import type { ActionItem, ChatMessage } from "../types";
 import { RawJsonFallback } from "./JsonTreeLazy";
-import { asRecord, formatObjectValue, isNonEmptyRecord } from "./readableFormatters";
+import {
+  asRecord,
+  expectedSummary,
+  formatObjectValue,
+  isNonEmptyRecord
+} from "./readableFormatters";
 
 interface ChatPanelProps {
   messages: ChatMessage[];
@@ -225,6 +230,8 @@ function DraftActionCard({
   onAdd,
   onEdit
 }: DraftActionCardProps) {
+  const expected = action.metadata?.expected;
+  const expectedText = expectedSummary(expected);
   return (
     <Card size="small" className="draft-action-card">
       <Space direction="vertical" size={8} className="full-width">
@@ -256,6 +263,14 @@ function DraftActionCard({
           <Descriptions.Item label="Reason">
             <Typography.Text>{action.reason || "-"}</Typography.Text>
           </Descriptions.Item>
+          {expectedText && (
+            <Descriptions.Item label="Expected">
+              <Space direction="vertical" size={4} className="full-width">
+                <Typography.Text>{expectedText}</Typography.Text>
+                <RawJsonFallback label="Expected raw" value={expected} />
+              </Space>
+            </Descriptions.Item>
+          )}
         </Descriptions>
         <Space wrap>
           <Button

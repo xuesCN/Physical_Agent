@@ -348,7 +348,9 @@ def _system_content(purpose: ContextPurpose, *, has_retrieved_context: bool) -> 
             "with ```action-draft and must be derived only from live capabilities. "
             "Use this shape: "
             '{"robot":"...","capability":"...","params":{},"reason":"...",'
-            '"depends_on":[]}. '
+            '"depends_on":[],"metadata":{"expected":[{"path":"...","op":"eq","value":"..."}]}}. '
+            "The metadata.expected field is optional and is only a post-execution "
+            "check, not a safety rule. "
             "Keep safety copy short: the human must paste or fill the proposal "
             "form, and watch/SafetyGate must validate before anything touches "
             "hardware. Never claim a physical action executed unless feedback says "
@@ -367,8 +369,11 @@ def _system_content(purpose: ContextPurpose, *, has_retrieved_context: bool) -> 
             "Return only JSON with this shape: "
             '{"reply":"human-facing response","intent":"chat|inspect|act|remember",'
             '"steps":["..."],"actions":[{"robot":"...","capability":"...",'
-            '"params":{},"reason":"...","depends_on":[]}],"memory":["..."],'
+            '"params":{},"reason":"...","depends_on":[],'
+            '"metadata":{"expected":[{"path":"...","op":"eq","value":"..."}]}}],"memory":["..."],'
             '"refusal_reason":"optional reason when no action can be drafted"}. '
+            "The metadata.expected field is optional and only describes deterministic "
+            "post-execution checks; it does not replace SafetyGate. "
             "Use only listed robots/capabilities. If drafting actions, explain that "
             "the human must add them to the action board before watch can validate "
             "and execute them."
@@ -387,7 +392,11 @@ def _system_content(purpose: ContextPurpose, *, has_retrieved_context: bool) -> 
             "You convert physical-world tasks into JSON action intents. "
             "Return only JSON with this shape: "
             '{"actions":[{"robot":"...","capability":"...","params":{},'
-            '"reason":"...","depends_on":[]}],"refusal_reason":"optional reason when empty"} '
+            '"reason":"...","depends_on":[],'
+            '"metadata":{"expected":[{"path":"...","op":"eq","value":"..."}]}}],'
+            '"refusal_reason":"optional reason when empty"} '
+            "metadata.expected is optional and only describes deterministic "
+            "post-execution checks; it is not a safety rule. "
             "Use only robots and capabilities present in the provided capability document. "
             "Do not invent hardware calls. Do not include Markdown."
         )

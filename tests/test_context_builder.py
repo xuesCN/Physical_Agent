@@ -82,6 +82,31 @@ def test_context_builder_is_read_only(tmp_path):
     assert _state_snapshot(store) == before
 
 
+def test_context_builder_includes_expectation_check_feedback(tmp_path):
+    store = _seed_store(tmp_path)
+    expectation_event = {
+        "event": "expectation_check",
+        "action_id": "act_099",
+        "status": "violated",
+        "message": "Expected `objects.red_block.location` to equal \"tray\"; actual was \"table\".",
+        "expected": [
+            {"path": "objects.red_block.location", "op": "eq", "value": "tray"}
+        ],
+        "actual": [
+            {"path": "objects.red_block.location", "value": "table", "status": "violated"}
+        ],
+    }
+    store.write_feedback(expectation_event, [expectation_event])
+
+    bundle = build_context(store, "what happened?", purpose="proposal")
+
+    feedback = bundle.payload["feedback"]
+    assert feedback["latest"]["event"] == "expectation_check"
+    assert feedback["latest"]["status"] == "violated"
+    assert feedback["latest"]["expected"][0]["value"] == "tray"
+    assert feedback["latest"]["actual"][0]["value"] == "table"
+
+
 def test_context_builder_summarizes_world_and_capabilities_deterministically(tmp_path):
     store = _seed_store(tmp_path)
     budget = ContextBudget(world_max_chars=120, capabilities_max_chars=120)

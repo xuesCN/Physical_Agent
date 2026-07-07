@@ -81,7 +81,19 @@ export interface ActionMetadata {
   draft_reason?: string;
   planner_reason?: string | null;
   draft_id?: string;
+  expected?: ExpectedCheck[] | ExpectedCheck | unknown;
   approval?: ActionApproval;
+  [key: string]: unknown;
+}
+
+export interface ExpectedCheck {
+  path?: string;
+  op?: "eq" | "ne" | "in" | "range" | string;
+  value?: unknown;
+  tolerance?: number;
+  units?: string;
+  description?: string;
+  severity?: string;
   [key: string]: unknown;
 }
 

@@ -2,7 +2,7 @@
 
 > 本文合并了原 optimization-spec（安全不变量）、plan-f（当前目标）与 traceability-matrix（账本），原件已删除、git 历史可查。历史过程见 `REFACTORING.zh-CN.md`。
 > **维护规则**：每轮 session 收尾更新 §4 矩阵一行 → commit → push；里程碑拆分时拆行记录；状态以验收测试通过为准。
-> 最后更新：2026-07-06
+> 最后更新：2026-07-07
 
 ## 0. 安全边界（三层：宪法 / 授权策略 / 工程纪律）
 
@@ -41,7 +41,7 @@
 | F1 | 提案卡片 + Add to Actions + 审批流（已完成） | chat draft 固定为 `action-draft` fence，前端解析校验后渲染卡片；Chat 卡片按钮叫 Add to Actions，只创建 pending action，不等同执行审批。`requires_approval` 由后端按 robot/capability 计算，写入 action metadata；Actions 板的 Approve execution / Reject 才改变执行放行状态。watch claim 会原子跳过未批准动作但不阻塞后续 ready action；SafetyGate 仍照常校验 schema、bounds、capability、robot、SAFETY.md。 |
 | F2 | 结构化信息可读化（全应用原则） | **通用原则：已知协议字段一律定制组件呈现，未知/raw 字段 JSON 树兜底（懒加载），`<pre>` 裸 JSON 逐步清零**。首批落地：feedback 时间线（status 灯/action 跳转/失败原因用 `message` 字段）、world objects 表格、capabilities/config/integration 结果的卡片化；协议 schema 由 pydantic 锁定，定制组件不会白写 |
 | F3 | context_builder 解耦（已完成） | `context_builder` 统一 reply/proposal/planner/tool_loop 上下文；ContextBudget 收拢魔法数字；world/capabilities 超限摘要化；memory 按 importance 排序注入；golden-file 测试 |
-| F4 | 闭环地基 | 提案带 expected 断言 → 执行后**确定性比对**（不用 LLM 当裁判）→ violated 才回灌 LLM 诊断；自动重试默认关 |
+| F4 | 闭环地基（已完成） | 提案带 expected 断言 → 执行后**确定性比对**（不用 LLM 当裁判）→ 写入 `expectation_check` feedback；violated/skipped 回灌 LLM 上下文，自动重试默认关 |
 | F5 | 硬件生态（条件触发） | F5.1 舵机臂到手→LeRobot motors 包 driver（D2b 销账）；F5.2 有 ROS 设备→ros_mcp driver（不绕 gate）；F5.3 小车+摄像头→YOLO/VLM 物体列表进 world |
 | **T（独立线：Ink 终端 UI）** | 第五入口 | Node/TS/Ink 5 交互式终端工作台（`tui/` 目录，纯 API 客户端零核心改动）；T1 只读（状态+流式 chat+actions 实时）→ T2 交互（提交/审批/重置，审批依赖 F1.3）→ T3 补齐。typer CLI 保留管脚本化，Ink 管交互；选 Ink 而非 Textual 是为复用 dashboard 的 React 技能。与 F 主线无依赖（除 T2 审批），可随时穿插 |
 | F6 | Demo Twin + BYO Simulator（**不做通用仿真**） | **统一技术路线：N 个 sim driver + 一个通用 SceneView 面板**（canvas 顶视图读 world.objects，按对象 type 绘制；新增 demo = driver+图标+场景 yaml，渲染零改动）。F6.0 场景规格先行：每个 demo 一份规格（能力 schema/初始对象/SAFETY 边界/演示任务集）；F6.1 **Hero：机械臂孪生（公司产品）**——能力词汇表继承 mock_arm，加运动插值与对象状态；F6.1b 智能小车第二示例（使用指南性质，能力词汇表从零设计：move_to/stop/dock/patrol）；F6.2 **remote_sim driver + BYO 协议**——WebSocket+JSON 镜像 driver 契约，**必须含 capabilities 发现**（无 params_schema 则 Gate 无从校验，拒连），CoppeliaSim 作参考适配器（高保真 3D 需求者自接）；F6.3 conformance 套件（`sim-verify` CLI）；F6.4 远期：真臂 URDF 数字孪生 + 预演 Gate |
@@ -50,8 +50,8 @@
 
 ## 3. 已完成里程碑（速查）
 
-P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态存储全套（SQLite 默认/原子动作/lease/审计）· B4a-c 记忆摄入检索地基 · C1-C3.2 FastAPI+SSE+React 仪表盘 · D1-D3.1 传输层+心跳看门狗 · D4 实机文档 · A1.0-A1.6a 官方 SDK/流式/abort/设置/深思考 · B5 后端口径收口 · E0.1-E0.3 GUI 对齐（重置/硬件面板/配置注册）· W1 驱动调用超时保护 · B6 退役 MarkdownStateStore 后端 · F1 提案卡片与 action 级审批流。
-逐项提交号与决策见 `REFACTORING.zh-CN.md` §1-§2。测试基线 251 用例。
+P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态存储全套（SQLite 默认/原子动作/lease/审计）· B4a-c 记忆摄入检索地基 · C1-C3.2 FastAPI+SSE+React 仪表盘 · D1-D3.1 传输层+心跳看门狗 · D4 实机文档 · A1.0-A1.6a 官方 SDK/流式/abort/设置/深思考 · B5 后端口径收口 · E0.1-E0.3 GUI 对齐（重置/硬件面板/配置注册）· W1 驱动调用超时保护 · B6 退役 MarkdownStateStore 后端 · F1 提案卡片与 action 级审批流 · F2 结构化信息可读化 · F3 context_builder 解耦 · F4 expected 确定性比对。
+逐项提交号与决策见 `REFACTORING.zh-CN.md` §1-§2。测试基线 269 用例。
 
 ## 4. 待办矩阵（backlog，活账本）
 
@@ -64,11 +64,11 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | B6 | 退役 markdown 后端（保留 renderer 与迁移命令） | §2 | ✅ 2026-07-06 完成 `9072b4e`：active backend 只剩 SQLite；旧 Markdown 仅迁移 reader 可读 |
 | F1 | 提案卡片 + Add to Actions + 审批流 | §2 | ✅ 2026-07-07 完成：Chat draft 卡片只提交动作板；Actions 板审批才放行 `requires_approval`；approval required 后端计算，SQLite 原子 claim 跳过未批准动作；拒绝/审批元数据进 LOG/audit |
 | F2 | feedback 时间线 + world 视图 + JSON 树 | §2 | ✅ 2026-07-07 完成：feedback/action approval/refusal_reason 时间线可读，world objects 表格化，capabilities/config/integration 轻量可读；raw JSON 改懒加载树兜底。提交 `58a75b0` |
-| F3 | context_builder 解耦 | §2 | ✅ 2026-07-07 完成：新增只读 `context_builder`，统一 chat reply/proposal/tool_loop 与 LLM planner payload；planner 使用独立 purpose；golden snapshot 覆盖四路；memory 改按 importance/created_at 注入 |
-| F4 | 期望-比对-回灌 | §2 | ⚪ 依赖 F0 数据 |
+| F3 | context_builder 解耦 | §2 | ✅ 2026-07-07 完成 `9cbb540`：新增只读 `context_builder`，统一 chat reply/proposal/tool_loop 与 LLM planner payload；planner 使用独立 purpose；golden snapshot 覆盖四路；memory 改按 importance/created_at 注入 |
+| F4 | 期望-比对-回灌 | §2 | ✅ 2026-07-07 完成：action metadata 接收 `expected`；watch 在动作完成并刷新 world 后写 `expectation_check`；多 check 状态按 violated > skipped > verified 聚合；坏 expected 不影响 action 合法性；Chat/Actions 可见 expected 摘要 |
 | W2 | 观察并发化（gather）+ 频率与 tick 解耦 | W1 欠账 | ⚪ 接实机前 |
 | W3 | transport 断线重连（backoff） | W1 欠账 | ⚪ 接实机前 |
-| W4 | 多机器人并行执行 + world 带 observed_at | W1 欠账 | ⚪ F4 前置 |
+| W4 | 多机器人并行执行 + world 带 observed_at | W1 欠账 | ⚪ 接实机/多机前；F4 当前使用执行后 `update_world()` 的新鲜观测，未扩 `observed_at` |
 | W5 | driver 编写守则：阻塞调用须带超时或走 to_thread（写进 driver 模板与生成规则） | 讨论产出 | ⚪ 轻 |
 | F5.1-F5.3 | LeRobot motors / ros_mcp / 感知语义层 | §2 | ⏸ 条件触发 |
 | F6.0 | 场景规格设计（arm 继承 mock_arm；car 能力词汇表从零定） | §2 | ⚪ F6.1 前置 |

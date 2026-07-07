@@ -13,6 +13,7 @@ from physical_agent.protocol.memory import (
     normalize_memory_note,
     normalize_memory_tags,
 )
+from physical_agent.protocol.expectations import normalize_expected_metadata
 from physical_agent.protocol.retrieval import (
     chunk_source_id_for_memory_note,
     make_chunks_for_text,
@@ -1163,7 +1164,7 @@ class SqliteStateStore:
             for item in items:
                 seq += 1
                 action = _with_backend_approval_metadata(
-                    item if isinstance(item, Action) else Action.model_validate(item),
+                    _coerce_action(item),
                     capabilities=capabilities,
                     safety_rules=safety_rules,
                 )
@@ -1853,18 +1854,24 @@ def migrate_markdown_workspace_to_sqlite(
 
 
 def _coerce_action(value: Action | dict[str, Any]) -> Action:
-    return value if isinstance(value, Action) else Action.model_validate(value)
+    action = value if isinstance(value, Action) else Action.model_validate(value)
+    metadata = normalize_expected_metadata(action.metadata)
+    if metadata == action.metadata:
+        return action
+    return action.model_copy(update={"metadata": metadata})
 
 
 def _action_from_row(row: sqlite3.Row) -> Action:
-    return Action(
-        id=str(row["id"]),
-        robot=str(row["robot"]),
-        capability=str(row["capability"]),
-        params=_json_loads(row["params"], default={}),
-        reason=row["reason"],
-        depends_on=_json_loads(row["depends_on"], default=[]),
-        metadata=_json_loads(_row_get(row, "metadata"), default={}),
+    return _coerce_action(
+        Action(
+            id=str(row["id"]),
+            robot=str(row["robot"]),
+            capability=str(row["capability"]),
+            params=_json_loads(row["params"], default={}),
+            reason=row["reason"],
+            depends_on=_json_loads(row["depends_on"], default=[]),
+            metadata=_json_loads(_row_get(row, "metadata"), default={}),
+        )
     )
 
 
@@ -1899,7 +1906,7 @@ def _with_backend_approval_metadata(
 
 def _replace_action_metadata(action: Action, metadata: dict[str, Any]) -> Action:
     data = action.model_dump(mode="json")
-    data["metadata"] = _as_plain(metadata)
+    data["metadata"] = _as_plain(normalize_expected_metadata(metadata))
     return Action.model_validate(data)
 
 

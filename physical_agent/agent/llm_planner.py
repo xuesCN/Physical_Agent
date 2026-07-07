@@ -13,6 +13,7 @@ from physical_agent.agent.context_builder import (
 from physical_agent.agent.planner import Planner
 from physical_agent.agent.rule_based import RuleBasedPlanner
 from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
+from physical_agent.protocol.expectations import EXPECTED_JSON_SCHEMA
 from physical_agent.protocol.schemas import Action
 
 
@@ -36,6 +37,13 @@ ACTION_PLAN_SCHEMA: dict[str, Any] = {
                     "depends_on": {
                         "type": "array",
                         "items": {"type": ["string", "integer"]},
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {
+                            "expected": EXPECTED_JSON_SCHEMA,
+                        },
                     },
                 },
             },

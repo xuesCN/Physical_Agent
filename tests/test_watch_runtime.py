@@ -31,6 +31,10 @@ def _feedback_events(store, event: str):
     ]
 
 
+def _expectation_events(store):
+    return _feedback_events(store, "expectation_check")
+
+
 def test_watch_runtime_step_executes_action(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     _write_config_backend(config_path, "sqlite")
@@ -56,6 +60,228 @@ def test_watch_runtime_step_executes_action(tmp_path):
     assert actions["pending"] == []
     assert actions["completed"][0].id == "act_001"
     assert store.read_feedback()["latest"]["status"] == "completed"
+
+
+def test_watch_runtime_records_verified_expectation_after_world_update(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    store.write_actions(
+        [
+            Action(
+                id="act_pick",
+                robot="arm_1",
+                capability="pick",
+                params={"object_id": "red_block"},
+            ),
+            Action(
+                id="act_place",
+                robot="arm_1",
+                capability="place",
+                params={"target": "tray"},
+                depends_on=["act_pick"],
+                metadata={
+                    "expected": [
+                        {
+                            "path": "world.objects.red_block.location",
+                            "op": "eq",
+                            "value": "tray",
+                        },
+                        {
+                            "path": "objects.red_block.pose.x",
+                            "op": "range",
+                            "value": [-0.3, -0.1],
+                        },
+                    ]
+                },
+            ),
+        ],
+        [],
+        [],
+    )
+
+    try:
+        count = asyncio.run(runtime.step(setup=False))
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert count == 2
+    events = _expectation_events(store)
+    assert len(events) == 1
+    event = events[0]
+    assert event["action_id"] == "act_place"
+    assert event["status"] == "verified"
+    assert [check["status"] for check in event["checks"]] == ["verified", "verified"]
+    assert store.read_world()["state"]["objects"]["red_block"]["location"] == "tray"
+
+
+def test_watch_runtime_records_violated_expectation(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    store.write_actions(
+        [
+            Action(
+                id="act_pick",
+                robot="arm_1",
+                capability="pick",
+                params={"object_id": "red_block"},
+            ),
+            Action(
+                id="act_place",
+                robot="arm_1",
+                capability="place",
+                params={"target": "tray"},
+                depends_on=["act_pick"],
+                metadata={
+                    "expected": [
+                        {
+                            "path": "objects.red_block.location",
+                            "op": "eq",
+                            "value": "table",
+                        }
+                    ]
+                },
+            ),
+        ],
+        [],
+        [],
+    )
+
+    try:
+        count = asyncio.run(runtime.step(setup=False))
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert count == 2
+    event = _expectation_events(store)[0]
+    assert event["status"] == "violated"
+    assert event["checks"][0]["actual"] == "tray"
+    assert "actual was" in event["message"]
+
+
+def test_watch_runtime_records_skipped_expectation_for_bad_path(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    store.write_actions(
+        [
+            Action(
+                id="act_observe_bad_path",
+                robot="arm_1",
+                capability="observe",
+                params={},
+                metadata={
+                    "expected": [
+                        {
+                            "path": "objects.blue_block.location",
+                            "op": "eq",
+                            "value": "tray",
+                        }
+                    ]
+                },
+            )
+        ],
+        [],
+        [],
+    )
+
+    try:
+        count = asyncio.run(runtime.step(setup=False))
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert count == 1
+    event = _expectation_events(store)[0]
+    assert event["status"] == "skipped"
+    assert "could not be resolved" in event["message"]
+
+
+def test_watch_runtime_records_skipped_expectation_for_driver_failure(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    store.write_actions(
+        [
+            Action(
+                id="act_place_without_pick",
+                robot="arm_1",
+                capability="place",
+                params={"target": "tray"},
+                metadata={
+                    "expected": [
+                        {
+                            "path": "objects.red_block.location",
+                            "op": "eq",
+                            "value": "tray",
+                        }
+                    ]
+                },
+            )
+        ],
+        [],
+        [],
+    )
+
+    try:
+        count = asyncio.run(runtime.step(setup=False))
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert count == 1
+    event = _expectation_events(store)[0]
+    assert event["status"] == "skipped"
+    assert "Action failed before expectation check" in event["message"]
+
+
+def test_watch_runtime_does_not_check_expectation_when_safety_gate_rejects(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    store.append_pending_action(
+        Action(
+            id="act_gate_expected",
+            robot="arm_1",
+            capability="move_to",
+            params={"x": 99.0, "y": 0.0, "z": 0.4},
+            metadata={
+                "expected": [
+                    {
+                        "path": "robots.arm_1.pose.x",
+                        "op": "eq",
+                        "value": 99.0,
+                    }
+                ]
+            },
+        )
+    )
+
+    async def fail_execute(action):
+        raise AssertionError("SafetyGate must reject before driver.execute")
+
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "execute", fail_execute)
+
+    try:
+        count = asyncio.run(runtime.step(setup=False))
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert count == 0
+    assert _expectation_events(store) == []
+    feedback = store.read_feedback()["latest"]
+    assert feedback["action_id"] == "act_gate_expected"
+    assert feedback["status"] == "failed"
 
 
 def test_watch_runtime_driver_exception_cancels_sqlite_action(tmp_path, monkeypatch):

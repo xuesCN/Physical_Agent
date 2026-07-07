@@ -131,6 +131,30 @@ export function formatObjectValue(value: unknown, fallback = "-"): string {
   return entries.map(([key, item]) => `${key}=${formatObjectValue(item, fallback)}`).join(", ");
 }
 
+export function expectedSummary(value: unknown, limit = 2): string {
+  const checks = expectedChecks(value);
+  if (!checks.length) {
+    return "";
+  }
+  const rendered = checks.slice(0, limit).map((check) => {
+    const description = formatPrimitive(check.description, "");
+    const path = formatPrimitive(check.path, "path?");
+    const op = formatPrimitive(check.op, "op?");
+    const expected = check.value !== undefined ? formatObjectValue(check.value) : "value?";
+    return description || `${path} ${op} ${expected}`;
+  });
+  const suffix = checks.length > limit ? ` +${checks.length - limit} more` : "";
+  return `${rendered.join(" · ")}${suffix}`;
+}
+
+export function expectedChecks(value: unknown): UnknownRecord[] {
+  if (Array.isArray(value)) {
+    return value.map(asRecord).filter(isNonEmptyRecord);
+  }
+  const record = asRecord(value);
+  return isNonEmptyRecord(record) ? [record] : [];
+}
+
 export function compactSchemaSummary(schema: unknown): string {
   const record = asRecord(schema);
   const properties = asRecord(record.properties);

@@ -8,7 +8,12 @@ import { Button, Card, Popconfirm, Segmented, Space, Table, Tag, Typography } fr
 import { useMemo, useState } from "react";
 import type { ActionItem, AgentState } from "../types";
 import { RawJsonFallback } from "./JsonTreeLazy";
-import { asRecord, formatObjectValue, isNonEmptyRecord } from "./readableFormatters";
+import {
+  asRecord,
+  expectedSummary,
+  formatObjectValue,
+  isNonEmptyRecord
+} from "./readableFormatters";
 
 type BoardKey = "pending" | "completed" | "cancelled";
 
@@ -75,7 +80,7 @@ export function ActionBoard({
         pagination={false}
         dataSource={data}
         tableLayout="fixed"
-        scroll={{ x: 1260, y: 260 }}
+        scroll={{ x: 1520, y: 260 }}
         locale={{ emptyText: `No ${active} actions` }}
         columns={[
           {
@@ -118,6 +123,25 @@ export function ActionBoard({
             key: "approval",
             width: 170,
             render: (_, record) => <ApprovalBadge action={record} />
+          },
+          {
+            title: "Expected",
+            key: "expected",
+            width: 260,
+            ellipsis: true,
+            render: (_, record) => {
+              const expected = record.metadata?.expected;
+              const summary = expectedSummary(expected);
+              if (!summary) {
+                return <Typography.Text type="secondary">-</Typography.Text>;
+              }
+              return (
+                <Space direction="vertical" size={4} className="full-width">
+                  <Typography.Text className="source-cell">{summary}</Typography.Text>
+                  <RawJsonFallback label="Expected raw" value={expected} />
+                </Space>
+              );
+            }
           },
           {
             title: "Source",

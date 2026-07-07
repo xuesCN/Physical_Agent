@@ -2,7 +2,7 @@
 
 > 配套 `SPEC.zh-CN.md` §4 矩阵使用：矩阵管"做什么/状态"，本册管"怎么做"。每项含：思路、关键文件、坑、验收。
 > 写给后续执行者（人或 agent）。动工前先读 SPEC §0 不变量与 REFACTORING §3 决策先例；每项动工时按惯例先出一份轮次 brief。
-> 最后更新：2026-07-05
+> 最后更新：2026-07-07
 
 ---
 
@@ -43,9 +43,11 @@
 
 ## F4 期望-比对-回灌
 
-**思路**：① 断言 schema：`Action.metadata.expected = [{"path": "world.objects.red_block.location", "op": "eq", "value": "tray"}]`，路径用点号取值，op 先只支持 eq/ne/in/range；LLM planner 的结构化输出 schema 加 expected 可选字段。② 比对器：watch `_record_action_result` 之后、`update_world()` 之后跑（保证拿到动作后的新鲜 world），纯函数 `evaluate_expected(expected, world, feedback) -> verified|violated|skipped`，结果作为 feedback 事件（`event: expectation_check`）。**不用 LLM 判断**。③ 回灌：violated 事件出现时，chat 侧下一轮上下文注入（期望/实测/message 三元组）；自动修正提案默认关。
-**坑**：mock 世界是确定的，先在 mock 上把管线跑通；断言路径拼错应产出 skipped 而不是 crash。
-**验收**：pick+place 任务带断言全绿；故意写错断言产出 violated 事件并在 F2 时间线可见。
+**实现口径（2026-07-07 已落地）**：`Action.metadata.expected` 进入 chat draft、LLM planner、MCP proposal 与 API proposal 的可选 metadata；实际归一化和比对集中在 `physical_agent/protocol/expectations.py`，避免 API/state 顶层 import watch 或 driver。断言形如 `{"path": "world.objects[id=red_block].location", "op": "eq", "value": "tray"}`，op 支持 `eq/ne/in/range`，路径支持点号、数组索引和简单 selector。watch 仅在 SafetyGate 通过、driver 返回 completed、并且 `update_world()` 成功后运行 `evaluate_expected()`；动作失败或 world 刷新失败时，只要原 action 有 expected，就写 `skipped` 的 `expectation_check`。SafetyGate 拒绝仍只写安全失败，不跑 expected。
+**状态聚合**：一条 action 可带多条 check；任一 check 为 `violated` 则总事件 `violated`，否则任一 check 为 `skipped` 则总事件 `skipped`，全部 `verified` 才是 `verified`。每条 check 保留自己的 `status/message/expected/actual/path/op`；总事件的 `message` 摘要第一条 violated/skipped，方便 F2 时间线直接读。`expected` 为空或缺失时不产生 `expectation_check`。
+**归一化边界**：`expected` 是执行后诊断，不是 SafetyGate，也不是 action schema 本体；坏 expected 不能让原本合法的 action 提交失败。写入 action metadata 时只做轻量规范化：单个对象转 list；非 list/object、条目非 object、字段缺失、未知 op、路径不可解析等都保留为后续 `skipped`；条数限制为 20，序列化大小限制为 8 KiB，超限写入截断说明；actual 用稳定 JSON 排序，避免快照抖动。
+**回灌与可见性**：`expectation_check` 进入 feedback history；context_builder 在后续 chat/planner 上下文注入 expectation feedback，让 LLM 看到期望、实测与 message，但不自动重试。前端不大改流程：Chat draft 卡片与 Actions 表格显示 expected 摘要，raw expected 作为折叠兜底，避免模型生成的“自证”完全隐形。
+**验收**：pick/place 带正确断言产生 verified；错误断言产生 violated；坏路径/坏格式/动作失败产生 skipped；缺失 expected 不产事件；多 check 聚合规则固定；expected 在提交前或动作详情可见；全量 pytest 与前端 build 通过。
 
 ## W2 观察并发化 + 频率解耦
 

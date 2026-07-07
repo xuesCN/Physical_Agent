@@ -16,6 +16,7 @@ from physical_agent.agent.skills import SkillRouter
 from physical_agent.agent.tool_loop import OpenAIToolLoop
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config, write_default_config
 from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
+from physical_agent.protocol.expectations import EXPECTED_JSON_SCHEMA
 from physical_agent.protocol.retrieval import retrieved_context_payload
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, CodeTaskResult
 from physical_agent.state import StateStore, open_state_store
@@ -45,6 +46,13 @@ CHAT_RESPONSE_SCHEMA: dict[str, Any] = {
                     "depends_on": {
                         "type": "array",
                         "items": {"type": ["string", "integer"]},
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {
+                            "expected": EXPECTED_JSON_SCHEMA,
+                        },
                     },
                 },
             },
@@ -1246,6 +1254,8 @@ def _action_draft_json(actions: list[Any]) -> str:
         if item.get("reason"):
             draft["reason"] = item["reason"]
         draft["depends_on"] = item.get("depends_on") or []
+        if isinstance(item.get("metadata"), dict) and item["metadata"]:
+            draft["metadata"] = item["metadata"]
         drafts.append(draft)
     payload: Any = drafts[0] if len(drafts) == 1 else drafts
     return json.dumps(payload, ensure_ascii=False, indent=2)
@@ -1270,6 +1280,8 @@ def _normalize_action_drafts(actions: list[Any]) -> list[dict[str, Any]]:
             draft["id"] = str(item["id"])
         if item.get("reason"):
             draft["reason"] = str(item["reason"])
+        if isinstance(item.get("metadata"), dict) and item["metadata"]:
+            draft["metadata"] = item["metadata"]
         if draft["robot"] and draft["capability"]:
             drafts.append(draft)
     return drafts

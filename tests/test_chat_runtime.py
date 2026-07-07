@@ -377,6 +377,15 @@ def test_chat_runtime_llm_context_uses_summary_and_live_workspace_state(
                         "params": {},
                         "reason": "Use the live capability.",
                         "depends_on": [],
+                        "metadata": {
+                            "expected": [
+                                {
+                                    "path": "robots.arm_1.status",
+                                    "op": "eq",
+                                    "value": "idle",
+                                }
+                            ]
+                        },
                     }
                 ],
                 "memory": [],
@@ -403,6 +412,8 @@ def test_chat_runtime_llm_context_uses_summary_and_live_workspace_state(
     assert "stale" not in json.dumps(payload["world"])
     assert result["actions"] == []
     assert result["draft_actions"][0]["capability"] == "observe"
+    assert result["draft_actions"][0]["metadata"]["expected"][0]["path"] == "robots.arm_1.status"
+    assert '"expected"' in result["reply"]
     assert "```action-draft" in result["reply"]
 
 

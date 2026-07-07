@@ -16,6 +16,13 @@ def test_mcp_propose_action_sqlite_only_writes_pending_board(tmp_path):
             "capability": "observe",
             "params": {},
             "reason": "Tool caller wants observation.",
+            "metadata": {
+                "expected": {
+                    "path": "robots.arm_1.status",
+                    "op": "eq",
+                    "value": "idle",
+                }
+            },
         }
     )
 
@@ -23,6 +30,7 @@ def test_mcp_propose_action_sqlite_only_writes_pending_board(tmp_path):
     assert result["action_id"] == "act_mcp_sqlite"
     actions = store.read_actions()
     assert [action.id for action in actions["pending"]] == ["act_mcp_sqlite"]
+    assert actions["pending"][0].metadata["expected"][0]["path"] == "robots.arm_1.status"
     assert actions["completed"] == []
     assert actions["cancelled"] == []
 
@@ -37,3 +45,6 @@ def test_mcp_tool_specs_describe_proposal_only_tools(tmp_path):
     assert "physical_agent_get_state" in names
     assert all("Does not execute hardware" in spec["description"] for spec in specs)
     assert all(spec["strict"] is True for spec in specs)
+    propose_spec = next(spec for spec in specs if spec["name"] == "physical_agent_propose_action")
+    metadata_schema = propose_spec["parameters"]["properties"]["metadata"]
+    assert "expected" in metadata_schema["properties"]

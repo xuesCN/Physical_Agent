@@ -6,6 +6,7 @@ from typing import Any
 
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config
 from physical_agent.drivers.loader import LoadedDriver, load_driver
+from physical_agent.protocol.expectations import evaluate_expected, normalize_expected_value
 from physical_agent.protocol.schemas import Action, ActionResult, Observation, RobotRuntimeProfile
 from physical_agent.state import StateStore, open_state_store
 from physical_agent.watch.safety import SafetyGate
@@ -167,6 +168,10 @@ class WatchRuntime:
                 workspace.mark_action_cancelled(action)
                 executed_count += 1
                 await self._record_action_result(action, result)
+                await self._record_expectation_skipped(
+                    action,
+                    f"Action failed before expectation check: {result.message}",
+                )
                 await self._halt_robot_after_timeout(action.robot, loaded)
                 continue
             except Exception as exc:
@@ -178,6 +183,10 @@ class WatchRuntime:
                 workspace.mark_action_cancelled(action)
                 executed_count += 1
                 await self._record_action_result(action, result)
+                await self._record_expectation_skipped(
+                    action,
+                    f"Action failed before expectation check: {result.message}",
+                )
                 continue
             if result.status == "completed":
                 workspace.mark_action_completed(action)
@@ -185,7 +194,25 @@ class WatchRuntime:
                 workspace.mark_action_cancelled(action)
             executed_count += 1
             await self._record_action_result(action, result)
-            await self.update_world()
+            if result.status != "completed":
+                await self._record_expectation_skipped(
+                    action,
+                    f"Action failed before expectation check: {result.message}",
+                )
+                await self.update_world()
+                continue
+            try:
+                world = await self.update_world()
+            except Exception as exc:
+                await self._record_expectation_skipped(
+                    action,
+                    (
+                        "World update failed before expectation check: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                )
+                raise
+            await self._record_expectation_check(action, world)
 
         if executed_count == 0:
             await self.update_world()
@@ -250,6 +277,72 @@ class WatchRuntime:
             f"Action `{action.id}` {result.status}: {result.message}",
             actor="watch",
         )
+
+    async def _record_expectation_check(self, action: Action, world: Observation) -> None:
+        expected = _expected_checks(action)
+        if not expected:
+            return
+        evaluation = evaluate_expected(expected, world)
+        latest = {
+            "event": "expectation_check",
+            "action_id": action.id,
+            "status": evaluation["status"],
+            "robot": action.robot,
+            "capability": action.capability,
+            "message": evaluation["message"],
+            "expected": evaluation["expected"],
+            "actual": evaluation["actual"],
+            "checks": evaluation["checks"],
+            "result": {
+                "status": evaluation["status"],
+                "check_count": len(evaluation["checks"]),
+            },
+            "artifacts": [],
+        }
+        self._record_feedback_event(
+            latest,
+            f"Expectation check for `{action.id}` {evaluation['status']}: {evaluation['message']}",
+        )
+
+    async def _record_expectation_skipped(self, action: Action, message: str) -> None:
+        expected = _expected_checks(action)
+        if not expected:
+            return
+        checks = [
+            {
+                "status": "skipped",
+                "message": message,
+                "expected": item,
+                "actual": None,
+                "path": item.get("path") if isinstance(item, dict) else None,
+                "op": item.get("op") if isinstance(item, dict) else None,
+            }
+            for item in expected
+        ]
+        latest = {
+            "event": "expectation_check",
+            "action_id": action.id,
+            "status": "skipped",
+            "robot": action.robot,
+            "capability": action.capability,
+            "message": message,
+            "expected": expected,
+            "actual": [
+                {
+                    "path": check.get("path"),
+                    "value": None,
+                    "status": "skipped",
+                }
+                for check in checks
+            ],
+            "checks": checks,
+            "result": {
+                "status": "skipped",
+                "check_count": len(checks),
+            },
+            "artifacts": [],
+        }
+        self._record_feedback_event(latest, f"Expectation check for `{action.id}` skipped: {message}")
 
     async def _heartbeat_loaded_drivers(self) -> None:
         if self.config is None or not self.config.watch.heartbeat_enabled:
@@ -475,6 +568,9 @@ class WatchRuntime:
         self._record_driver_feedback(latest, message)
 
     def _record_driver_feedback(self, latest: dict[str, Any], message: str) -> None:
+        self._record_feedback_event(latest, message)
+
+    def _record_feedback_event(self, latest: dict[str, Any], message: str) -> None:
         workspace = self._workspace()
         feedback = workspace.read_feedback()
         history = list(feedback["history"])
@@ -511,3 +607,10 @@ def merge_observations(observations: list[Observation]) -> Observation:
         artifacts=artifacts,
         raw=raw,
     )
+
+
+def _expected_checks(action: Action) -> list[dict[str, Any]]:
+    metadata = action.metadata if isinstance(action.metadata, dict) else {}
+    if "expected" not in metadata:
+        return []
+    return normalize_expected_value(metadata.get("expected"))

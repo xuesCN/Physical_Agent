@@ -26,7 +26,7 @@
 
 ## 2. 认知侧（只提案）
 
-`agent/runtime.py`（run_task→planner→写提案）、`chat_runtime.py`（chat 主入口，流式 respond_stream）、`planner.py`+`rule_based.py`+`llm_planner.py`（规则/LLM 双 planner，yaml 可切）、`tool_loop.py`（proposal-only 工具白名单）、code 技能族、`onboarding.py`+`driver_coder.py`（接入助手，已接 GUI）。全部 ✅。已知结构问题：上下文组装在 chat_runtime 内重复 3 份（SPEC F3）。
+`agent/runtime.py`（run_task→planner→写提案）、`chat_runtime.py`（chat 主入口，流式 respond_stream）、`context_builder.py`（reply/proposal/planner/tool_loop 上下文组装）、`planner.py`+`rule_based.py`+`llm_planner.py`（规则/LLM 双 planner，yaml 可切）、`tool_loop.py`（proposal-only 工具白名单）、code 技能族、`onboarding.py`+`driver_coder.py`（接入助手，已接 GUI）。全部 ✅。
 
 ## 3. LLM 接入
 
@@ -38,7 +38,7 @@ SQLite 唯一 active 后端（原子动作/lease/恢复/WAL）✅ · retired Mar
 
 ## 5. 摄入 · 记忆 · 检索
 
-文本摄入+浏览器上传（≤5MB，标记不可信）✅ · PDF 仍拒绝 🟡 · 结构化记忆（kind/tags/importance）✅（importance 尚未用于上下文注入排序，归 F3）· 确定性关键词检索（默认关）🟡 · 向量 RAG 未做（延后）。
+文本摄入+浏览器上传（≤5MB，标记不可信）✅ · PDF 仍拒绝 🟡 · 结构化记忆（kind/tags/importance）✅（F3 起上下文注入按 importance/created_at 排序）· 确定性关键词检索（默认关）🟡 · 向量 RAG 未做（延后）。
 
 ## 6. 执行侧 watch
 

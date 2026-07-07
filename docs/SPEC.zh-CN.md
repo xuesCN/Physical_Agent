@@ -40,7 +40,7 @@
 | **B6（已完成历史收口项）** | 状态层收口 | 已删 `MarkdownStateStore`/factory 分支/config legacy 自动探测/矩阵测试 md 侧与 `test_e2e_markdown_loop`；**保留** markdown renderer/parser（SAFETY 真源、LOG 镜像、audit export 依赖）；`migrate-md-to-sqlite` 留一个版本周期仅为读取旧 Markdown workspace 迁移输入，**不代表 Markdown runtime backend 仍被支持**。已在 F1.3 前完成，避免审批元数据继续为退役后端重复实现 |
 | F1 | 提案卡片 + Add to Actions + 审批流（已完成） | chat draft 固定为 `action-draft` fence，前端解析校验后渲染卡片；Chat 卡片按钮叫 Add to Actions，只创建 pending action，不等同执行审批。`requires_approval` 由后端按 robot/capability 计算，写入 action metadata；Actions 板的 Approve execution / Reject 才改变执行放行状态。watch claim 会原子跳过未批准动作但不阻塞后续 ready action；SafetyGate 仍照常校验 schema、bounds、capability、robot、SAFETY.md。 |
 | F2 | 结构化信息可读化（全应用原则） | **通用原则：已知协议字段一律定制组件呈现，未知/raw 字段 JSON 树兜底（懒加载），`<pre>` 裸 JSON 逐步清零**。首批落地：feedback 时间线（status 灯/action 跳转/失败原因用 `message` 字段）、world objects 表格、capabilities/config/integration 结果的卡片化；协议 schema 由 pydantic 锁定，定制组件不会白写 |
-| F3 | context_builder 解耦（接实机前必做） | 收拢 chat_runtime 3 处重复组装；ContextBudget 统一魔法数字；world/capabilities 超限摘要化；memory 按 importance 排序注入；golden-file 测试 |
+| F3 | context_builder 解耦（已完成） | `context_builder` 统一 reply/proposal/planner/tool_loop 上下文；ContextBudget 收拢魔法数字；world/capabilities 超限摘要化；memory 按 importance 排序注入；golden-file 测试 |
 | F4 | 闭环地基 | 提案带 expected 断言 → 执行后**确定性比对**（不用 LLM 当裁判）→ violated 才回灌 LLM 诊断；自动重试默认关 |
 | F5 | 硬件生态（条件触发） | F5.1 舵机臂到手→LeRobot motors 包 driver（D2b 销账）；F5.2 有 ROS 设备→ros_mcp driver（不绕 gate）；F5.3 小车+摄像头→YOLO/VLM 物体列表进 world |
 | **T（独立线：Ink 终端 UI）** | 第五入口 | Node/TS/Ink 5 交互式终端工作台（`tui/` 目录，纯 API 客户端零核心改动）；T1 只读（状态+流式 chat+actions 实时）→ T2 交互（提交/审批/重置，审批依赖 F1.3）→ T3 补齐。typer CLI 保留管脚本化，Ink 管交互；选 Ink 而非 Textual 是为复用 dashboard 的 React 技能。与 F 主线无依赖（除 T2 审批），可随时穿插 |
@@ -64,7 +64,7 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | B6 | 退役 markdown 后端（保留 renderer 与迁移命令） | §2 | ✅ 2026-07-06 完成 `9072b4e`：active backend 只剩 SQLite；旧 Markdown 仅迁移 reader 可读 |
 | F1 | 提案卡片 + Add to Actions + 审批流 | §2 | ✅ 2026-07-07 完成：Chat draft 卡片只提交动作板；Actions 板审批才放行 `requires_approval`；approval required 后端计算，SQLite 原子 claim 跳过未批准动作；拒绝/审批元数据进 LOG/audit |
 | F2 | feedback 时间线 + world 视图 + JSON 树 | §2 | ✅ 2026-07-07 完成：feedback/action approval/refusal_reason 时间线可读，world objects 表格化，capabilities/config/integration 轻量可读；raw JSON 改懒加载树兜底。提交 `58a75b0` |
-| F3 | context_builder 解耦 | §2 | ⚪ 接实机前必做 |
+| F3 | context_builder 解耦 | §2 | ✅ 2026-07-07 完成：新增只读 `context_builder`，统一 chat reply/proposal/tool_loop 与 LLM planner payload；planner 使用独立 purpose；golden snapshot 覆盖四路；memory 改按 importance/created_at 注入 |
 | F4 | 期望-比对-回灌 | §2 | ⚪ 依赖 F0 数据 |
 | W2 | 观察并发化（gather）+ 频率与 tick 解耦 | W1 欠账 | ⚪ 接实机前 |
 | W3 | transport 断线重连（backoff） | W1 欠账 | ⚪ 接实机前 |

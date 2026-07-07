@@ -5,6 +5,11 @@ from pathlib import Path
 import re
 from typing import Any
 
+from physical_agent.agent.context_builder import (
+    DEFAULT_CONTEXT_BUDGET,
+    ContextBudget,
+    build_planner_context,
+)
 from physical_agent.agent.planner import Planner
 from physical_agent.agent.rule_based import RuleBasedPlanner
 from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
@@ -47,6 +52,7 @@ class LLMPlanner(Planner):
         env_file: str = ".env",
         model: str | None = None,
         workspace_path: str | Path | None = None,
+        context_budget: ContextBudget = DEFAULT_CONTEXT_BUDGET,
     ):
         self.settings = settings or OpenAICompatibleSettings.from_env(
             env_file=env_file,
@@ -56,6 +62,7 @@ class LLMPlanner(Planner):
         self.client = OpenAICompatibleClient(self.settings)
         self.fallback = RuleBasedPlanner()
         self.last_refusal_reason: str | None = None
+        self.context_budget = context_budget
 
     def plan(
         self,
@@ -64,35 +71,18 @@ class LLMPlanner(Planner):
         capabilities: dict[str, Any],
         world: dict[str, Any],
     ) -> list[Action]:
+        context = build_planner_context(
+            task,
+            capabilities=capabilities,
+            world=world,
+            budget=self.context_budget,
+        )
         payload = self.client.structured_json(
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        "You convert physical-world tasks into JSON action intents. "
-                        "Return only JSON with this shape: "
-                        '{"actions":[{"robot":"...","capability":"...","params":{},'
-                        '"reason":"...","depends_on":[]}],"refusal_reason":"optional reason when empty"} '
-                        "Use only robots and capabilities present in the provided capability document. "
-                        "Do not invent hardware calls. Do not include Markdown."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "task": task,
-                            "capabilities": _json_safe(capabilities),
-                            "world": _json_safe(world),
-                        },
-                        ensure_ascii=True,
-                    ),
-                },
-            ],
+            context.messages,
             schema=ACTION_PLAN_SCHEMA,
             schema_name="physical_action_plan",
-            temperature=0.0,
-            max_tokens=1200,
+            temperature=context.temperature,
+            max_tokens=context.max_tokens,
             metadata={"physical_agent_surface": "planner"},
         )
         actions_data = payload.get("actions", [])

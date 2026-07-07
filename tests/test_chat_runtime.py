@@ -394,8 +394,8 @@ def test_chat_runtime_llm_context_uses_summary_and_live_workspace_state(
     assert len(payload["chat_history"]) == 12
     assert payload["chat_history"][-1]["content"] == "what is current state?"
     assert len(payload["memory"]) == 20
-    assert payload["memory"][0]["content"].startswith("memory 5")
-    assert payload["memory"][-1]["content"].startswith("memory 24")
+    assert payload["memory"][0]["content"].startswith("memory 24")
+    assert payload["memory"][-1]["content"].startswith("memory 5")
     assert payload["capabilities"]["robots"]["arm_1"]["capabilities"][0]["name"] == "observe"
     assert payload["world"]["summary"] == "live world summary"
     assert payload["feedback"]["latest"]["status"] == "completed"

@@ -324,9 +324,10 @@ def test_chat_runtime_tool_loop_submit_task_writes_pending_only(
     )
     assert context["chat_history"][-1]["content"] == "look around"
     assert len(context["memory"]) == 20
-    assert context["memory"][0]["content"].startswith("tool memory 5")
-    assert context["memory"][-1]["source"] == "upload"
-    assert context["memory"][-1]["content"].startswith("UNTRUSTED UPLOAD EXCERPT")
+    assert context["memory"][0]["content"].startswith("tool memory 23")
+    assert context["memory"][-1]["content"].startswith("tool memory 5")
+    upload_memory = [item for item in context["memory"] if item["source"] == "upload"]
+    assert upload_memory[0]["content"].startswith("UNTRUSTED UPLOAD EXCERPT")
     assert "untrusted context" in context["context_policy"]
     assert context["capabilities"]["robots"]["arm_1"]["capabilities"][0]["name"] == "observe"
     assert "unsafe_execute" not in json.dumps(context["capabilities"])

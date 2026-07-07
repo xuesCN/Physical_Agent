@@ -27,6 +27,7 @@
 | B6 | 退役 MarkdownStateStore 后端 | `9072b4e` |
 | F1 | 提案卡片 + Add to Actions + action 级审批流 | `0f49a3c` |
 | F2 | 结构化信息可读化：feedback/world/capabilities + lazy JSON tree | `58a75b0` |
+| F3 | context_builder 解耦：reply/proposal/planner/tool_loop 上下文统一 | 本轮 |
 
 ## 2. 分阶段过程记录
 
@@ -96,6 +97,10 @@ A1 最初被跳过（工具循环建在自研 urllib 客户端上"够用"），�
 
 动机：F1 后 approval/source/refusal_reason 已进入状态与审计，但 GUI 仍要求用户点 Raw Debug 才能拼出"提了什么、是否审批、是否被 Gate 拦、world 里有什么"。过程：前端新增 `readableFormatters` 集中处理 status 颜色、pose/location、schema 摘要与安全取字段；`ContextTabs` 改成 world/feedback/safety/capabilities 四个可读 tab。`FeedbackTimeline` 用 AntD Timeline 合并 feedback history、action approval/source metadata 与 chat `refusal_reason`，失败原因优先读 `message`，`action_id` 可跳 Actions 页；driver heartbeat/watchdog/expectation 类事件有可读标题。`WorldObjectsTable` 把 world objects 转成 id/type/location/pose/status/relations 表格，environment/robots/artifacts 单独展示，未知字段保留 raw。`CapabilityCard` 展示 capability 名称、描述、params schema 摘要、constraints 与 approval 徽章；`ConfigPanel` 与 `HardwarePanel` 补配置/集成能力摘要。raw/debug 统一走 `JsonTreeLazy`，懒加载 `react18-json-view` 并在 Vite 中拆出 `json-view` chunk，`RawDebug`、Settings plan、Safety raw、Events payload 等均默认折叠。验证：`frontend npm run build` 通过且产物含独立 `json-view-*.js`；Playwright dashboard 14 例通过（含 F2 mocked readable context）；全量 `pytest -q` 251 passed；`frontend/src` 中 `<pre>` 从 6 处降至 0 处，`JSON.stringify` 从 19 处降至 18 处且剩余主要是 API 请求体/SSE 去重/表单初值/工具兜底。
 
+### F3：context_builder 解耦
+
+动机：chat_runtime 内 reply-only stream、chat proposal、tool_loop 三处上下文组装长期重复，LLM planner 也单独拼一套 action-plan prompt；接实机前需要把"给模型看什么"变成可测、只读、可预算的单点。过程：新增 `physical_agent/agent/context_builder.py`，定义 `ContextBudget` 与 `ContextBundle`，`build_context()` 统一 reply/proposal/tool_loop/planner 四路 payload，`build_planner_context()` 服务 direct `LLMPlanner` 调用；planner 没有复用 chat proposal，而是保留独立 `purpose="planner"` 与结构化 action plan system 文案。`ContextBudget` 收拢 recent messages、memory top-N、world/capabilities 字符预算、note 截断与各路 max_tokens；world/capabilities 超预算时降级为稳定摘要，memory 改按 `importance DESC, created_at DESC` 注入并保留 upload/untrusted 标记。验证：新增 context_builder golden snapshot 覆盖四路 system/payload，read-only 测试禁止 write/append/claim/approve/reject 等副作用；chat/planner/tool_loop/retrieval 回归通过，安全边界测试仍证明请求侧不加载 driver、不调用 `driver.execute`。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -112,6 +117,7 @@ A1 最初被跳过（工具循环建在自研 urllib 客户端上"够用"），�
 12. **两个 Approve 必须拆语义**（F1）：Chat draft 的按钮叫 Add to Actions，只代表"创建 action"；Actions 板的 Approve execution 才代表"放行 requires_approval action 被 watch claim/execute"。
 13. **approval.required 不信任认知侧或 UI**（F1）：LLM draft、前端表单、API caller 都不能决定是否需要审批；后端每次写入/读取/claim 前按真实 robot/capability 重新归一化。
 14. **raw JSON tree 是兜底，不是主界面**（F2）：`react18-json-view` 允许作为折叠 raw/debug 后备，并必须懒加载拆包；已知协议字段仍写定制组件，避免把"漂亮 JSON"误当成可读产品。
+15. **上下文组装是只读边界**（F3）：`context_builder` 只读 StateStore，不写 log/memory/action，不 import watch/driver/SafetyGate，不发 LLM 请求；planner purpose 保持独立，避免把结构化 action plan prompt 硬并进 chat proposal。
 
 ## 4. 经验教训（流程侧）
 

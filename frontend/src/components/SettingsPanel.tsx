@@ -13,6 +13,7 @@ import {
   Form,
   Input,
   Popconfirm,
+  Segmented,
   Select,
   Space,
   Tag,
@@ -27,6 +28,7 @@ import {
   saveLLMSettings,
   testLLMSettings
 } from "../api";
+import type { Language, Messages, ThemeMode } from "../locales";
 import type { AgentState, ExportAuditResponse, HealthState, LLMSettingsSummary, StateCheckResult } from "../types";
 import { RawJsonFallback } from "./JsonTreeLazy";
 import { oneLine } from "./utils";
@@ -34,6 +36,12 @@ import { oneLine } from "./utils";
 interface SettingsPanelProps {
   health: HealthState | null;
   state: AgentState | null;
+  labels: Messages;
+  language: Language;
+  themeMode: ThemeMode;
+  onLanguageChange: (language: Language) => void;
+  onThemeChange: (mode: ThemeMode) => void;
+  onShowTour: () => void;
   onWorkspaceReset?: (state: AgentState, message: string) => void;
 }
 
@@ -44,7 +52,17 @@ interface LLMSettingsFormValues {
   api_mode: string;
 }
 
-export function SettingsPanel({ health, state, onWorkspaceReset }: SettingsPanelProps) {
+export function SettingsPanel({
+  health,
+  state,
+  labels,
+  language,
+  themeMode,
+  onLanguageChange,
+  onThemeChange,
+  onShowTour,
+  onWorkspaceReset
+}: SettingsPanelProps) {
   const ready = Boolean(state?.ready ?? health?.ready);
   const [form] = Form.useForm<LLMSettingsFormValues>();
   const [llmSettings, setLlmSettings] = useState<LLMSettingsSummary | null>(null);
@@ -215,7 +233,7 @@ export function SettingsPanel({ health, state, onWorkspaceReset }: SettingsPanel
       title={
         <Space>
           <SettingOutlined />
-          <Typography.Text strong>Settings</Typography.Text>
+          <Typography.Text strong>{labels.settings.title}</Typography.Text>
         </Space>
       }
     >
@@ -240,6 +258,39 @@ export function SettingsPanel({ health, state, onWorkspaceReset }: SettingsPanel
         </Descriptions.Item>
       </Descriptions>
       <div className="panel-divider" />
+      <Space direction="vertical" size={8} className="full-width" data-testid="appearance-settings">
+        <Typography.Text strong>{labels.settings.appearance}</Typography.Text>
+        <div className="two-col">
+          <Space direction="vertical" size={4}>
+            <Typography.Text type="secondary">{labels.settings.language}</Typography.Text>
+            <Segmented
+              value={language}
+              onChange={(value) => onLanguageChange(value as Language)}
+              data-testid="language-switch"
+              options={[
+                { label: "中文", value: "zh" },
+                { label: "English", value: "en" }
+              ]}
+            />
+          </Space>
+          <Space direction="vertical" size={4}>
+            <Typography.Text type="secondary">{labels.settings.theme}</Typography.Text>
+            <Segmented
+              value={themeMode}
+              onChange={(value) => onThemeChange(value as ThemeMode)}
+              data-testid="theme-switch"
+              options={[
+                { label: labels.settings.light, value: "light" },
+                { label: labels.settings.dark, value: "dark" }
+              ]}
+            />
+          </Space>
+        </div>
+        <Button onClick={onShowTour} data-testid="show-tour-button">
+          {labels.settings.showTour}
+        </Button>
+      </Space>
+      <div className="panel-divider" />
       <Space
         direction="vertical"
         size={8}
@@ -247,7 +298,7 @@ export function SettingsPanel({ health, state, onWorkspaceReset }: SettingsPanel
         data-testid="state-backend-summary"
       >
         <Space wrap>
-          <Typography.Text strong>State backend</Typography.Text>
+          <Typography.Text strong>{labels.settings.stateBackend}</Typography.Text>
           <Tag color={backendTagColor}>
             {stateCheck?.backend_label ?? activeBackend}
           </Tag>
@@ -295,7 +346,7 @@ export function SettingsPanel({ health, state, onWorkspaceReset }: SettingsPanel
             onClick={handleExportAudit}
             data-testid="export-audit-button"
           >
-            Export audit view
+            {labels.settings.exportAudit}
           </Button>
           <Typography.Text type="secondary">
             Creates a read-only audit view; it does not change backend.
@@ -322,7 +373,7 @@ export function SettingsPanel({ health, state, onWorkspaceReset }: SettingsPanel
       <div className="panel-divider" />
       <Space direction="vertical" size={8} className="full-width">
         <Space wrap>
-          <Typography.Text strong>LLM</Typography.Text>
+          <Typography.Text strong>{labels.settings.llm}</Typography.Text>
           <Tag color={llmSettings?.has_api_key ? "green" : "gold"}>
             {llmSettings?.has_api_key ? `key ${llmSettings.masked_api_key}` : "no key"}
           </Tag>
@@ -361,7 +412,7 @@ export function SettingsPanel({ health, state, onWorkspaceReset }: SettingsPanel
               icon={<SaveOutlined />}
               data-testid="save-llm-settings"
             >
-              Save
+              {labels.settings.save}
             </Button>
             <Button
               onClick={handleTest}
@@ -369,7 +420,7 @@ export function SettingsPanel({ health, state, onWorkspaceReset }: SettingsPanel
               icon={<ApiOutlined />}
               data-testid="test-llm-settings"
             >
-              Test connection
+              {labels.settings.testConnection}
             </Button>
           </Space>
         </Form>
@@ -383,7 +434,7 @@ export function SettingsPanel({ health, state, onWorkspaceReset }: SettingsPanel
         )}
       </Space>
       <div className="panel-divider" />
-      <Typography.Text strong>Plan</Typography.Text>
+      <Typography.Text strong>{labels.settings.plan}</Typography.Text>
       <RawJsonFallback label="Plan JSON" value={state?.plan ?? {}} />
       <div className="panel-divider" />
       <Space
@@ -393,20 +444,20 @@ export function SettingsPanel({ health, state, onWorkspaceReset }: SettingsPanel
         data-testid="danger-zone"
       >
         <Typography.Text strong type="danger">
-          Danger zone
+          {labels.settings.dangerZone}
         </Typography.Text>
         <Alert
           type="warning"
           showIcon
-          message="Workspace reset"
-          description="Clears world, actions, memory, chat, and uploads, and restores SAFETY to defaults. physical-agent.yaml and LLM settings are kept. Capabilities are republished the next time watch runs."
+          message={labels.settings.resetTitle}
+          description={labels.settings.resetDescription}
         />
         <Popconfirm
-          title="Reset the entire workspace?"
-          description="World, actions, memory, chat, and uploads will be cleared. This cannot be undone."
-          okText="Reset workspace"
+          title={labels.settings.resetConfirmTitle}
+          description={labels.settings.resetConfirmDescription}
+          okText={labels.settings.resetOk}
           okButtonProps={{ danger: true }}
-          cancelText="Cancel"
+          cancelText={labels.settings.cancel}
           onConfirm={() => void handleWorkspaceReset()}
         >
           <Button
@@ -415,7 +466,7 @@ export function SettingsPanel({ health, state, onWorkspaceReset }: SettingsPanel
             loading={resetting}
             data-testid="reset-workspace-button"
           >
-            Reset workspace
+            {labels.settings.resetOk}
           </Button>
         </Popconfirm>
         {resetFeedback && (

@@ -13,6 +13,7 @@ import {
 } from "antd";
 import { useEffect, useState } from "react";
 import { integrateHardware, registerRobot } from "../api";
+import { useMessages } from "../locales/context";
 import type { AgentState, IntegrateResult, SchemaProperty } from "../types";
 import { compactSchemaSummary } from "./readableFormatters";
 
@@ -52,6 +53,7 @@ function coerceSchemaValue(raw: unknown, schema: SchemaProperty | undefined): un
 }
 
 export function HardwarePanel({ onStateChange, onError, onRobotRegistered }: HardwarePanelProps) {
+  const labels = useMessages();
   const [form] = Form.useForm<HardwareFormValues>();
   const [registerForm] = Form.useForm<RegisterFormValues>();
   const [loading, setLoading] = useState(false);
@@ -152,15 +154,15 @@ export function HardwarePanel({ onStateChange, onError, onRobotRegistered }: Har
       title={
         <Space>
           <ApiOutlined />
-          <Typography.Text strong>Hardware Integration</Typography.Text>
+          <Typography.Text strong>{labels.panels.hardware}</Typography.Text>
         </Space>
       }
     >
       <Alert
         type="info"
         showIcon
-        message="Proposal-side only"
-        description="Generates driver files and validates them in mock mode. Watch remains the only runtime that loads drivers and touches hardware."
+        message={labels.hardware.proposalOnly}
+        description={labels.hardware.proposalOnlyDescription}
       />
       <div className="panel-divider" />
       <Form
@@ -170,9 +172,9 @@ export function HardwarePanel({ onStateChange, onError, onRobotRegistered }: Har
         onFinish={handleFinish}
       >
         <Form.Item
-          label="Source (SDK folder, repo path, or URL)"
+          label={labels.hardware.source}
           name="source"
-          rules={[{ required: true, message: "Source is required" }]}
+          rules={[{ required: true, message: labels.hardware.sourceRequired }]}
         >
           <Input
             placeholder="e.g. ./vendor_sdk or https://github.com/vendor/robot-sdk"
@@ -180,25 +182,25 @@ export function HardwarePanel({ onStateChange, onError, onRobotRegistered }: Har
           />
         </Form.Item>
         <div className="two-col">
-          <Form.Item label="Driver name (optional)" name="name">
+          <Form.Item label={labels.hardware.driverName} name="name">
             <Input placeholder="my_arm_driver" data-testid="integrate-name-input" />
           </Form.Item>
-          <Form.Item label="Output directory (optional)" name="output">
+          <Form.Item label={labels.hardware.outputDirectory} name="output">
             <Input placeholder="my_hardware/my_arm_driver" />
           </Form.Item>
         </div>
         <div className="two-col">
-          <Form.Item label="Mode" name="mode">
+          <Form.Item label={labels.hardware.mode} name="mode">
             <Select
               data-testid="integrate-mode-select"
               options={[
-                { value: "scaffold", label: "Scaffold (offline, safe template)" },
-                { value: "llm", label: "LLM draft (uses configured LLM)" }
+                { value: "scaffold", label: labels.hardware.scaffoldMode },
+                { value: "llm", label: labels.hardware.llmMode }
               ]}
             />
           </Form.Item>
           {mode === "llm" && (
-            <Form.Item label="Model override (optional)" name="model">
+            <Form.Item label={labels.hardware.modelOverride} name="model">
               <Input placeholder="Leave blank to use configured model" />
             </Form.Item>
           )}
@@ -210,7 +212,7 @@ export function HardwarePanel({ onStateChange, onError, onRobotRegistered }: Har
           icon={<CodeOutlined />}
           data-testid="integrate-submit-button"
         >
-          Generate driver
+          {labels.hardware.generateDriver}
         </Button>
       </Form>
       {feedback && (
@@ -229,7 +231,7 @@ export function HardwarePanel({ onStateChange, onError, onRobotRegistered }: Har
           <div className="panel-divider" />
           <Space direction="vertical" size={8} className="full-width" data-testid="integrate-result">
             <Space wrap>
-              <Typography.Text strong>Result</Typography.Text>
+              <Typography.Text strong>{labels.hardware.result}</Typography.Text>
               {result.llm_used != null && (
                 <Tag color={result.llm_used ? "green" : "gold"}>
                   {result.llm_used ? "LLM draft" : "scaffold"}
@@ -301,23 +303,22 @@ export function HardwarePanel({ onStateChange, onError, onRobotRegistered }: Har
           <Space direction="vertical" size={8} className="full-width" data-testid="register-robot">
             <Space>
               <PlusCircleOutlined />
-              <Typography.Text strong>Register to config</Typography.Text>
+              <Typography.Text strong>{labels.hardware.registerToConfig}</Typography.Text>
             </Space>
             <Typography.Text type="secondary">
-              Appends a robots entry to physical-agent.yaml. Watch connects it after a restart;
-              nothing touches hardware now.
+              {labels.hardware.registerDescription}
             </Typography.Text>
             <Form form={registerForm} layout="vertical" onFinish={handleRegister}>
               <div className="two-col">
                 <Form.Item
-                  label="Robot ID"
+                  label={labels.hardware.robotId}
                   name="robot_id"
                   rules={[{ required: true, message: "Robot ID is required" }]}
                 >
                   <Input placeholder="my_arm_1" data-testid="register-robot-id" />
                 </Form.Item>
                 <Form.Item
-                  label="Driver (name or path)"
+                  label={labels.hardware.driver}
                   name="driver"
                   rules={[{ required: true, message: "Driver is required" }]}
                 >
@@ -357,7 +358,7 @@ export function HardwarePanel({ onStateChange, onError, onRobotRegistered }: Har
                 icon={<PlusCircleOutlined />}
                 data-testid="register-robot-button"
               >
-                Add to config
+                {labels.hardware.addToConfig}
               </Button>
             </Form>
             {registerFeedback && (

@@ -3,6 +3,10 @@ import type { Page } from "@playwright/test";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+const TOUR_STORAGE_KEY = "physical-agent-tour-dismissed";
+const LANGUAGE_STORAGE_KEY = "physical-agent-language";
+const THEME_STORAGE_KEY = "physical-agent-theme";
+
 function collectConsoleErrors(page: Page) {
   const consoleErrors: string[] = [];
   page.on("console", (message) => {
@@ -32,6 +36,26 @@ async function expectHealthyShell(page: Page) {
 function expectNoConsoleErrors(consoleErrors: string[]) {
   expect(consoleErrors).toEqual([]);
 }
+
+test.beforeEach(async ({ page }, testInfo) => {
+  await page.addInitScript(
+    ({ languageKey, themeKey, tourKey, showTour }) => {
+      localStorage.setItem(languageKey, "en");
+      localStorage.setItem(themeKey, "light");
+      if (showTour) {
+        localStorage.removeItem(tourKey);
+      } else {
+        localStorage.setItem(tourKey, "1");
+      }
+    },
+    {
+      languageKey: LANGUAGE_STORAGE_KEY,
+      themeKey: THEME_STORAGE_KEY,
+      tourKey: TOUR_STORAGE_KEY,
+      showTour: testInfo.title.includes("tour opens on first visit"),
+    },
+  );
+});
 
 test("desktop dashboard smoke still loads and core panels respond", async ({
   page,
@@ -465,6 +489,90 @@ test("settings panel explains sqlite backend without live switching", async ({
   expectNoConsoleErrors(consoleErrors);
 });
 
+test("settings danger zone keeps explicit reset confirmation path", async ({
+  page,
+  request,
+}) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await mockReadyApiWithRobot(page);
+
+  const wrongConfirm = await request.post("/api/workspace/reset", {
+    data: {},
+  });
+  expect(wrongConfirm.status()).toBe(400);
+  expect((await wrongConfirm.json()).message).toContain("confirm");
+
+  await page.goto("/");
+  await page.getByTestId("nav-settings").click();
+  await expect(page.getByTestId("reset-workspace-button")).toBeVisible();
+  await page.getByTestId("reset-workspace-button").click();
+  await page.getByRole("button", { name: "Reset workspace", exact: true }).last().click();
+  await expect(page.getByTestId("reset-workspace-feedback")).toContainText(
+    "Workspace reset",
+  );
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("hardware scaffold can register a robot and config panel refreshes", async ({
+  page,
+}) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await mockReadyApiWithRobot(page);
+
+  await page.goto("/");
+  await page.getByTestId("nav-hardware").click();
+  await page.getByTestId("integrate-source-input").fill("C:/tmp/mock-sdk");
+  await page.getByTestId("integrate-name-input").fill("bench_arm");
+  await page.getByTestId("integrate-submit-button").click();
+  await expect(page.getByTestId("integrate-result")).toContainText("bench_arm");
+
+  await page.getByTestId("register-robot-id").fill("bench_arm_1");
+  await page.getByTestId("register-robot-button").click();
+  await expect(page.getByTestId("register-robot-feedback")).toContainText(
+    "Registered bench_arm_1",
+  );
+  await expect(page.getByTestId("config-panel")).toContainText("bench_arm_1");
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("language and dark mode switches persist", async ({ page }) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await mockReadyApiWithRobot(page);
+
+  await page.goto("/");
+  await page.getByTestId("nav-settings").click();
+  await page.getByTestId("language-switch").getByText("中文").click();
+  await expect(page.getByTestId("status-bar")).toContainText("工作台");
+  await expect(page.evaluate(() => localStorage.getItem("physical-agent-language"))).resolves.toBe("zh");
+
+  await page.getByTestId("theme-switch").getByText("深色").click();
+  await expect(page.locator("body")).toHaveAttribute("data-theme", "dark");
+  await expect(page.evaluate(() => localStorage.getItem("physical-agent-theme"))).resolves.toBe("dark");
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("tour opens on first visit closes and can be reopened from settings", async ({
+  page,
+}) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await page.addInitScript(() => {
+    localStorage.setItem("physical-agent-language", "en");
+    localStorage.setItem("physical-agent-theme", "light");
+    localStorage.removeItem("physical-agent-tour-dismissed");
+  });
+  await mockReadyApiWithRobot(page);
+
+  await page.goto("/");
+  await expect(page.getByText("Set up first")).toBeVisible();
+  await page.getByRole("button", { name: "Close" }).click();
+  await expect(page.evaluate(() => localStorage.getItem("physical-agent-tour-dismissed"))).resolves.toBe("1");
+
+  await page.getByTestId("nav-settings").click();
+  await page.getByTestId("show-tour-button").click();
+  await expect(page.getByText("Set up first")).toBeVisible();
+  expectNoConsoleErrors(consoleErrors);
+});
+
 test("chat panel streams text incrementally and can stop", async ({ page }) => {
   const consoleErrors = collectConsoleErrors(page);
   const snapshot = await mockReadyApiWithRobot(page);
@@ -694,6 +802,7 @@ async function mockApiSnapshot(page: Page, snapshot: Record<string, unknown>) {
     masked_api_key: "****7890",
     settings_path: "C:/tmp/workspace/.llm.json",
   };
+  const configRobots: Record<string, { driver: string; config: Record<string, unknown> }> = {};
 
   await page.route("**/api/health", async (route) => {
     await route.fulfill({
@@ -736,6 +845,107 @@ async function mockApiSnapshot(page: Page, snapshot: Record<string, unknown>) {
           workspace_path: workspacePath,
           out_dir: `${workspacePath}/audit`,
           manifest: `${workspacePath}/audit/manifest.json`,
+        },
+      }),
+    });
+  });
+  await page.route("**/api/workspace/reset", async (route) => {
+    const body = route.request().postDataJSON() as { confirm?: boolean };
+    if (!body.confirm) {
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: false,
+          message: "Workspace reset requires explicit confirmation.",
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        message: "Workspace reset complete.",
+        state: {
+          ...snapshot,
+          actions: { pending: [], completed: [], cancelled: [] },
+          chat: { messages: [] },
+          memory: { notes: [] },
+        },
+      }),
+    });
+  });
+  await page.route("**/api/integrate", async (route) => {
+    const body = route.request().postDataJSON() as { name?: string; output?: string };
+    const name = body.name || "mock_driver";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        message: `Generated ${name}.`,
+        state: snapshot,
+        result: {
+          output_path: body.output || `my_hardware/${name}`,
+          generated_files: ["driver.py", "physical_driver.yaml"],
+          llm_used: false,
+          source: {
+            name,
+            title: name,
+            robot_kind: "arm",
+            transport: "mock",
+            config_schema: {
+              type: "object",
+              properties: {
+                port: { type: "string", default: "COM1" },
+              },
+            },
+            capabilities: [
+              {
+                name: "observe",
+                description: "Inspect workspace.",
+                params_schema: { type: "object", properties: {} },
+              },
+            ],
+          },
+          validation: { ok: true, checks: ["scaffold"], errors: [] },
+          next_steps: ["Register robot"],
+        },
+      }),
+    });
+  });
+  await page.route("**/api/config/robots", async (route) => {
+    const body = route.request().postDataJSON() as {
+      robot_id: string;
+      driver: string;
+      config?: Record<string, unknown>;
+    };
+    configRobots[body.robot_id] = {
+      driver: body.driver,
+      config: body.config ?? {},
+    };
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        message: `Registered ${body.robot_id}.`,
+      }),
+    });
+  });
+  await page.route("**/api/config", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        config_path: "C:/tmp/physical-agent.yaml",
+        config: {
+          workspace: { path: "C:/tmp/physical-agent-workspace", backend: "sqlite" },
+          watch: { tick_ms: 500, require_human_approval: true },
+          robots: configRobots,
         },
       }),
     });

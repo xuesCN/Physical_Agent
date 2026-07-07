@@ -120,16 +120,23 @@
 **思路**：新目录 `tui/`（Node 20+ / TypeScript / Ink 5 + React 18）。依赖：`ink`、`ink-text-input`、`ink-spinner`、SSE 用原生 fetch 流式解析（复用 dashboard `api.ts` 的 parseSseBlock 逻辑翻译成 Node 版）。三档递进：**T1** 只读——StatusBar（health/backend/watch）+ chat 流式对话 + actions 列表实时刷（SSE）；**T2** 交互——提交 task、approve/reject（依赖 F1.3 端点）、workspace reset；**T3** 补齐——config/robots 视图、上传。入口 `npm start -- --api http://127.0.0.1:8766`。
 **坑**：Ink 是 Node 生态——引入了第二运行时依赖，若在意可改用 Python 的 Textual（同语言零新增依赖），**决策记录：选 Ink 是因为技能与 dashboard 的 React 复用 + Claude Code 同款生态**；SSE 断线要做和 dashboard 一样的降级轮询；终端宽度自适应用 Ink 的 flexbox，别写死列宽。
 **验收**：T1 三面板可用、chat 流式不卡顿；`ink-testing-library` 覆盖核心组件渲染。
+**实现口径（2026-07-07）**：已落 `tui/` 独立包，包含 API client、SSE parser、command parser 与 StatusBar/ChatPanel/ActionsPanel/CommandInput。TUI 只调用 HTTP API/SSE，不读 SQLite/workspace，不 import Python/watch/driver。T2-lite 已含 chat、`/task`、`/approve`、`/reject`、`/reset true`、`/refresh`、`/help`、`/quit`；`/execute`、`/driver`、`/hardware-control` 明确拒绝。T3 的 config/upload 仍未完成。
+**验证（2026-07-07）**：`cd tui && npm run build` 通过；`cd tui && npm test` 12 passed，覆盖 SSE block、命令解析、StatusBar 与 ActionsPanel 渲染。
 
 ## C4 i18n / E3 视觉打磨
 
 **思路**：C4：antd `ConfigProvider locale` + 文案抽到 `locales/{zh,en}.ts` 键值表（不上 i18next，工程量不值），默认跟浏览器语言，切换存 localStorage。E3：暗色模式用 antd `theme.darkAlgorithm` token 切换 + localStorage；首次引导用 antd Tour 组件串 setup→watch→demo 三步。
+**实现口径（2026-07-07）**：新增 `frontend/src/locales/`，`App.tsx` 统一接 `ConfigProvider locale`、`MessagesProvider`、theme mode 与 Tour 状态。高频导航、StatusBar、Actions、Chat、Settings、Hardware、Config、RawDebug、Robots 等文案已抽取；Settings 提供语言、主题与重新显示 Tour。暗色模式使用 AntD `darkAlgorithm` + `body[data-theme]` CSS 变量，覆盖页面背景、侧栏、卡片、JSON fallback、chat draft、drawer 等明显浅色区域。
+**验证（2026-07-07）**：`cd frontend && npm run build` 通过；Playwright 覆盖语言切换写 localStorage、dark mode 写 localStorage/body 状态、首次 Tour 关闭与 Settings 重开。
 
 ## E0-e2e 补课
 
 **思路**：`frontend/e2e/dashboard.spec.ts` 追加：hardware 页生成 scaffold（用临时 SDK 目录 fixture）→注册表单提交→ConfigPanel 出现新 robot；Settings danger zone 确认流；每个新 testid 都已埋好（`register-robot-*`、`reset-workspace-*`、`config-panel`）。
+**实现口径（2026-07-07）**：在现有 dashboard e2e 中补 mocked API 场景，固定默认测试态为 English/light/Tour dismissed，避免新 Tour 遮挡旧流程。新增覆盖：reset confirm 错误请求不执行 + GUI Popconfirm 成功 reset、Hardware scaffold→Register to config→ConfigPanel 出现新 robot、i18n、dark mode、Tour 首次打开/关闭/重开。
+**验证（2026-07-07）**：手动启动 API/Vite 后运行 `npx playwright test e2e/dashboard.spec.ts --project=chromium --workers=1 --reporter=list`，18 passed。直接 `npx playwright test` 曾在本机自动 webServer 启动阶段超时无用例输出；测试本体已由手动服务全量验证。
 
 ## 基建：CI
 
 **思路**：`.github/workflows/ci.yml` 三 job：① pytest（matrix 3.11/3.12，`pip install -e .[dev,server,llm]`，**env 里清空代理变量**）；② 前端 `npm ci && tsc -b && vite build`；③ e2e smoke（Playwright chromium，只跑 overview 用例）。触发 push+PR。
 **坑**：测试内建 env-scrub fixture（`tests/conftest.py` 里 monkeypatch 删代理变量）比在 CI yaml 里清更治本——两处都做。
+**实现口径（2026-07-07）**：新增 `.github/workflows/ci.yml`，包含 Python 3.11/3.12 pytest、frontend `npm ci` + Playwright Chromium + build/e2e、TUI `npm ci` + build/test。`frontend/playwright.config.ts` 的 webServer 命令改为 Windows/Linux 分支，并允许 `PA_E2E_API_COMMAND` / `PA_E2E_DEV_COMMAND` 覆盖。

@@ -12,6 +12,7 @@ import {
 import { Layout, Menu, Typography } from "antd";
 import type { MenuProps } from "antd";
 import type { ReactNode } from "react";
+import type { Messages } from "../locales";
 
 export type PageKey =
   | "overview"
@@ -36,53 +37,56 @@ export const PAGE_LABELS: Record<PageKey, string> = {
   settings: "Settings"
 };
 
-function navLabel(key: PageKey) {
-  return <span>{PAGE_LABELS[key]}</span>;
+function navLabel(key: PageKey, labels: Messages["nav"]) {
+  return <span>{labels[key]}</span>;
 }
 
 function navIcon(key: PageKey, icon: ReactNode) {
   return <span data-testid={`nav-${key}`}>{icon}</span>;
 }
 
-const NAV_ITEMS: MenuProps["items"] = [
-  {
-    key: "overview",
-    icon: navIcon("overview", <DashboardOutlined />),
-    label: navLabel("overview")
-  },
-  {
-    key: "actions",
-    icon: navIcon("actions", <DeploymentUnitOutlined />),
-    label: navLabel("actions")
-  },
-  { key: "world", icon: navIcon("world", <GlobalOutlined />), label: navLabel("world") },
-  { key: "robots", icon: navIcon("robots", <RobotOutlined />), label: navLabel("robots") },
-  {
-    key: "hardware",
-    icon: navIcon("hardware", <ApiOutlined />),
-    label: navLabel("hardware")
-  },
-  { key: "memory", icon: navIcon("memory", <DatabaseOutlined />), label: navLabel("memory") },
-  {
-    key: "safety",
-    icon: navIcon("safety", <SafetyCertificateOutlined />),
-    label: navLabel("safety")
-  },
-  {
-    key: "events",
-    icon: navIcon("events", <ThunderboltOutlined />),
-    label: navLabel("events")
-  },
-  {
-    key: "settings",
-    icon: navIcon("settings", <SettingOutlined />),
-    label: navLabel("settings")
-  }
-];
+function navItems(labels: Messages["nav"]): MenuProps["items"] {
+  return [
+    {
+      key: "overview",
+      icon: navIcon("overview", <DashboardOutlined />),
+      label: navLabel("overview", labels)
+    },
+    {
+      key: "actions",
+      icon: navIcon("actions", <DeploymentUnitOutlined />),
+      label: navLabel("actions", labels)
+    },
+    { key: "world", icon: navIcon("world", <GlobalOutlined />), label: navLabel("world", labels) },
+    { key: "robots", icon: navIcon("robots", <RobotOutlined />), label: navLabel("robots", labels) },
+    {
+      key: "hardware",
+      icon: navIcon("hardware", <ApiOutlined />),
+      label: navLabel("hardware", labels)
+    },
+    { key: "memory", icon: navIcon("memory", <DatabaseOutlined />), label: navLabel("memory", labels) },
+    {
+      key: "safety",
+      icon: navIcon("safety", <SafetyCertificateOutlined />),
+      label: navLabel("safety", labels)
+    },
+    {
+      key: "events",
+      icon: navIcon("events", <ThunderboltOutlined />),
+      label: navLabel("events", labels)
+    },
+    {
+      key: "settings",
+      icon: navIcon("settings", <SettingOutlined />),
+      label: navLabel("settings", labels)
+    }
+  ];
+}
 
 interface SidebarNavProps {
   activePage: PageKey;
   collapsed: boolean;
+  labels: Messages["nav"];
   onChange: (page: PageKey) => void;
   onCollapse: (collapsed: boolean) => void;
 }
@@ -90,6 +94,7 @@ interface SidebarNavProps {
 export function SidebarNav({
   activePage,
   collapsed,
+  labels,
   onChange,
   onCollapse
 }: SidebarNavProps) {
@@ -116,7 +121,7 @@ export function SidebarNav({
       <Menu
         mode="inline"
         selectedKeys={[activePage]}
-        items={NAV_ITEMS}
+        items={navItems(labels)}
         onClick={({ key }) => onChange(key as PageKey)}
       />
     </Layout.Sider>

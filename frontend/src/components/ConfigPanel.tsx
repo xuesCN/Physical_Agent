@@ -3,6 +3,7 @@ import { Alert, Button, Card, Descriptions, Empty, Space, Table, Tag, Typography
 import type { ColumnsType } from "antd/es/table";
 import { useEffect, useState } from "react";
 import { fetchConfig } from "../api";
+import { useMessages } from "../locales/context";
 import type { ConfigResponse } from "../types";
 import { RawJsonFallback } from "./JsonTreeLazy";
 import { formatObjectValue } from "./readableFormatters";
@@ -19,6 +20,7 @@ interface ConfigRobotRow {
 }
 
 export function ConfigPanel({ refreshToken = 0 }: ConfigPanelProps) {
+  const labels = useMessages();
   const [response, setResponse] = useState<ConfigResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -52,20 +54,20 @@ export function ConfigPanel({ refreshToken = 0 }: ConfigPanelProps) {
 
   const columns: ColumnsType<ConfigRobotRow> = [
     {
-      title: "Robot",
+      title: labels.config.robot,
       dataIndex: "id",
       width: 140,
       render: (value: string) => <Typography.Text code>{value}</Typography.Text>
     },
-    { title: "Driver", dataIndex: "driver", width: 200 },
+    { title: labels.config.driver, dataIndex: "driver", width: 200 },
     {
-      title: "Config",
+      title: labels.config.config,
       dataIndex: "config",
       ellipsis: true,
       render: (value: Record<string, unknown>) => (
         <Space direction="vertical" size={4} className="full-width">
           <Typography.Text type="secondary" className="schema-summary">
-            {formatObjectValue(value, "No config")}
+            {formatObjectValue(value, labels.config.noConfig)}
           </Typography.Text>
           <RawJsonFallback label="Robot config" value={value} />
         </Space>
@@ -80,7 +82,7 @@ export function ConfigPanel({ refreshToken = 0 }: ConfigPanelProps) {
       title={
         <Space>
           <FileTextOutlined />
-          <Typography.Text strong>Project Config (read-only)</Typography.Text>
+          <Typography.Text strong>{labels.panels.config}</Typography.Text>
         </Space>
       }
       extra={
@@ -91,7 +93,7 @@ export function ConfigPanel({ refreshToken = 0 }: ConfigPanelProps) {
           onClick={() => void load()}
           data-testid="config-refresh-button"
         >
-          Refresh
+          {labels.config.refresh}
         </Button>
       }
     >
@@ -100,14 +102,14 @@ export function ConfigPanel({ refreshToken = 0 }: ConfigPanelProps) {
       ) : (
         <Space direction="vertical" size={8} className="full-width">
           <Descriptions size="small" column={1} className="tight-descriptions">
-            <Descriptions.Item label="Config file">
+            <Descriptions.Item label={labels.config.configFile}>
               <Typography.Text code>{response?.config_path ?? "-"}</Typography.Text>
             </Descriptions.Item>
-            <Descriptions.Item label="Workspace">
+            <Descriptions.Item label={labels.config.workspace}>
               {config?.workspace?.path ?? "-"}{" "}
               <Tag color="blue">{config?.workspace?.backend ?? "-"}</Tag>
             </Descriptions.Item>
-            <Descriptions.Item label="Watch">
+            <Descriptions.Item label={labels.config.watch}>
               tick {String(watch.tick_ms ?? "-")}ms · approval{" "}
               {String(watch.require_human_approval ?? "-")} · heartbeat{" "}
               {String(watch.heartbeat_enabled ?? "-")} · halt-on-failure{" "}
@@ -123,7 +125,7 @@ export function ConfigPanel({ refreshToken = 0 }: ConfigPanelProps) {
               scroll={{ x: 560 }}
             />
           ) : (
-            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No robots configured" />
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={labels.panels.noRobotsConfigured} />
           )}
           <Typography.Text type="secondary">
             This is the effective configuration watch loads at startup. To change existing

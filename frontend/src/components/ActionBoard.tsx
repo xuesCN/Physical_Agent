@@ -6,6 +6,7 @@ import {
 } from "@ant-design/icons";
 import { Button, Card, Popconfirm, Segmented, Space, Table, Tag, Typography } from "antd";
 import { useMemo, useState } from "react";
+import { useMessages } from "../locales/context";
 import type { ActionItem, AgentState } from "../types";
 import { RawJsonFallback } from "./JsonTreeLazy";
 import {
@@ -42,6 +43,7 @@ export function ActionBoard({
   onApprove,
   onReject
 }: ActionBoardProps) {
+  const labels = useMessages();
   const [active, setActive] = useState<BoardKey>("pending");
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const rows = actions?.[active] ?? [];
@@ -56,7 +58,7 @@ export function ActionBoard({
       data-testid="action-board"
       title={
         <Space>
-          <Typography.Text strong>Action Board</Typography.Text>
+          <Typography.Text strong>{labels.actions.title}</Typography.Text>
           <Tag icon={STATUS_ICON[active]} color={STATUS_COLOR[active]}>
             {rows.length}
           </Tag>
@@ -67,9 +69,9 @@ export function ActionBoard({
           size="small"
           value={active}
           options={[
-            { label: `Pending ${actions?.pending?.length ?? 0}`, value: "pending" },
-            { label: `Completed ${actions?.completed?.length ?? 0}`, value: "completed" },
-            { label: `Cancelled ${actions?.cancelled?.length ?? 0}`, value: "cancelled" }
+            { label: `${labels.actions.pending} ${actions?.pending?.length ?? 0}`, value: "pending" },
+            { label: `${labels.actions.completed} ${actions?.completed?.length ?? 0}`, value: "completed" },
+            { label: `${labels.actions.cancelled} ${actions?.cancelled?.length ?? 0}`, value: "cancelled" }
           ]}
           onChange={(value) => setActive(value as BoardKey)}
         />
@@ -81,29 +83,29 @@ export function ActionBoard({
         dataSource={data}
         tableLayout="fixed"
         scroll={{ x: 1520, y: 260 }}
-        locale={{ emptyText: `No ${active} actions` }}
+        locale={{ emptyText: labels.actions.noActions.replace("{status}", labels.actions[active]) }}
         columns={[
           {
-            title: "ID",
+            title: labels.actions.id,
             dataIndex: "id",
             width: 120,
             render: (value: string) => <Typography.Text code>{value}</Typography.Text>
           },
           {
-            title: "Target",
+            title: labels.actions.target,
             key: "target",
             width: 180,
             ellipsis: true,
             render: (_, record) => `${record.robot}.${record.capability}`
           },
           {
-            title: "Params",
+            title: labels.actions.params,
             dataIndex: "params",
             width: 300,
             render: (value) => (
               <Space direction="vertical" size={4} className="full-width">
                 <Typography.Text className="mono-cell">
-                  {formatObjectValue(value, "No params")}
+                  {formatObjectValue(value, labels.actions.noParams)}
                 </Typography.Text>
                 {isNonEmptyRecord(asRecord(value)) && (
                   <RawJsonFallback label="Params raw" value={value} />
@@ -112,20 +114,20 @@ export function ActionBoard({
             )
           },
           {
-            title: "Depends",
+            title: labels.actions.depends,
             dataIndex: "depends_on",
             width: 120,
             ellipsis: true,
             render: (value?: string[]) => value?.join(", ") || "-"
           },
           {
-            title: "Approval",
+            title: labels.actions.approval,
             key: "approval",
             width: 170,
-            render: (_, record) => <ApprovalBadge action={record} />
+            render: (_, record) => <ApprovalBadge action={record} labels={labels.actions} />
           },
           {
-            title: "Expected",
+            title: labels.actions.expected,
             key: "expected",
             width: 260,
             ellipsis: true,
@@ -144,7 +146,7 @@ export function ActionBoard({
             }
           },
           {
-            title: "Source",
+            title: labels.actions.source,
             key: "source",
             width: 180,
             ellipsis: true,
@@ -155,7 +157,7 @@ export function ActionBoard({
             )
           },
           {
-            title: "Review",
+            title: labels.actions.review,
             key: "review",
             width: 190,
             fixed: "right",
@@ -202,18 +204,24 @@ export function ActionBoard({
   );
 }
 
-function ApprovalBadge({ action }: { action: ActionItem }) {
+function ApprovalBadge({
+  action,
+  labels
+}: {
+  action: ActionItem;
+  labels: ReturnType<typeof useMessages>["actions"];
+}) {
   const approval = action.metadata?.approval;
   if (approval?.status === "rejected") {
-    return <Tag color="red">Rejected</Tag>;
+    return <Tag color="red">{labels.approvalRejected}</Tag>;
   }
   if (approval?.required) {
     if (approval.status === "approved") {
-      return <Tag color="green">Execution approved</Tag>;
+      return <Tag color="green">{labels.executionApproved}</Tag>;
     }
-    return <Tag color="gold">Needs execution approval</Tag>;
+    return <Tag color="gold">{labels.approvalRequired}</Tag>;
   }
-  return <Tag>No approval needed</Tag>;
+  return <Tag>{labels.approvalNotRequired}</Tag>;
 }
 
 interface ActionApprovalControlsProps {
@@ -231,6 +239,7 @@ function ActionApprovalControls({
   onApprove,
   onReject
 }: ActionApprovalControlsProps) {
+  const labels = useMessages().actions;
   const approval = action.metadata?.approval;
   const needsApproval = Boolean(approval?.required && approval.status !== "approved");
   return (
@@ -244,14 +253,14 @@ function ActionApprovalControls({
           disabled={disabled || !onApprove}
           onClick={() => void onApprove?.()}
         >
-          Approve execution
+          {labels.approveExecution}
         </Button>
       )}
       <Popconfirm
-        title="Reject this action?"
-        description="It will move to Cancelled with a rejection reason."
-        okText="Reject"
-        cancelText="Keep"
+        title={labels.rejectTitle}
+        description={labels.rejectDescription}
+        okText={labels.rejectOk}
+        cancelText={labels.rejectCancel}
         onConfirm={() => void onReject?.()}
       >
         <Button
@@ -261,7 +270,7 @@ function ActionApprovalControls({
           loading={loading}
           disabled={disabled || !onReject}
         >
-          Reject
+          {labels.reject}
         </Button>
       </Popconfirm>
     </Space>

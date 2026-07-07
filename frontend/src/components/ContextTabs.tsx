@@ -6,6 +6,7 @@ import {
 } from "@ant-design/icons";
 import { Descriptions, Empty, Space, Tabs, Tag, Typography } from "antd";
 import type { TabsProps } from "antd";
+import { useMessages } from "../locales/context";
 import type { AgentState } from "../types";
 import { CapabilitiesGrid } from "./CapabilityCard";
 import { FeedbackTimeline } from "./FeedbackTimeline";
@@ -25,13 +26,14 @@ export function ContextTabs({
   defaultActiveKey = "world",
   onOpenAction
 }: ContextTabsProps) {
+  const labels = useMessages();
   const items: TabsProps["items"] = [
     {
       key: "world",
       label: (
         <Space size={6}>
           <CompassOutlined />
-          World
+          {labels.panels.world}
         </Space>
       ),
       children: <WorldObjectsTable world={state?.world} />
@@ -41,7 +43,7 @@ export function ContextTabs({
       label: (
         <Space size={6}>
           <AlertOutlined />
-          Feedback
+          {labels.panels.feedback}
         </Space>
       ),
       children: (
@@ -58,7 +60,7 @@ export function ContextTabs({
       label: (
         <Space size={6}>
           <SafetyCertificateOutlined />
-          Safety
+          {labels.panels.safety}
         </Space>
       ),
       children: <SafetyView safety={state?.safety} />
@@ -68,7 +70,7 @@ export function ContextTabs({
       label: (
         <Space size={6}>
           <ToolOutlined />
-          Capabilities
+          {labels.panels.capabilities}
         </Space>
       ),
       children: <CapabilitiesGrid capabilities={state?.capabilities} />
@@ -83,10 +85,11 @@ export function ContextTabs({
 }
 
 function SafetyView({ safety }: { safety: AgentState["safety"] | undefined }) {
+  const labels = useMessages();
   const rules = asRecord(asRecord(safety).rules ?? safety);
   const entries = Object.entries(rules).filter(([key]) => key !== "metadata");
   if (!entries.length) {
-    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No safety rules" />;
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={labels.panels.noSafetyRules} />;
   }
   return (
     <Space direction="vertical" size={8} className="full-width">

@@ -31,6 +31,7 @@
 | F4 | 期望-比对-回灌：expected 确定性比对、feedback 回灌、前端可见性 | `b5be3b7` |
 | W2 | 观察并发化 + observe 频率与 tick 解耦 | `4e0f732` |
 | W3 | transport 断线重连：可选 policy、fail-fast、driver reinit hook | `1d9a812`, `7762c0f` |
+| T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 
 ## 2. 分阶段过程记录
 
@@ -125,6 +126,11 @@ watch 侧只在 SafetyGate 通过、driver completed、并成功 `update_world()
 driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transport 支持 `on_reconnected` 回调。`xiaozhi_mcp` 将 WebSocket reconnect callback 转为“待刷新”标记，下一次 health/observe/execute 前重新 `initialize` 与 `tools/list`（fire-and-forget 模式刷新本地工具映射），不在 transport 背景线程里重放旧动作。review 中补 `7762c0f`：后台重连的 `open_once()` 若在 close/cancel 后才成功，基类会立即清理刚打开的 socket/serial/loopback 资源，保持 disconnected，且不触发 reconnect hook。Loopback 扩展测试模拟连接第 N 次成功、运行中断连、后台重连、reconnecting fail-fast、hook 调用与取消后的迟到 open 清理；WebSocket fake server 覆盖首次连接成功、server 主动断开、client 重连后再次 read/write；Serial fake 覆盖 open 失败后重试成功、重试耗尽、读写 OSError 标记断连并可重新 open。
 
 边界保持：SafetyGate / F1 approval / F4 expected / watch 执行权不变；W3 只让通信层恢复可用，不把 reconnect success 当作机器人位置或动作安全证明；不做 W4 的多机器人并行 execute 与 `observed_at` schema，不自动重放 execute、不自动重规划。验证：transport/watch/safety 定向测试、`tests -k "reconnect or transport or websocket or serial or disconnected"`、`tests -k "timeout or observe or expectation or expected"` 均通过；review fix 后全量 `pytest` 295 passed（1 个既有 StarletteDeprecationWarning）。
+### T/C4/E3：独立 Ink TUI + 前端打磨 + e2e/CI 收口
+
+动机：给 SSH/无 GUI/开发者日常场景一个交互式终端入口，同时把 GUI 的语言、暗色与首次引导补齐，并把 E0 遗留的 reset/hardware/config 主路径纳入 e2e。过程：新增 `tui/` 独立 Node/TypeScript/Ink 包，入口 `npm start -- --api http://127.0.0.1:8766`，只封装 HTTP API 与 SSE，状态/chat/actions 三面板 + polling fallback，T2-lite 命令覆盖 chat、task、approve/reject、reset/refresh/help/quit；直接硬件控制命令显式拒绝。React GUI 侧新增 `frontend/src/locales/`、`MessagesProvider`、AntD locale、`darkAlgorithm`、`body[data-theme]` 变量和 3 步 Tour；Settings 提供语言、主题、重开 Tour。e2e 先固定默认 English/light/Tour dismissed，避免新引导遮挡旧流程，再单独测试首次 Tour。CI 新增 Python matrix、frontend build/e2e、tui build/test，并让 Playwright webServer 命令支持 Windows/Linux 与环境变量覆盖。
+
+边界保持：没有修改 `physical_agent/watch`、driver loader、SafetyGate 或 `driver.execute` 调用链；TUI 不读 SQLite/workspace，不 import Python backend/watch/driver，只通过 API 提案/审批。验证：`cd tui && npm run build && npm test` 通过；`cd frontend && npm run build` 通过；手动 API/Vite 服务下 `npx playwright test e2e/dashboard.spec.ts --project=chromium --workers=1 --reporter=list` 18 passed。
 
 ## 3. 关键决策与偏离（跨阶段汇总）
 
@@ -146,6 +152,9 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 16. **expected 是诊断元数据，不是安全规则**（F4）：它可由 LLM 提出、可被 UI 展示、可回灌给 LLM，但永远不替代 SafetyGate；坏 expected 只能让 expectation check skipped，不能阻止或放行动作。
 17. **可复用 schema 放 protocol，执行编排留 watch**（F4）：expected 的 schema/归一化/纯比对函数在 `protocol/expectations.py`，watch 只负责在唯一执行链路中决定何时调用；这样 API/state 顶层可处理 metadata，却不加载 watch/drivers。
 18. **重连恢复通信，不恢复动作语义**（W3）：transport 可以后台重连，但旧 execute 永不排队、永不重放；断线中的 action 以 failed/unknown 收口，下一次世界事实仍要靠 observe/health。
+19. **Typer CLI 与 Ink TUI 并存**（T）：Typer 继续管脚本化/自动化，Ink 管 SSH/无 GUI/开发者日常交互；TUI 是独立 Node 包，不塞进 Python CLI。
+20. **TUI 是纯 API/SSE 客户端**（T）：TUI 不直接读写 SQLite/workspace，不 import watch/runtime/driver，不新增硬件控制命令；审批只解除“等人”，不改变 SafetyGate。
+21. **前端偏好用轻量字典与 AntD token，不上重库**（C4/E3）：当前需求只需要高频文案和主题切换，i18next 与新 UI 库继续不引入。
 
 ## 4. 经验教训（流程侧）
 
@@ -157,5 +166,6 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 - **后端退役要同时保迁移旁路与清 UI 口径**（B6 的教训）：删除 factory 分支不够，CLI 迁移、state-check、前端说明、e2e mock、操作手册和旧 handoff 都可能继续暴露退役后端。
 - **同名产品动作要拆 UI 文案和数据语义**（F1 的教训）：draft 提交与执行审批都容易被叫 Approve；若文案不拆，用户会误以为点一次就放行执行，或误把提交动作板当成绕过审批。
 - **模型自带的证明必须给人看见**（F4 的教训）：expected 不参与安全裁决，但它会影响后续诊断上下文；至少要在 draft/action 详情露出摘要或 raw，避免变成不可见的“模型自证”。
+- **新增全局 UI 叠层先给 e2e 默认关闭路径**（E3 的教训）：首次 Tour 这类全局浮层会遮挡旧流程测试；默认测试态应显式写 localStorage 关闭，再单独测试首次打开/关闭/重开。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

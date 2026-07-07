@@ -7,6 +7,7 @@ import {
   SafetyOutlined
 } from "@ant-design/icons";
 import { Badge, Breadcrumb, Button, Space, Tag, Typography } from "antd";
+import type { Messages } from "../locales";
 import type { AgentState, HealthState } from "../types";
 
 interface StatusBarProps {
@@ -16,6 +17,7 @@ interface StatusBarProps {
   watchEnabled: boolean | null;
   loading: boolean;
   activePageLabel: string;
+  labels: Messages;
   onRefresh: () => void;
   onOpenInspector: () => void;
 }
@@ -27,6 +29,7 @@ export function StatusBar({
   watchEnabled,
   loading,
   activePageLabel,
+  labels,
   onRefresh,
   onOpenInspector
 }: StatusBarProps) {
@@ -37,32 +40,32 @@ export function StatusBar({
     <div className="status-bar" data-testid="status-bar">
       <div className="status-title">
         <div>
-          <Typography.Title level={1}>Physical Agent</Typography.Title>
+          <Typography.Title level={1}>{labels.app.name}</Typography.Title>
           <Breadcrumb
             items={[
-              { title: "Workbench" },
+              { title: labels.app.workbench },
               { title: activePageLabel }
             ]}
           />
         </div>
         <Tag icon={<SafetyOutlined />} color="blue" className="proposal-tag">
-          Proposal only
+          {labels.app.proposalOnly}
         </Tag>
       </div>
       <Space size={8} wrap>
         <Tag icon={<DatabaseOutlined />} color="default">
-          backend {backend}
+          {labels.status.backend} {backend}
         </Tag>
         <Tag icon={<ApiOutlined />} color={ready ? "green" : "gold"}>
-          workspace {ready ? "ready" : "not ready"}
+          {labels.status.workspace} {ready ? labels.status.ready : labels.status.notReady}
         </Tag>
         <Tag icon={<CloudSyncOutlined />} color={watchEnabled ? "cyan" : "default"}>
-          watch {watchEnabled ? "enabled" : "off"}
+          {labels.status.watch} {watchEnabled ? labels.status.enabled : labels.status.off}
         </Tag>
         <span data-testid="sse-status">
           <Badge
             status={sseConnected ? "processing" : "warning"}
-            text={sseConnected ? "SSE connected" : "SSE disconnected; polling fallback active"}
+            text={sseConnected ? labels.status.sseConnected : labels.status.sseDisconnected}
           />
         </span>
         <Button
@@ -72,7 +75,7 @@ export function StatusBar({
           size="small"
           onClick={onOpenInspector}
         >
-          Propose
+          {labels.app.propose}
         </Button>
         <Button
           icon={<ReloadOutlined />}
@@ -80,7 +83,7 @@ export function StatusBar({
           onClick={onRefresh}
           size="small"
         >
-          Refresh
+          {labels.app.refresh}
         </Button>
       </Space>
     </div>

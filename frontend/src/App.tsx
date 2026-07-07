@@ -1,4 +1,4 @@
-import { Alert, App as AntApp, ConfigProvider, Drawer, Layout, Spin, theme } from "antd";
+import { Alert, App as AntApp, ConfigProvider, Drawer, Layout, Spin, Tour, theme } from "antd";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   abortChatStream,
@@ -17,9 +17,20 @@ import { ChatPanel } from "./components/ChatPanel";
 import { ContextTabs } from "./components/ContextTabs";
 import { ProposalPanel } from "./components/ProposalPanel";
 import { RobotsPanel } from "./components/RobotsPanel";
-import { PAGE_LABELS, SidebarNav } from "./components/SidebarNav";
+import { SidebarNav } from "./components/SidebarNav";
 import type { PageKey } from "./components/SidebarNav";
 import { StatusBar } from "./components/StatusBar";
+import {
+  LANGUAGE_STORAGE_KEY,
+  THEME_STORAGE_KEY,
+  TOUR_STORAGE_KEY,
+  antdLocale,
+  messages,
+  resolveInitialLanguage,
+  resolveInitialTheme
+} from "./locales";
+import { MessagesProvider } from "./locales/context";
+import type { Language, Messages, ThemeMode } from "./locales";
 import type {
   ActionItem,
   AgentState,
@@ -57,10 +68,27 @@ const ConfigPanel = lazy(() =>
 type BusyKey = "refresh" | "chat" | "proposal" | null;
 
 export default function App() {
+  const [language, setLanguage] = useState<Language>(() => resolveInitialLanguage());
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => resolveInitialTheme());
+  const labels = messages[language];
+
+  useEffect(() => {
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+    document.documentElement.lang = language === "zh" ? "zh-CN" : "en";
+    document.body.dataset.locale = language;
+  }, [language]);
+
+  useEffect(() => {
+    localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+    document.body.dataset.theme = themeMode;
+    document.body.dataset.themeMode = themeMode;
+  }, [themeMode]);
+
   return (
     <ConfigProvider
+      locale={antdLocale(language)}
       theme={{
-        algorithm: theme.defaultAlgorithm,
+        algorithm: themeMode === "dark" ? theme.darkAlgorithm : theme.defaultAlgorithm,
         token: {
           borderRadius: 6,
           colorPrimary: "#2563eb",
@@ -79,14 +107,36 @@ export default function App() {
         }
       }}
     >
-      <AntApp>
-        <Dashboard />
-      </AntApp>
+      <MessagesProvider value={labels}>
+        <AntApp>
+          <Dashboard
+            labels={labels}
+            language={language}
+            themeMode={themeMode}
+            onLanguageChange={setLanguage}
+            onThemeChange={setThemeMode}
+          />
+        </AntApp>
+      </MessagesProvider>
     </ConfigProvider>
   );
 }
 
-function Dashboard() {
+interface DashboardProps {
+  labels: Messages;
+  language: Language;
+  themeMode: ThemeMode;
+  onLanguageChange: (language: Language) => void;
+  onThemeChange: (mode: ThemeMode) => void;
+}
+
+function Dashboard({
+  labels,
+  language,
+  themeMode,
+  onLanguageChange,
+  onThemeChange
+}: DashboardProps) {
   const { message } = AntApp.useApp();
   const [health, setHealth] = useState<HealthState | null>(null);
   const [state, setState] = useState<AgentState | null>(null);
@@ -100,6 +150,7 @@ function Dashboard() {
   const [activePage, setActivePage] = useState<PageKey>("overview");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [tourOpen, setTourOpen] = useState(() => localStorage.getItem(TOUR_STORAGE_KEY) !== "1");
   const [configVersion, setConfigVersion] = useState(0);
   const [prefillAction, setPrefillAction] = useState<ActionItem | null>(null);
   const [prefillVersion, setPrefillVersion] = useState(0);
@@ -149,7 +200,7 @@ function Dashboard() {
       setSseConnected(false);
       if (busyRef.current === "chat" && !chatSseDisconnectNotifiedRef.current) {
         chatSseDisconnectNotifiedRef.current = true;
-        message.error("SSE disconnected while chat was in progress.");
+        message.error(labels.chat.sseDisconnected);
       }
     };
 
@@ -186,7 +237,7 @@ function Dashboard() {
       eventTypes.forEach((type) => source.removeEventListener(type, listener));
       source.close();
     };
-  }, [loadSnapshot, message]);
+  }, [labels.chat.sseDisconnected, loadSnapshot, message]);
 
   async function handleChat(text: string) {
     setBusy("chat");
@@ -248,7 +299,7 @@ function Dashboard() {
           }
           if (event.type === "aborted") {
             streamFinished = true;
-            setChatStreamError("Chat stream stopped.");
+            setChatStreamError(labels.chat.stopped);
             if (isAgentState(payload.state)) {
               setState(payload.state);
               setStreamMessages(null);
@@ -257,7 +308,7 @@ function Dashboard() {
           }
           if (event.type === "error") {
             streamFinished = true;
-            const text = String(payload.message ?? "Streaming chat failed.");
+            const text = String(payload.message ?? labels.chat.streamFailed);
             setChatStreamError(text);
             if (isAgentState(payload.state)) {
               setState(payload.state);
@@ -273,11 +324,11 @@ function Dashboard() {
         }
       });
       if (streamStarted && !streamFinished) {
-        setChatStreamError("Chat stream ended before completion.");
+        setChatStreamError(labels.chat.endedEarly);
       }
     } catch (error) {
       if (isAbortError(error)) {
-        setChatStreamError("Chat stream stopped.");
+        setChatStreamError(labels.chat.stopped);
         streamFinished = true;
       } else if (!streamStarted) {
         try {
@@ -414,6 +465,7 @@ function Dashboard() {
       <SidebarNav
         activePage={activePage}
         collapsed={sidebarCollapsed}
+        labels={labels.nav}
         onChange={setActivePage}
         onCollapse={setSidebarCollapsed}
       />
@@ -425,7 +477,8 @@ function Dashboard() {
             sseConnected={sseConnected}
             watchEnabled={watchEnabled}
             loading={busy === "refresh"}
-            activePageLabel={PAGE_LABELS[activePage]}
+            activePageLabel={labels.nav[activePage]}
+            labels={labels}
             onRefresh={() => void loadSnapshot()}
             onOpenInspector={() => setInspectorOpen(true)}
           />
@@ -461,6 +514,12 @@ function Dashboard() {
                   onRobotRegistered: handleRobotRegistered,
                   configVersion,
                   onOpenAction: handleOpenAction,
+                  labels,
+                  language,
+                  themeMode,
+                  onLanguageChange,
+                  onThemeChange,
+                  onShowTour: () => setTourOpen(true),
                   onError: (error) => showError(message, error)
                 })}
               </Suspense>
@@ -479,7 +538,7 @@ function Dashboard() {
         </Layout.Content>
       </Layout>
       <Drawer
-        title="Task / Action Proposal"
+        title={labels.drawer.title}
         className="proposal-drawer"
         width={420}
         placement="right"
@@ -497,6 +556,16 @@ function Dashboard() {
           />
         )}
       </Drawer>
+      <Tour
+        open={tourOpen}
+        onClose={() => {
+          localStorage.setItem(TOUR_STORAGE_KEY, "1");
+          setTourOpen(false);
+        }}
+        steps={buildTourSteps(labels)}
+        mask={false}
+        rootClassName="onboarding-tour"
+      />
     </Layout>
   );
 }
@@ -522,6 +591,12 @@ interface RenderPageProps {
   onRobotRegistered: () => void;
   configVersion: number;
   onOpenAction: (actionId: string) => void;
+  labels: Messages;
+  language: Language;
+  themeMode: ThemeMode;
+  onLanguageChange: (language: Language) => void;
+  onThemeChange: (mode: ThemeMode) => void;
+  onShowTour: () => void;
   onError: (error: Error) => void;
 }
 
@@ -609,6 +684,12 @@ function renderPageContent({
   onRobotRegistered,
   configVersion,
   onOpenAction,
+  labels,
+  language,
+  themeMode,
+  onLanguageChange,
+  onThemeChange,
+  onShowTour,
   onError
 }: RenderPageProps) {
   if (activePage === "actions") {
@@ -684,7 +765,17 @@ function renderPageContent({
   if (activePage === "settings") {
     return (
       <div className="two-panel-page">
-        <SettingsPanel health={health} state={state} onWorkspaceReset={onWorkspaceReset} />
+        <SettingsPanel
+          health={health}
+          state={state}
+          labels={labels}
+          language={language}
+          themeMode={themeMode}
+          onLanguageChange={onLanguageChange}
+          onThemeChange={onThemeChange}
+          onShowTour={onShowTour}
+          onWorkspaceReset={onWorkspaceReset}
+        />
         <RawDebug state={state} />
       </div>
     );
@@ -717,6 +808,30 @@ function renderPageContent({
       </div>
     </div>
   );
+}
+
+function buildTourSteps(labels: Messages) {
+  return [
+    {
+      title: labels.tour.setupTitle,
+      description: labels.tour.setupDescription,
+      target: () => queryTourTarget('[data-testid="nav-settings"]')
+    },
+    {
+      title: labels.tour.actionsTitle,
+      description: labels.tour.actionsDescription,
+      target: () => queryTourTarget('[data-testid="action-board"]')
+    },
+    {
+      title: labels.tour.chatTitle,
+      description: labels.tour.chatDescription,
+      target: () => queryTourTarget('[data-testid="chat-panel"]')
+    }
+  ];
+}
+
+function queryTourTarget(selector: string): HTMLElement {
+  return (document.querySelector(selector) as HTMLElement | null) ?? document.body;
 }
 
 function parseApiEvent(event: MessageEvent<string>): ApiEvent | null {

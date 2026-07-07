@@ -1,6 +1,7 @@
 import { RobotOutlined } from "@ant-design/icons";
 import { Card, Empty, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import { useMessages } from "../locales/context";
 import type { AgentState } from "../types";
 
 interface RobotRow {
@@ -37,6 +38,7 @@ function firstString(source: Record<string, unknown>, keys: string[]): string {
 }
 
 export function RobotsPanel({ state }: RobotsPanelProps) {
+  const labels = useMessages();
   const worldRobots = asRecord(asRecord(state?.world).robots);
 
   const rows: RobotRow[] = Object.entries(state?.capabilities?.robots ?? {}).map(
@@ -116,7 +118,7 @@ export function RobotsPanel({ state }: RobotsPanelProps) {
       title={
         <Space>
           <RobotOutlined />
-          <Typography.Text strong>Robots</Typography.Text>
+          <Typography.Text strong>{labels.panels.robots}</Typography.Text>
         </Space>
       }
     >
@@ -129,7 +131,7 @@ export function RobotsPanel({ state }: RobotsPanelProps) {
           scroll={{ x: 880 }}
         />
       ) : (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No robots" />
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={labels.panels.noRobots} />
       )}
     </Card>
   );

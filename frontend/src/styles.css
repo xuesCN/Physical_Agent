@@ -1,11 +1,37 @@
 :root {
-  color: #172033;
-  background: #f3f5f8;
+  color: var(--pa-text);
+  background: var(--pa-page-bg);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   letter-spacing: 0;
+  --pa-page-bg: #f3f5f8;
+  --pa-panel-bg: #ffffff;
+  --pa-border: #d9e0ea;
+  --pa-soft-border: #e1e6ef;
+  --pa-json-bg: #f7f9fc;
+  --pa-text: #172033;
+  --pa-muted-text: #4c5a70;
+  --pa-accent: #2563eb;
+  --pa-accent-soft: #f8fbff;
+  --pa-accent-border: #bdd3f8;
+}
+
+body[data-theme="dark"] {
+  color: var(--pa-text);
+  background: var(--pa-page-bg);
+  --pa-page-bg: #111827;
+  --pa-panel-bg: #172033;
+  --pa-border: #2f3b50;
+  --pa-soft-border: #344158;
+  --pa-json-bg: #0f172a;
+  --pa-text: #d7deea;
+  --pa-muted-text: #9fb0c4;
+  --pa-accent: #60a5fa;
+  --pa-accent-soft: #14253a;
+  --pa-accent-border: #315a91;
+  color-scheme: dark;
 }
 
 * {
@@ -24,21 +50,22 @@ body,
 }
 
 body {
-  background: #f3f5f8;
+  color: var(--pa-text);
+  background: var(--pa-page-bg);
   overflow-x: hidden;
 }
 
 .app-shell {
   min-height: 100vh;
-  background: #f3f5f8;
+  background: var(--pa-page-bg);
 }
 
 .app-sidebar {
   position: sticky !important;
   top: 0;
   height: 100vh;
-  background: #ffffff !important;
-  border-right: 1px solid #d9e0ea;
+  background: var(--pa-panel-bg) !important;
+  border-right: 1px solid var(--pa-border);
 }
 
 .app-sidebar .ant-layout-sider-children {
@@ -47,9 +74,9 @@ body {
 }
 
 .app-sidebar .ant-layout-sider-trigger {
-  background: #ffffff;
-  border-top: 1px solid #e1e6ef;
-  color: #4c5a70;
+  background: var(--pa-panel-bg);
+  border-top: 1px solid var(--pa-soft-border);
+  color: var(--pa-muted-text);
 }
 
 .app-sidebar .ant-menu {
@@ -70,7 +97,7 @@ body {
   gap: 10px;
   height: 58px;
   padding: 10px 12px;
-  border-bottom: 1px solid #e1e6ef;
+  border-bottom: 1px solid var(--pa-soft-border);
 }
 
 .brand-mark {
@@ -79,9 +106,9 @@ body {
   width: 32px;
   height: 32px;
   place-items: center;
-  border: 1px solid #bcc8d8;
+  border: 1px solid var(--pa-border);
   border-radius: 6px;
-  color: #1f4da2;
+  color: var(--pa-accent);
   font-size: 12px;
   font-weight: 750;
 }
@@ -101,7 +128,7 @@ body {
   flex: 1 1 auto;
   min-width: 0;
   width: 0;
-  background: #f3f5f8;
+  background: var(--pa-page-bg);
 }
 
 .app-header {
@@ -111,8 +138,8 @@ body {
   height: auto;
   min-height: 58px;
   padding: 0;
-  background: #ffffff;
-  border-bottom: 1px solid #d9e0ea;
+  background: var(--pa-panel-bg);
+  border-bottom: 1px solid var(--pa-border);
   line-height: normal;
 }
 
@@ -211,7 +238,7 @@ body {
 }
 
 .panel {
-  border: 1px solid #d9e0ea;
+  border: 1px solid var(--pa-border);
   border-radius: 6px;
   box-shadow: none;
 }
@@ -219,7 +246,7 @@ body {
 .panel .ant-card-head {
   min-height: 38px;
   padding: 0 12px;
-  border-bottom-color: #e1e6ef;
+  border-bottom-color: var(--pa-soft-border);
 }
 
 .panel .ant-card-head-title {
@@ -233,7 +260,7 @@ body {
 .panel-divider {
   height: 1px;
   margin: 12px 0;
-  background: #e1e6ef;
+  background: var(--pa-soft-border);
 }
 
 .action-board .ant-card-body {
@@ -259,7 +286,7 @@ body {
 
 .context-tabs {
   padding: 0 12px 12px;
-  background: #ffffff;
+  background: var(--pa-panel-bg);
   overflow: hidden;
 }
 
@@ -351,8 +378,8 @@ body {
   max-height: 320px;
   overflow: auto;
   padding: 8px;
-  background: #f7f9fc;
-  border: 1px solid #e1e6ef;
+  background: var(--pa-json-bg);
+  border: 1px solid var(--pa-soft-border);
   border-radius: 6px;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
@@ -437,8 +464,8 @@ body {
 
 .draft-action-card {
   max-width: 560px;
-  border-color: #bdd3f8;
-  background: #f8fbff;
+  border-color: var(--pa-border);
+  background: var(--pa-panel-bg);
 }
 
 .draft-action-card .ant-card-body {
@@ -460,7 +487,7 @@ body {
   max-height: 300px;
   margin: 0;
   overflow: auto;
-  color: #233047;
+  color: var(--pa-text);
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
@@ -469,8 +496,8 @@ body {
 .inline-pre {
   max-height: 160px;
   padding: 8px;
-  background: #f7f9fc;
-  border: 1px solid #e1e6ef;
+  background: var(--pa-json-bg);
+  border: 1px solid var(--pa-soft-border);
   border-radius: 6px;
 }
 
@@ -552,7 +579,7 @@ body {
 
 .proposal-drawer .ant-drawer-body {
   padding: 12px;
-  background: #f3f5f8;
+  background: var(--pa-page-bg);
 }
 
 .proposal-drawer .panel {

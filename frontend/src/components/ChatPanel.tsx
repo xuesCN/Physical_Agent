@@ -11,6 +11,7 @@ import { Alert, Button, Card, Descriptions, Empty, Popconfirm, Space, Tag, Typog
 import { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { parseActionDrafts } from "../actionDraft";
+import { useMessages } from "../locales/context";
 import type { ActionItem, ChatMessage } from "../types";
 import { RawJsonFallback } from "./JsonTreeLazy";
 import {
@@ -43,6 +44,7 @@ export function ChatPanel({
   onEditDraft,
   actionLoading = false
 }: ChatPanelProps) {
+  const labels = useMessages();
   const [draft, setDraft] = useState("");
   const [submittingDraft, setSubmittingDraft] = useState<string | null>(null);
   const items = useMemo(
@@ -91,15 +93,15 @@ export function ChatPanel({
       title={
         <Space>
           <RobotOutlined />
-          <Typography.Text strong>Chat</Typography.Text>
+          <Typography.Text strong>{labels.chat.title}</Typography.Text>
         </Space>
       }
       extra={
         <Popconfirm
-          title="Clear chat history?"
-          description="Actions, feedback, memory, and uploads will stay unchanged."
-          okText="Clear"
-          cancelText="Cancel"
+          title={labels.chat.clearTitle}
+          description={labels.chat.clearDescription}
+          okText={labels.chat.clearOk}
+          cancelText={labels.settings.cancel}
           onConfirm={() => void onReset()}
         >
           <Button
@@ -129,7 +131,7 @@ export function ChatPanel({
             items={items}
           />
         ) : (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No messages" />
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={labels.chat.noMessages} />
         )}
       </div>
       {error && (
@@ -146,7 +148,7 @@ export function ChatPanel({
           className="chat-sender"
           value={draft}
           loading={loading}
-          placeholder="Message the agent"
+          placeholder={labels.chat.placeholder}
           submitType="enter"
           onChange={setDraft}
           onSubmit={submit}
@@ -158,7 +160,7 @@ export function ChatPanel({
           disabled={!loading}
           onClick={onStop}
         >
-          Stop
+          {labels.chat.stop}
         </Button>
       </div>
     </Card>
@@ -184,6 +186,7 @@ function MessageContent({
   onAddDraft,
   onEditDraft
 }: MessageContentProps) {
+  const labels = useMessages();
   const parsed = message.role === "assistant" ? parseActionDrafts(message.content) : null;
   const markdown = parsed?.markdown ?? message.content;
   return (
@@ -206,6 +209,7 @@ function MessageContent({
             disabled={disabled || submittingDraft !== null}
             onAdd={() => onAddDraft(action, key)}
             onEdit={() => onEditDraft(action)}
+            labels={labels}
           />
         );
       })}
@@ -220,6 +224,7 @@ interface DraftActionCardProps {
   disabled: boolean;
   onAdd: () => Promise<void>;
   onEdit: () => void;
+  labels: ReturnType<typeof useMessages>;
 }
 
 function DraftActionCard({
@@ -228,7 +233,8 @@ function DraftActionCard({
   loading,
   disabled,
   onAdd,
-  onEdit
+  onEdit,
+  labels
 }: DraftActionCardProps) {
   const expected = action.metadata?.expected;
   const expectedText = expectedSummary(expected);
@@ -236,35 +242,35 @@ function DraftActionCard({
     <Card size="small" className="draft-action-card">
       <Space direction="vertical" size={8} className="full-width">
         <Space wrap>
-          <Tag color="blue">Draft</Tag>
+          <Tag color="blue">{labels.chat.draft}</Tag>
           <Typography.Text strong>
             {action.robot}.{action.capability}
           </Typography.Text>
         </Space>
         <Descriptions size="small" column={1} className="tight-descriptions">
-          <Descriptions.Item label="Task">
+          <Descriptions.Item label={labels.chat.task}>
             <Typography.Text>{originalMessage || "-"}</Typography.Text>
           </Descriptions.Item>
-          <Descriptions.Item label="Action">
+          <Descriptions.Item label={labels.chat.action}>
             <Typography.Text>
               {action.robot}.{action.capability}
             </Typography.Text>
           </Descriptions.Item>
-          <Descriptions.Item label="Params">
+          <Descriptions.Item label={labels.chat.params}>
             <Space direction="vertical" size={4} className="full-width">
               <Typography.Text className="mono-cell">
-                {formatObjectValue(action.params, "No params")}
+                {formatObjectValue(action.params, labels.chat.noParams)}
               </Typography.Text>
               {isNonEmptyRecord(asRecord(action.params)) && (
                 <RawJsonFallback label="Draft params raw" value={action.params} />
               )}
             </Space>
           </Descriptions.Item>
-          <Descriptions.Item label="Reason">
+          <Descriptions.Item label={labels.chat.reason}>
             <Typography.Text>{action.reason || "-"}</Typography.Text>
           </Descriptions.Item>
           {expectedText && (
-            <Descriptions.Item label="Expected">
+            <Descriptions.Item label={labels.chat.expected}>
               <Space direction="vertical" size={4} className="full-width">
                 <Typography.Text>{expectedText}</Typography.Text>
                 <RawJsonFallback label="Expected raw" value={expected} />
@@ -281,7 +287,7 @@ function DraftActionCard({
             disabled={disabled}
             onClick={() => void onAdd()}
           >
-            Add to Actions
+            {labels.chat.addToActions}
           </Button>
           <Button
             size="small"
@@ -289,7 +295,7 @@ function DraftActionCard({
             disabled={disabled}
             onClick={onEdit}
           >
-            Edit
+            {labels.chat.edit}
           </Button>
         </Space>
       </Space>

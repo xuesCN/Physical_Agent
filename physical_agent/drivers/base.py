@@ -52,3 +52,8 @@ class PhysicalDriver(ABC):
 
         return None
 
+    async def on_transport_reconnected(self) -> None:
+        """Optional hook after a driver-owned transport reconnects."""
+
+        return None
+

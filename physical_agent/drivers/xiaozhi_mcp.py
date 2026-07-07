@@ -6,7 +6,12 @@ from copy import deepcopy
 from typing import Any
 
 from physical_agent.drivers.base import PhysicalDriver
-from physical_agent.drivers.transport import WebSocketTransport
+from physical_agent.drivers.transport import (
+    ReconnectPolicy,
+    TransportDisconnected,
+    TransportReconnecting,
+    WebSocketTransport,
+)
 from physical_agent.env import load_dotenv
 from physical_agent.protocol.schemas import Action, ActionResult, Capability, DriverContext, HealthStatus, Observation
 
@@ -31,6 +36,17 @@ MANIFEST = {
             "timeout_s": {"type": "number", "minimum": 1, "default": 10},
             "connect_timeout_s": {"type": "number", "minimum": 0.1, "default": 2},
             "wait_for_responses": {"type": "boolean", "default": True},
+            "reconnect_policy": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean", "default": False},
+                    "max_retries": {"type": "integer", "minimum": 0, "default": 3},
+                    "backoff_base_ms": {"type": "integer", "minimum": 1, "default": 250},
+                    "backoff_cap_ms": {"type": "integer", "minimum": 1, "default": 5000},
+                    "jitter_ms": {"type": "integer", "minimum": 0, "default": 0},
+                },
+                "additionalProperties": False,
+            },
             "device_name": {"type": "string", "default": "xiaozhi-device"},
             "tool_prefix": {"type": "string", "default": "self.device"},
             "url": {"type": "string"},
@@ -113,6 +129,8 @@ class XiaozhiMcpWebSocketClient:
         *,
         connect_timeout_s: float = 2.0,
         timeout_s: float = 10.0,
+        reconnect_policy: ReconnectPolicy | dict[str, Any] | None = None,
+        on_reconnected: Any | None = None,
     ) -> None:
         self.url = url
         self.connect_timeout_s = connect_timeout_s
@@ -121,6 +139,8 @@ class XiaozhiMcpWebSocketClient:
             url,
             connect_timeout_s=connect_timeout_s,
             timeout_s=timeout_s,
+            reconnect_policy=reconnect_policy,
+            on_reconnected=on_reconnected,
         )
         self._next_id = 1
 
@@ -158,8 +178,7 @@ class XiaozhiMcpWebSocketClient:
         )
 
     def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        if not self.is_connected:
-            raise RuntimeError("WebSocket is not connected")
+        self._require_connected()
 
         request_id = self._next_id
         self._next_id += 1
@@ -184,8 +203,7 @@ class XiaozhiMcpWebSocketClient:
             return result if isinstance(result, dict) else {"value": result}
 
     def send_request(self, method: str, params: dict[str, Any] | None = None) -> int:
-        if not self.is_connected:
-            raise RuntimeError("WebSocket is not connected")
+        self._require_connected()
 
         request_id = self._next_id
         self._next_id += 1
@@ -222,6 +240,18 @@ class XiaozhiMcpWebSocketClient:
             return data
         raise RuntimeError(f"Unexpected MCP response: {data!r}")
 
+    def _require_connected(self) -> None:
+        if self.is_connected:
+            return
+        health = self.transport.health()
+        if health.status == "reconnecting":
+            raise TransportReconnecting(
+                "XiaoZhi MCP WebSocket is reconnecting; command was not queued."
+            )
+        raise TransportDisconnected(
+            "XiaoZhi MCP WebSocket is disconnected; command was not queued."
+        )
+
 
 class XiaozhiMcpDriver(PhysicalDriver):
     """Physical Agent driver for a Xiaozhi-style MCP device adapter.
@@ -238,6 +268,9 @@ class XiaozhiMcpDriver(PhysicalDriver):
         self.mode = self.config.get("mode", "mock")
         self.timeout_s = float(self.config.get("timeout_s", 10))
         self.connect_timeout_s = float(self.config.get("connect_timeout_s", 2))
+        self.reconnect_policy = ReconnectPolicy.from_config(
+            self.config.get("reconnect_policy")
+        )
         wait_default = False if self.mode == "ws" else True
         self.wait_for_responses = bool(self.config.get("wait_for_responses", wait_default))
         self.device_name = self.config.get("device_name", "xiaozhi-device")
@@ -248,6 +281,7 @@ class XiaozhiMcpDriver(PhysicalDriver):
         self.remote_tools: dict[str, dict[str, Any]] = {}
         self.ws_client: XiaozhiMcpWebSocketClient | None = None
         self.connected = False
+        self._transport_reconnected = False
         self.last_action: str | None = None
         self.state = _default_mock_state(self.config.get("mock_state", {}))
 
@@ -291,7 +325,13 @@ class XiaozhiMcpDriver(PhysicalDriver):
                 },
             )
         if self.mode == "ws":
+            await self._maybe_reinitialize_after_reconnect()
             url = self._ws_url(required=False)
+            transport_health = (
+                self.ws_client.transport.health()
+                if self.ws_client is not None
+                else None
+            )
             ok = self.connected and self.ws_client is not None and self.ws_client.is_connected
             detail = "fire-and-forget" if not self.wait_for_responses else "request-response"
             message = (
@@ -308,6 +348,11 @@ class XiaozhiMcpDriver(PhysicalDriver):
                     "wait_for_responses": self.wait_for_responses,
                     "session_id": self.session_id,
                     "remote_tools": sorted(self.remote_tools),
+                    "transport": (
+                        transport_health.details | {"status": transport_health.status}
+                        if transport_health is not None
+                        else {}
+                    ),
                 },
             )
         return HealthStatus(ok=self.connected, message="mock device connected", details={"mode": self.mode})
@@ -315,6 +360,7 @@ class XiaozhiMcpDriver(PhysicalDriver):
     async def observe(self) -> Observation:
         if self.mode in {"http", "ws"} and self.connected:
             if self.mode == "ws" and not self.wait_for_responses:
+                await self._maybe_reinitialize_after_reconnect()
                 return Observation(
                     summary=(
                         f"{self.device_name} is connected over local MCP WebSocket in fire-and-forget mode. "
@@ -486,6 +532,7 @@ class XiaozhiMcpDriver(PhysicalDriver):
 
     async def _call_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if self.mode == "ws":
+            await self._maybe_reinitialize_after_reconnect()
             client = self._require_ws_client()
             if not self.wait_for_responses:
                 request_id = client.send_tool_call(tool_name, arguments)
@@ -595,7 +642,32 @@ class XiaozhiMcpDriver(PhysicalDriver):
             url,
             connect_timeout_s=self.connect_timeout_s,
             timeout_s=self.timeout_s,
+            reconnect_policy=self.reconnect_policy,
+            on_reconnected=self._mark_transport_reconnected,
         )
+
+    def _mark_transport_reconnected(self) -> None:
+        self._transport_reconnected = True
+
+    async def _maybe_reinitialize_after_reconnect(self) -> None:
+        if not self._transport_reconnected:
+            return
+        await self.on_transport_reconnected()
+        self._transport_reconnected = False
+
+    async def on_transport_reconnected(self) -> None:
+        if self.mode != "ws":
+            return
+        if self.wait_for_responses:
+            self.session_id = None
+            await self._initialize_remote_session()
+            await self._refresh_remote_tools()
+        else:
+            self.remote_tools = {
+                tool_name: {"name": tool_name, "mapped_from": key}
+                for key, tool_name in self.tools.items()
+            }
+        self.connected = True
 
     def _endpoint(self, *, required: bool = True) -> str:
         endpoint_env = self.config.get("endpoint_env", "XIAOZHI_MCP_ENDPOINT")
@@ -644,7 +716,15 @@ class XiaozhiMcpDriver(PhysicalDriver):
 
     def _require_ws_client(self) -> XiaozhiMcpWebSocketClient:
         if self.ws_client is None or not self.ws_client.is_connected:
-            raise RuntimeError("XiaoZhi MCP WebSocket is not connected")
+            if self.ws_client is not None:
+                health = self.ws_client.transport.health()
+                if health.status == "reconnecting":
+                    raise TransportReconnecting(
+                        "XiaoZhi MCP WebSocket is reconnecting; command was not queued."
+                    )
+            raise TransportDisconnected(
+                "XiaoZhi MCP WebSocket is disconnected; command was not queued."
+            )
         return self.ws_client
 
     def _remote_endpoint_label(self) -> str:

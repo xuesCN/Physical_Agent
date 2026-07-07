@@ -78,6 +78,19 @@ XIAOZHI_MCP_PATH=/ws
 有些设备只接受工具调用，但不会对 `initialize` / `tools/list` 返回标准响应。遇到这种情况，保持
 `wait_for_responses: false`，让 watch 使用“只发送不等待回包”的模式。
 
+WebSocket reconnect 是可选能力，默认关闭。如需开启通信层重连，可以在 robot config 中写：
+
+```yaml
+reconnect_policy:
+  enabled: true
+  max_retries: 3
+  backoff_base_ms: 250
+  backoff_cap_ms: 5000
+  jitter_ms: 0
+```
+
+reconnect 不会重放旧动作；transport 正在重连时提交的动作会 fail-fast 并写失败反馈。重连成功只说明通信恢复，之后仍要通过 `observe`/`health` 确认机器人状态。
+
 从 D1 开始，`ws` 模式的底层连接、握手、frame 读写由共享的
 `physical_agent.drivers.transport.WebSocketTransport` 提供。这个 transport
 只在 watch/driver 侧使用；agent、API、GUI 仍然只写 proposal，不直接连接硬件。

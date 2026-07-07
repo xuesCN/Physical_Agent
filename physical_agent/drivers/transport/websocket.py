@@ -11,6 +11,10 @@ from typing import Any
 from urllib.parse import urlparse
 
 from physical_agent.drivers.transport.base import (
+    ReconnectCallback,
+    ReconnectPolicy,
+    ReconnectSleeper,
+    ReconnectableTransport,
     TransportClosedError,
     TransportError,
     TransportHealth,
@@ -24,7 +28,7 @@ _MAX_HANDSHAKE_BYTES = 65536
 _MAX_FRAME_BYTES = 16 * 1024 * 1024
 
 
-class WebSocketTransport:
+class WebSocketTransport(ReconnectableTransport):
     """Small standard-library WebSocket transport for watch-side drivers."""
 
     def __init__(
@@ -34,14 +38,22 @@ class WebSocketTransport:
         connect_timeout_s: float = 2.0,
         timeout_s: float = 10.0,
         headers: Mapping[str, str] | None = None,
+        reconnect_policy: ReconnectPolicy | dict[str, Any] | None = None,
+        reconnect_sleeper: ReconnectSleeper | None = None,
+        on_reconnected: ReconnectCallback | None = None,
     ) -> None:
+        super().__init__(
+            reconnect_policy=reconnect_policy,
+            reconnect_sleeper=reconnect_sleeper,
+            on_reconnected=on_reconnected,
+        )
         self.url = url
+        self._safe_url = _redact_url(url)
         self.connect_timeout_s = float(connect_timeout_s)
         self.timeout_s = float(timeout_s)
         self.headers = dict(headers or {})
         self._sock: socket.socket | ssl.SSLSocket | None = None
         self._read_buffer = b""
-        self._last_error: str | None = None
         self._close_received = False
 
     @property
@@ -49,7 +61,13 @@ class WebSocketTransport:
         return self._sock is not None
 
     def open(self) -> None:
-        self.close()
+        self._open_with_reconnect_policy(
+            open_once=self._open_once,
+            label=f"WebSocket transport {self._safe_url}",
+        )
+
+    def _open_once(self) -> None:
+        self._drop_socket()
         self._last_error = None
         self._close_received = False
         parsed = urlparse(self.url)
@@ -94,10 +112,13 @@ class WebSocketTransport:
             raise TransportError(f"WebSocket connection failed: {exc}") from exc
 
     def close(self) -> None:
+        self._cancel_background_reconnect()
         sock = self._sock
         self._sock = None
         self._read_buffer = b""
         if sock is None:
+            self._set_transport_error(None)
+            self._mark_transport_disconnected()
             return
         try:
             self._send_frame(b"", opcode=0x8, sock=sock)
@@ -107,6 +128,8 @@ class WebSocketTransport:
             sock.close()
         except OSError:
             pass
+        self._set_transport_error(None)
+        self._mark_transport_disconnected()
 
     def write(self, data: bytes) -> None:
         self._send_frame(data, opcode=0x2)
@@ -128,6 +151,7 @@ class WebSocketTransport:
                     self._last_error = "WebSocket closed by peer"
                     self._send_close_ack(payload)
                     self._drop_socket()
+                    self._start_reconnect_after_disconnect()
                     raise TransportClosedError("WebSocket closed by peer")
                 if opcode == 0x9:
                     self._send_frame(payload, opcode=0xA)
@@ -145,20 +169,60 @@ class WebSocketTransport:
                 ok=True,
                 status="open",
                 message="WebSocket transport open",
-                details={"url": self.url, "last_error": self._last_error},
+                details={
+                    "url": self._safe_url,
+                    "last_error": self._last_error,
+                    "connection_state": self.connection_state,
+                    "reconnect_attempts": self.reconnect_attempts,
+                },
+            )
+        if self.connection_state == "reconnecting":
+            return TransportHealth(
+                ok=False,
+                status="reconnecting",
+                message="WebSocket transport reconnecting",
+                details={
+                    "url": self._safe_url,
+                    "last_error": self._last_error,
+                    "reconnect_attempts": self.reconnect_attempts,
+                },
             )
         if self._last_error:
+            if not self.reconnect_exhausted:
+                self._start_reconnect_after_disconnect()
+            if self.connection_state == "reconnecting":
+                return TransportHealth(
+                    ok=False,
+                    status="reconnecting",
+                    message="WebSocket transport reconnecting",
+                    details={
+                        "url": self._safe_url,
+                        "last_error": self._last_error,
+                        "close_received": self._close_received,
+                        "reconnect_attempts": self.reconnect_attempts,
+                    },
+                )
             return TransportHealth(
                 ok=False,
                 status="error",
                 message=self._last_error,
-                details={"url": self.url, "close_received": self._close_received},
+                details={
+                    "url": self._safe_url,
+                    "close_received": self._close_received,
+                    "connection_state": self.connection_state,
+                    "reconnect_attempts": self.reconnect_attempts,
+                },
             )
         return TransportHealth(
             ok=False,
             status="closed",
             message="WebSocket transport closed",
-            details={"url": self.url, "close_received": self._close_received},
+            details={
+                "url": self._safe_url,
+                "close_received": self._close_received,
+                "connection_state": self.connection_state,
+                "reconnect_attempts": self.reconnect_attempts,
+            },
         )
 
     def _handshake_request(self, parsed: Any, port: int, key: str) -> bytes:
@@ -254,6 +318,7 @@ class WebSocketTransport:
             self._last_error = str(exc)
             if self._sock is sock:
                 self._drop_socket()
+                self._start_reconnect_after_disconnect()
             raise TransportClosedError(f"WebSocket write failed: {exc}") from exc
 
     def _recv_frame(self) -> tuple[int, bytes]:
@@ -295,10 +360,12 @@ class WebSocketTransport:
             except OSError as exc:
                 self._last_error = f"WebSocket read failed: {exc}"
                 self._drop_socket()
+                self._start_reconnect_after_disconnect()
                 raise TransportClosedError(self._last_error) from exc
             if not chunk:
                 self._last_error = "WebSocket connection closed by peer"
                 self._drop_socket()
+                self._start_reconnect_after_disconnect()
                 raise TransportClosedError(self._last_error)
             data.extend(chunk)
         return bytes(data)
@@ -310,8 +377,11 @@ class WebSocketTransport:
             pass
 
     def _require_sock(self) -> socket.socket | ssl.SSLSocket:
-        if self._sock is None:
-            raise TransportClosedError("WebSocket transport is not open")
+        self._ensure_transport_ready_for_io(
+            is_open=self._sock is not None,
+            label="WebSocket transport",
+        )
+        assert self._sock is not None
         return self._sock
 
     def _drop_socket(self) -> None:
@@ -323,8 +393,28 @@ class WebSocketTransport:
                 sock.close()
             except OSError:
                 pass
+        self._mark_transport_disconnected(self._last_error)
+
+    def _start_reconnect_after_disconnect(self) -> None:
+        self._start_background_reconnect(
+            open_once=self._open_once,
+            label=f"WebSocket transport {self._safe_url}",
+        )
 
 
 def _host_header(hostname: str, explicit_port: int | None, port: int) -> str:
     host = f"[{hostname}]" if ":" in hostname and not hostname.startswith("[") else hostname
     return host if explicit_port is None else f"{host}:{port}"
+
+
+def _redact_url(url: str) -> str:
+    parsed = urlparse(url)
+    hostname = parsed.hostname or ""
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+    if parsed.port is not None:
+        hostname = f"{hostname}:{parsed.port}"
+    if parsed.username or parsed.password:
+        hostname = f"***@{hostname}"
+    path = parsed.path or ""
+    return f"{parsed.scheme}://{hostname}{path}"

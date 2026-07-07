@@ -7,6 +7,11 @@ import yaml
 from pydantic import ValidationError
 
 from physical_agent.config import load_config, write_default_config
+from physical_agent.drivers.transport import (
+    TransportClosedError,
+    TransportReconnectFailed,
+    TransportReconnecting,
+)
 from physical_agent.protocol.schemas import Action, Observation
 from physical_agent.state import open_state_store
 from physical_agent.watch.runtime import WatchRuntime
@@ -481,6 +486,130 @@ def test_watch_runtime_driver_exception_cancels_sqlite_action(tmp_path, monkeypa
     assert row == ("cancelled", None, None)
     assert "Action `act_boom` failed" in log_message
     assert "boom" in log_message
+
+
+def test_watch_runtime_reconnecting_execute_fails_fast_with_feedback(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    store.write_actions(
+        [
+            Action(
+                id="act_reconnecting",
+                robot="arm_1",
+                capability="pick",
+                params={"object_id": "red_block"},
+            )
+        ],
+        [],
+        [],
+    )
+
+    async def fail_fast_execute(action):
+        raise TransportReconnecting("transport reconnecting")
+
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "execute", fail_fast_execute)
+
+    try:
+        count = asyncio.run(runtime.step(setup=False))
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert count == 1
+    actions = store.read_actions()
+    assert actions["pending"] == []
+    assert [action.id for action in actions["cancelled"]] == ["act_reconnecting"]
+    feedback = store.read_feedback()["latest"]
+    assert feedback["status"] == "failed"
+    assert "failed fast" in feedback["message"]
+    assert "not queued" in feedback["message"]
+    assert feedback["result"]["error_type"] == "TransportReconnecting"
+
+
+def test_watch_runtime_disconnected_during_execution_marks_unknown_failed(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    store.write_actions(
+        [
+            Action(
+                id="act_disconnect_mid_execute",
+                robot="arm_1",
+                capability="pick",
+                params={"object_id": "red_block"},
+            )
+        ],
+        [],
+        [],
+    )
+
+    async def disconnect_mid_execute(action):
+        raise TransportClosedError("WebSocket connection closed by peer")
+
+    monkeypatch.setattr(
+        runtime.loaded_drivers["arm_1"].driver,
+        "execute",
+        disconnect_mid_execute,
+    )
+
+    try:
+        count = asyncio.run(runtime.step(setup=False))
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert count == 1
+    actions = store.read_actions()
+    assert actions["pending"] == []
+    assert actions["completed"] == []
+    assert [action.id for action in actions["cancelled"]] == ["act_disconnect_mid_execute"]
+    feedback = store.read_feedback()["latest"]
+    assert feedback["status"] == "failed"
+    assert "execution state unknown" in feedback["message"]
+    assert "not be retried automatically" in feedback["message"]
+
+
+def test_watch_runtime_reconnect_exhausted_when_action_attempted(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    store.write_actions(
+        [
+            Action(
+                id="act_reconnect_exhausted",
+                robot="arm_1",
+                capability="pick",
+                params={"object_id": "red_block"},
+            )
+        ],
+        [],
+        [],
+    )
+
+    async def reconnect_exhausted(action):
+        raise TransportReconnectFailed("WebSocket reconnect failed after 4 attempts")
+
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "execute", reconnect_exhausted)
+
+    try:
+        count = asyncio.run(runtime.step(setup=False))
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert count == 1
+    assert store.read_actions()["pending"] == []
+    feedback = store.read_feedback()["latest"]
+    assert feedback["status"] == "failed"
+    assert "reconnect exhausted" in feedback["message"]
+    assert "not queued" in feedback["message"]
 
 
 def test_watch_runtime_gate_rejects_direct_bad_proposal_before_driver(tmp_path, monkeypatch):

@@ -31,6 +31,7 @@ agent / gui / chat / api
 - `SAFETY.md` 仍是文件真源。即使默认状态 backend 是 SQLite，watch 执行前仍读取并强制执行 `SAFETY.md`。
 - GUI/API/agent/chat 只提交动作提案，不直接执行硬件。
 - 上传文件、memory、retrieval chunk 只能作为不可信上下文；它们不是安全事实，也不能替代 `SAFETY.md`、人工确认或硬件急停。
+- 软件 reconnect 只是通信恢复能力，不等于机器人状态安全；reconnect 后首轮应先跑 `observe`/`health`，必要时人工确认。
 
 ## 环境准备命令
 
@@ -237,6 +238,7 @@ FastAPI 后端，默认不启动 watch：
 ## 安全限制
 
 - 软件 watchdog、heartbeat 和 halt 不是硬件急停。
+- 软件 reconnect 不能替代硬件急停、断电方案或现场值守；它恢复的是连接，不证明上一条动作安全完成。
 - 如果 Python 进程、操作系统、USB、网络、SDK 或固件卡死，软件 halt 可能无法生效。
 - 真实机械系统必须有人值守。
 - 必须有物理急停或断电方案，且值守人员知道如何使用。

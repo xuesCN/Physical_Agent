@@ -11,6 +11,7 @@ from collections.abc import Callable
 import pytest
 
 from physical_agent.drivers.transport import (
+    ReconnectPolicy,
     TransportClosedError,
     TransportProtocolError,
     TransportTimeoutError,
@@ -153,14 +154,63 @@ def test_websocket_transport_timeout_has_clear_error():
     server.assert_no_errors()
 
 
+def test_websocket_transport_reconnects_after_server_disconnect():
+    connections: list[int] = []
+    received: list[tuple[int, bytes]] = []
+
+    def handler(conn: socket.socket, key: str, _request: bytes) -> None:
+        connection_number = len(connections) + 1
+        connections.append(connection_number)
+        _send_handshake(conn, key)
+        if connection_number == 1:
+            return
+        received.append(_read_frame(conn))
+        _send_frame(conn, b'{"again":true}', opcode=0x1)
+        opcode, _payload = _read_frame(conn)
+        assert opcode == 0x8
+
+    with _FakeWebSocketServer(handler, max_connections=2) as server:
+        transport = WebSocketTransport(
+            server.url,
+            connect_timeout_s=0.5,
+            timeout_s=0.5,
+            reconnect_policy=ReconnectPolicy(
+                enabled=True,
+                max_retries=5,
+                backoff_base_ms=10,
+                backoff_cap_ms=10,
+            ),
+        )
+        transport.open()
+
+        with pytest.raises(TransportClosedError, match="closed by peer"):
+            transport.read(timeout_s=0.5)
+
+        assert _wait_until(lambda: transport.is_open)
+        transport.write_text('{"hello":"again"}')
+        assert transport.read(timeout_s=0.5) == b'{"again":true}'
+        transport.close()
+
+    server.assert_no_errors()
+    assert connections == [1, 2]
+    assert received == [(0x1, b'{"hello":"again"}')]
+
+
 class _FakeWebSocketServer:
-    def __init__(self, handler: Callable[[socket.socket, str, bytes], None]) -> None:
+    def __init__(
+        self,
+        handler: Callable[[socket.socket, str, bytes], None],
+        *,
+        max_connections: int = 1,
+    ) -> None:
         self._handler = handler
+        self._max_connections = max_connections
         self._listener: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._error: BaseException | None = None
         self.request = b""
+        self.requests: list[bytes] = []
         self.url = ""
 
     def __enter__(self) -> _FakeWebSocketServer:
@@ -192,14 +242,17 @@ class _FakeWebSocketServer:
     def _run(self) -> None:
         assert self._listener is not None
         try:
-            conn = self._accept_one()
-            if conn is None:
-                return
-            with conn:
-                conn.settimeout(2)
-                self.request = _read_http_request(conn)
-                key = _header(self.request, "sec-websocket-key")
-                self._handler(conn, key, self.request)
+            for _ in range(self._max_connections):
+                conn = self._accept_one()
+                if conn is None:
+                    return
+                with conn:
+                    conn.settimeout(2)
+                    request = _read_http_request(conn)
+                    self.request = request
+                    self.requests.append(request)
+                    key = _header(request, "sec-websocket-key")
+                    self._handler(conn, key, request)
         except BaseException as exc:
             self._error = exc
 
@@ -292,3 +345,12 @@ def _recv_exact(conn: socket.socket, size: int) -> bytes:
             raise AssertionError("socket closed while reading frame")
         data.extend(chunk)
     return bytes(data)
+
+
+def _wait_until(predicate: Callable[[], bool], *, timeout_s: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()

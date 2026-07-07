@@ -118,6 +118,21 @@ Some devices accept tool calls but do not return standard responses for
 `initialize` or `tools/list`. In that case, keep `wait_for_responses: false`
 so watch uses fire-and-forget control.
 
+WebSocket reconnect is opt-in. To enable communication-level reconnect:
+
+```yaml
+reconnect_policy:
+  enabled: true
+  max_retries: 3
+  backoff_base_ms: 250
+  backoff_cap_ms: 5000
+  jitter_ms: 0
+```
+
+Reconnect does not replay old actions. Commands attempted while the transport is
+reconnecting fail fast, and after reconnect the next observe/health pass is still
+the source of truth for robot state.
+
 If your MCP bridge exposes an HTTP JSON-RPC endpoint instead, use `mode: http`
 and keep the original endpoint-based configuration:
 

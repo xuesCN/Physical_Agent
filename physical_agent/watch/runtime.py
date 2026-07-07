@@ -7,6 +7,12 @@ from typing import Any
 
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config
 from physical_agent.drivers.loader import LoadedDriver, load_driver
+from physical_agent.drivers.transport import (
+    TransportClosedError,
+    TransportDisconnected,
+    TransportReconnectFailed,
+    TransportReconnecting,
+)
 from physical_agent.protocol.expectations import evaluate_expected, normalize_expected_value
 from physical_agent.protocol.schemas import Action, ActionResult, Observation, RobotRuntimeProfile
 from physical_agent.state import StateStore, open_state_store
@@ -182,6 +188,21 @@ class WatchRuntime:
                     f"Action failed before expectation check: {result.message}",
                 )
                 await self._halt_robot_after_timeout(action.robot, loaded)
+                continue
+            except (
+                TransportReconnecting,
+                TransportReconnectFailed,
+                TransportDisconnected,
+                TransportClosedError,
+            ) as exc:
+                result = _transport_action_failure_result(exc)
+                workspace.mark_action_cancelled(action)
+                executed_count += 1
+                await self._record_action_result(action, result)
+                await self._record_expectation_skipped(
+                    action,
+                    f"Action failed before expectation check: {result.message}",
+                )
                 continue
             except Exception as exc:
                 result = ActionResult(
@@ -709,3 +730,32 @@ def _expected_checks(action: Action) -> list[dict[str, Any]]:
     if "expected" not in metadata:
         return []
     return normalize_expected_value(metadata.get("expected"))
+
+
+def _transport_action_failure_result(exc: Exception) -> ActionResult:
+    error_type = type(exc).__name__
+    if isinstance(exc, TransportReconnecting):
+        message = (
+            "Transport is reconnecting; execute failed fast and command was not "
+            f"queued: {exc}"
+        )
+    elif isinstance(exc, TransportReconnectFailed):
+        message = (
+            "Transport reconnect exhausted when action was attempted; command "
+            f"was not queued: {exc}"
+        )
+    elif isinstance(exc, TransportDisconnected):
+        message = (
+            "Transport is disconnected; execute failed fast and command was not "
+            f"queued: {exc}"
+        )
+    else:
+        message = (
+            "Transport disconnected during execution; execution state unknown; "
+            f"action will not be retried automatically: {exc}"
+        )
+    return ActionResult(
+        status="failed",
+        message=message,
+        result={"error_type": error_type},
+    )

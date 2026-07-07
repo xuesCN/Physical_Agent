@@ -57,9 +57,11 @@
 
 ## W3 transport 断线重连
 
-**思路**：在 `drivers/transport/base.py` 加可选 `reconnect_policy`（max_retries、backoff base/cap）；serial/ws 实现里 connect 失败与运行中断连时按指数退避重试，重连事件回调给 driver 记 log。
-**坑**：重连期间的 execute 应立即失败（fail-fast）而不是排队；重连成功后 driver 需重发必要的初始化序列（留 hook）。
-**验收**：loopback 上模拟断连的单测；ws 对着本地假服务器断连重连。
+**落地口径（2026-07-07）**：`drivers/transport/base.py` 增加 `ReconnectPolicy` 与 `connected/disconnected/reconnecting` 状态语义，policy 默认关闭；`WebSocketTransport` / `SerialTransport` 在初始 connect 失败时按 `delay = min(cap, base * 2 ** attempt)` 退避重试，运行中读写发现断连时丢弃旧资源并启动后台重连。Loopback 扩展了连接失败次数、运行中断连和后台重连模拟，供单测使用。
+**执行语义**：reconnecting/disconnected 期间 `write/read/request` 立即抛 `TransportReconnecting` / `TransportDisconnected` / `TransportReconnectFailed`，watch 把 action 标 failed 并写人可读 feedback；不排队命令、不自动 retry action、不重放旧 execute。执行中 peer close/OSError 视为 execution state unknown，以现有 failed/cancelled 语义收口。
+**driver hook**：`PhysicalDriver.on_transport_reconnected()` 默认 no-op；transport 可通过 `on_reconnected` 回调通知 owner driver。`xiaozhi_mcp` 在 WebSocket 重连成功后标记待刷新，下一次 health/observe/execute 前重新 initialize 与 tools/list（fire-and-forget 模式刷新工具映射）。
+**边界**：W3 不改 SafetyGate、F1 approval、F4 expected 语义；不做 W4 多机器人并行 execute，也不扩 `observed_at` schema。reconnect success 只说明通信恢复，不代表机器人状态安全，后续仍以 observe/health 的世界事实为准。
+**验收**：Loopback 覆盖 connect retry、max retries exhausted、reconnecting fail-fast、hook；WebSocket 本地 fake server 覆盖 server 主动断开后重连并再次 read/write；Serial fake 覆盖 open retry 与 OSError 断连；watch 覆盖 fail-fast feedback、执行中断连 unknown failed、reconnect exhausted feedback。全量 `pytest` 294 passed。
 
 ## W4 多机器人并行执行 + observed_at
 

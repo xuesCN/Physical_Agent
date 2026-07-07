@@ -67,7 +67,7 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | F3 | context_builder 解耦 | §2 | ✅ 2026-07-07 完成 `9cbb540`：新增只读 `context_builder`，统一 chat reply/proposal/tool_loop 与 LLM planner payload；planner 使用独立 purpose；golden snapshot 覆盖四路；memory 改按 importance/created_at 注入 |
 | F4 | 期望-比对-回灌 | §2 | ✅ 2026-07-07 完成：action metadata 接收 `expected`；watch 在动作完成并刷新 world 后写 `expectation_check`；多 check 状态按 violated > skipped > verified 聚合；坏 expected 不影响 action 合法性；Chat/Actions 可见 expected 摘要 |
 | W2 | 观察并发化（gather）+ 频率与 tick 解耦 | W1 欠账 | ✅ 2026-07-07 完成 `4e0f732`：`update_world()` 按 robot 并发 observe、按 `robot_id` 稳定 merge；`observe_interval_ms` 未配置时等价 `tick_ms`；长跑 watch/API watch 中 claim 仍按 tick，idle observe 分频，动作后 world refresh 仍立即服务 F4 expectation_check |
-| W3 | transport 断线重连（backoff） | W1 欠账 | ✅ 2026-07-07 完成 `1d9a812`：`ReconnectPolicy` 默认关闭；Loopback/WebSocket/Serial 支持 connect retry 与运行中断连后台 backoff；reconnecting/disconnected execute fail-fast、不排队、不重放旧动作；driver 预留 reconnect hook，xiaozhi_mcp 重连后刷新 handshake/tool cache；未做 W4 并行 execute/observed_at |
+| W3 | transport 断线重连（backoff） | W1 欠账 | ✅ 2026-07-07 完成 `1d9a812`, `7762c0f`：`ReconnectPolicy` 默认关闭；Loopback/WebSocket/Serial 支持 connect retry 与运行中断连后台 backoff；reconnecting/disconnected execute fail-fast、不排队、不重放旧动作；driver 预留 reconnect hook，xiaozhi_mcp 重连后刷新 handshake/tool cache；关闭/取消中的迟到 open 会清理资源且不触发 hook；未做 W4 并行 execute/observed_at |
 | W4 | 多机器人并行执行 + world 带 observed_at | W1 欠账 | ⚪ 接实机/多机前；F4 当前使用执行后 `update_world()` 的新鲜观测，未扩 `observed_at` |
 | W5 | driver 编写守则：阻塞调用须带超时或走 to_thread（写进 driver 模板与生成规则） | 讨论产出 | ⚪ 轻 |
 | F5.1-F5.3 | LeRobot motors / ros_mcp / 感知语义层 | §2 | ⏸ 条件触发 |

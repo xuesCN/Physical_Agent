@@ -30,7 +30,7 @@
 | F3 | context_builder 解耦：reply/proposal/planner/tool_loop 上下文统一 | `9cbb540` |
 | F4 | 期望-比对-回灌：expected 确定性比对、feedback 回灌、前端可见性 | `b5be3b7` |
 | W2 | 观察并发化 + observe 频率与 tick 解耦 | `4e0f732` |
-| W3 | transport 断线重连：可选 policy、fail-fast、driver reinit hook | `1d9a812` |
+| W3 | transport 断线重连：可选 policy、fail-fast、driver reinit hook | `1d9a812`, `7762c0f` |
 
 ## 2. 分阶段过程记录
 
@@ -122,9 +122,9 @@ watch 侧只在 SafetyGate 通过、driver completed、并成功 `update_world()
 
 `WebSocketTransport` 与 `SerialTransport` 保持同步 byte transport 接口：`open()` 初始失败时按 policy 同步重试；运行中读写发现 peer close、OSError、SerialException 或 port closed 时先丢弃旧 socket/handle，再启动后台重连线程。reconnecting 期间 `write/read/request` 立即失败，错误消息包含“command was not queued”，watch 捕获 transport 类异常后把 action 标 failed/cancelled 并写 feedback：reconnecting/disconnected 是 fail-fast，reconnect exhausted 明确说明耗尽，执行中 close/OSError 说明 execution state unknown 且不自动 retry。timeout 仍由 W1 的 watch-side timeout 与 transport 自身 timeout 兜底，不因 reconnect policy 绕过。
 
-driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transport 支持 `on_reconnected` 回调。`xiaozhi_mcp` 将 WebSocket reconnect callback 转为“待刷新”标记，下一次 health/observe/execute 前重新 `initialize` 与 `tools/list`（fire-and-forget 模式刷新本地工具映射），不在 transport 背景线程里重放旧动作。Loopback 扩展测试模拟连接第 N 次成功、运行中断连、后台重连、reconnecting fail-fast 与 hook 调用；WebSocket fake server 覆盖首次连接成功、server 主动断开、client 重连后再次 read/write；Serial fake 覆盖 open 失败后重试成功、重试耗尽、读写 OSError 标记断连并可重新 open。
+driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transport 支持 `on_reconnected` 回调。`xiaozhi_mcp` 将 WebSocket reconnect callback 转为“待刷新”标记，下一次 health/observe/execute 前重新 `initialize` 与 `tools/list`（fire-and-forget 模式刷新本地工具映射），不在 transport 背景线程里重放旧动作。review 中补 `7762c0f`：后台重连的 `open_once()` 若在 close/cancel 后才成功，基类会立即清理刚打开的 socket/serial/loopback 资源，保持 disconnected，且不触发 reconnect hook。Loopback 扩展测试模拟连接第 N 次成功、运行中断连、后台重连、reconnecting fail-fast、hook 调用与取消后的迟到 open 清理；WebSocket fake server 覆盖首次连接成功、server 主动断开、client 重连后再次 read/write；Serial fake 覆盖 open 失败后重试成功、重试耗尽、读写 OSError 标记断连并可重新 open。
 
-边界保持：SafetyGate / F1 approval / F4 expected / watch 执行权不变；W3 只让通信层恢复可用，不把 reconnect success 当作机器人位置或动作安全证明；不做 W4 的多机器人并行 execute 与 `observed_at` schema，不自动重放 execute、不自动重规划。验证：transport/watch/safety 定向测试、`tests -k "reconnect or transport or websocket or serial or disconnected"`、`tests -k "timeout or observe or expectation or expected"` 均通过；全量 `pytest` 294 passed（1 个既有 StarletteDeprecationWarning）。
+边界保持：SafetyGate / F1 approval / F4 expected / watch 执行权不变；W3 只让通信层恢复可用，不把 reconnect success 当作机器人位置或动作安全证明；不做 W4 的多机器人并行 execute 与 `observed_at` schema，不自动重放 execute、不自动重规划。验证：transport/watch/safety 定向测试、`tests -k "reconnect or transport or websocket or serial or disconnected"`、`tests -k "timeout or observe or expectation or expected"` 均通过；review fix 后全量 `pytest` 295 passed（1 个既有 StarletteDeprecationWarning）。
 
 ## 3. 关键决策与偏离（跨阶段汇总）
 

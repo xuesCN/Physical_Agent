@@ -30,7 +30,7 @@
 | F3 | context_builder 解耦：reply/proposal/planner/tool_loop 上下文统一 | `9cbb540` |
 | F4 | 期望-比对-回灌：expected 确定性比对、feedback 回灌、前端可见性 | `b5be3b7` |
 | W2 | 观察并发化 + observe 频率与 tick 解耦 | `4e0f732` |
-| W3 | transport 断线重连：可选 policy、fail-fast、driver reinit hook | `__W3_COMMIT__` |
+| W3 | transport 断线重连：可选 policy、fail-fast、driver reinit hook | `1d9a812` |
 
 ## 2. 分阶段过程记录
 

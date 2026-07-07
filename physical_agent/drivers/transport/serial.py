@@ -239,6 +239,9 @@ class SerialTransport(ReconnectableTransport):
             label=f"Serial transport {self.port}",
         )
 
+    def _cleanup_after_cancelled_open(self) -> None:
+        self._close_serial_handle()
+
 
 def _import_pyserial() -> ModuleType:
     try:

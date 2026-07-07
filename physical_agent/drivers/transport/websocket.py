@@ -401,6 +401,9 @@ class WebSocketTransport(ReconnectableTransport):
             label=f"WebSocket transport {self._safe_url}",
         )
 
+    def _cleanup_after_cancelled_open(self) -> None:
+        self._drop_socket()
+
 
 def _host_header(hostname: str, explicit_port: int | None, port: int) -> str:
     host = f"[{hostname}]" if ":" in hostname and not hostname.startswith("[") else hostname

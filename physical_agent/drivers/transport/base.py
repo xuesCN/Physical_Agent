@@ -259,6 +259,17 @@ class ReconnectableTransport:
             )
             try:
                 open_once()
+                if self._reconnect_cancel.is_set() or self._is_transport_closing():
+                    self._cleanup_after_cancelled_open()
+                    message = f"{label} reconnect cancelled"
+                    with self._reconnect_lock:
+                        self._connection_state = "disconnected"
+                        self._last_error = message
+                        if background:
+                            self._reconnect_thread = None
+                    if background:
+                        return
+                    raise TransportClosedError(message)
                 self._mark_transport_connected()
                 if notify_reconnected:
                     self._notify_reconnected(label)
@@ -324,6 +335,14 @@ class ReconnectableTransport:
                 exc,
                 exc_info=True,
             )
+
+    def _is_transport_closing(self) -> bool:
+        with self._reconnect_lock:
+            return self._closing
+
+    def _cleanup_after_cancelled_open(self) -> None:
+        """Release resources opened after a reconnect cancellation."""
+        return None
 
 
 @runtime_checkable

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from physical_agent.drivers.transport import (
@@ -10,6 +12,25 @@ from physical_agent.drivers.transport import (
     TransportReconnecting,
     TransportTimeoutError,
 )
+
+
+class _DelayedOpenLoopbackTransport(LoopbackTransport):
+    def __init__(
+        self,
+        *,
+        entered: threading.Event,
+        release: threading.Event,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._entered = entered
+        self._release = release
+
+    def _open_once(self) -> None:
+        self._entered.set()
+        if not self._release.wait(timeout=1):
+            raise AssertionError("test did not release delayed open")
+        super()._open_once()
 
 
 def test_loopback_transport_open_write_read_and_health():
@@ -123,6 +144,40 @@ def test_loopback_reconnecting_write_fails_fast_without_queueing():
 
     assert transport.drain_written() == b""
     transport.close()
+
+
+def test_loopback_cancelled_background_reconnect_cleans_late_open():
+    entered = threading.Event()
+    release = threading.Event()
+    hooks: list[str] = []
+    transport = _DelayedOpenLoopbackTransport(
+        entered=entered,
+        release=release,
+        reconnect_policy=ReconnectPolicy(
+            enabled=True,
+            max_retries=0,
+            backoff_base_ms=1,
+            backoff_cap_ms=1,
+        ),
+        on_reconnected=lambda: hooks.append("called"),
+    )
+
+    transport._start_background_reconnect(  # noqa: SLF001 - lifecycle race coverage
+        open_once=transport._open_once,
+        label="Loopback transport",
+    )
+    thread = transport._reconnect_thread  # noqa: SLF001
+    assert thread is not None
+    assert entered.wait(timeout=1)
+
+    transport._reconnect_cancel.set()  # noqa: SLF001
+    release.set()
+    thread.join(timeout=1)
+
+    assert thread.is_alive() is False
+    assert transport.is_open is False
+    assert transport.connection_state == "disconnected"
+    assert hooks == []
 
 
 @pytest.mark.parametrize(

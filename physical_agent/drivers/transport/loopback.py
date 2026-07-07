@@ -164,3 +164,9 @@ class LoopbackTransport(ReconnectableTransport):
             )
         except TransportClosedError:
             raise
+
+    def _cleanup_after_cancelled_open(self) -> None:
+        with self._condition:
+            self._is_open = False
+            self._read_buffer.clear()
+            self._condition.notify_all()

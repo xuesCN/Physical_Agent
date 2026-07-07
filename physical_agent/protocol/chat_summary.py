@@ -86,4 +86,7 @@ def _trim_summary(summary: str, *, max_chars: int) -> str:
     if len(summary) <= max_chars:
         return summary
     marker = "[Earlier summary trimmed]\n"
-    return marker + summary[-max(0, max_chars - len(marker)) :].lstrip()
+    budget = max_chars - len(marker)
+    if budget <= 0:
+        return marker[:max_chars]
+    return marker + summary[-budget:].lstrip()

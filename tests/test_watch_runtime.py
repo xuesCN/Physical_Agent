@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sqlite3
 
 import pytest
@@ -6,7 +7,7 @@ import yaml
 from pydantic import ValidationError
 
 from physical_agent.config import load_config, write_default_config
-from physical_agent.protocol.schemas import Action
+from physical_agent.protocol.schemas import Action, Observation
 from physical_agent.state import open_state_store
 from physical_agent.watch.runtime import WatchRuntime
 
@@ -20,6 +21,20 @@ def _write_config_backend(config_path, backend: str):
 def _write_watch_config(config_path, **updates):
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     data.setdefault("watch", {}).update(updates)
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+
+def _write_two_robot_config(config_path, *, reverse_ids: bool = False):
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    arm_config = data["robots"]["arm_1"]
+    rover_config = {
+        "driver": "mock_rover",
+        "config": {"start_pose": {"x": 2.0, "y": 3.0}, "battery": 88.0},
+    }
+    if reverse_ids:
+        data["robots"] = {"z_arm": arm_config, "a_rover": rover_config}
+    else:
+        data["robots"] = {"arm_1": arm_config, "rover_1": rover_config}
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
@@ -282,6 +297,131 @@ def test_watch_runtime_does_not_check_expectation_when_safety_gate_rejects(tmp_p
     feedback = store.read_feedback()["latest"]
     assert feedback["action_id"] == "act_gate_expected"
     assert feedback["status"] == "failed"
+
+
+def test_update_world_observes_robots_concurrently(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    _write_two_robot_config(config_path)
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    started: list[str] = []
+
+    async def run_update():
+        release = asyncio.Event()
+
+        async def observe(robot_id):
+            started.append(robot_id)
+            if len(started) == 2:
+                release.set()
+            await release.wait()
+            return Observation(
+                summary=f"{robot_id} observed",
+                robots={robot_id: {"status": "fresh"}},
+            )
+
+        monkeypatch.setattr(
+            runtime.loaded_drivers["arm_1"].driver,
+            "observe",
+            lambda: observe("arm_1"),
+        )
+        monkeypatch.setattr(
+            runtime.loaded_drivers["rover_1"].driver,
+            "observe",
+            lambda: observe("rover_1"),
+        )
+        return await asyncio.wait_for(runtime.update_world(), timeout=0.5)
+
+    try:
+        world = asyncio.run(run_update())
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert started == ["arm_1", "rover_1"]
+    assert list(world.robots) == ["arm_1", "rover_1"]
+
+
+def test_update_world_merges_observations_in_stable_robot_order(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    _write_two_robot_config(config_path, reverse_ids=True)
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+
+    async def observe_z_arm():
+        await asyncio.sleep(0.02)
+        return Observation(
+            summary="z arm",
+            robots={"z_arm": {"status": "fresh"}},
+            objects={"z_block": {"type": "block"}},
+        )
+
+    async def observe_a_rover():
+        return Observation(
+            summary="a rover",
+            robots={"a_rover": {"status": "fresh"}},
+            objects={"a_crate": {"type": "crate"}},
+        )
+
+    monkeypatch.setattr(runtime.loaded_drivers["z_arm"].driver, "observe", observe_z_arm)
+    monkeypatch.setattr(runtime.loaded_drivers["a_rover"].driver, "observe", observe_a_rover)
+
+    try:
+        snapshots = []
+        for _ in range(3):
+            world = asyncio.run(runtime.update_world())
+            snapshots.append(json.dumps(world.model_dump(mode="json"), ensure_ascii=False))
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert len(set(snapshots)) == 1
+    assert list(world.robots) == ["a_rover", "z_arm"]
+    assert list(world.objects) == ["a_crate", "z_block"]
+
+
+def test_update_world_isolates_single_robot_observe_exception(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    _write_two_robot_config(config_path)
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    previous_arm_state = store.read_world()["state"]["robots"]["arm_1"]
+
+    async def fail_arm():
+        raise RuntimeError("camera offline")
+
+    async def observe_rover():
+        return Observation(
+            summary="rover fresh",
+            robots={"rover_1": {"status": "fresh"}},
+            objects={"beacon": {"type": "marker"}},
+        )
+
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "observe", fail_arm)
+    monkeypatch.setattr(runtime.loaded_drivers["rover_1"].driver, "observe", observe_rover)
+
+    try:
+        world = asyncio.run(runtime.update_world())
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert world.robots["arm_1"] == previous_arm_state
+    assert world.robots["rover_1"] == {"status": "fresh"}
+    assert world.objects["beacon"] == {"type": "marker"}
+    with sqlite3.connect(store.db_path) as conn:
+        log_message = conn.execute(
+            """
+            SELECT message
+            FROM log_entries
+            WHERE actor = 'watch' AND message LIKE ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            ("%Skipped observation for `arm_1`%",),
+        ).fetchone()[0]
+    assert "RuntimeError" in log_message
+    assert "camera offline" in log_message
 
 
 def test_watch_runtime_driver_exception_cancels_sqlite_action(tmp_path, monkeypatch):
@@ -722,6 +862,143 @@ def test_watch_config_rejects_non_positive_heartbeat_failure_threshold(tmp_path)
 
     with pytest.raises(ValidationError):
         load_config(config_path)
+
+
+def test_watch_config_observe_interval_defaults_to_tick_ms(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_watch_config(config_path, tick_ms=123, observe_interval_ms=None)
+
+    runtime = WatchRuntime(config_path)
+    runtime.config = load_config(config_path)
+
+    assert runtime.config.watch.observe_interval_ms is None
+    assert runtime._observe_interval_ms() == 123
+
+
+@pytest.mark.parametrize("observe_interval_ms", [0, -1])
+def test_watch_config_rejects_non_positive_observe_interval(tmp_path, observe_interval_ms):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_watch_config(config_path, observe_interval_ms=observe_interval_ms)
+
+    with pytest.raises(ValidationError):
+        load_config(config_path)
+
+
+def test_watch_tick_decouples_idle_observe_from_action_claim(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    _write_watch_config(
+        config_path,
+        tick_ms=10,
+        observe_interval_ms=100,
+        heartbeat_enabled=False,
+        halt_on_shutdown=False,
+    )
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    now = {"value": 0.0}
+    observe_calls: list[float] = []
+
+    def monotonic():
+        return now["value"]
+
+    async def observe():
+        observe_calls.append(now["value"])
+        return Observation(
+            summary="fresh arm",
+            robots={"arm_1": {"status": "fresh"}},
+        )
+
+    monkeypatch.setattr(runtime, "_monotonic", monotonic)
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "observe", observe)
+
+    try:
+        assert asyncio.run(runtime.tick()) == 0
+        assert observe_calls == [0.0]
+
+        now["value"] = 0.01
+        assert asyncio.run(runtime.tick()) == 0
+        assert observe_calls == [0.0]
+
+        store.append_pending_action(
+            Action(
+                id="act_move_despite_idle_interval",
+                robot="arm_1",
+                capability="move_to",
+                params={"x": 0.1, "y": 0.0, "z": 0.4},
+            )
+        )
+        now["value"] = 0.02
+        assert asyncio.run(runtime.tick()) == 1
+        assert observe_calls == [0.0, 0.02]
+        assert store.read_actions()["completed"][0].id == "act_move_despite_idle_interval"
+
+        now["value"] = 0.05
+        assert asyncio.run(runtime.tick()) == 0
+        assert observe_calls == [0.0, 0.02]
+
+        now["value"] = 0.11
+        assert asyncio.run(runtime.tick()) == 0
+        assert observe_calls == [0.0, 0.02, 0.11]
+    finally:
+        asyncio.run(runtime.shutdown())
+
+
+def test_watch_tick_post_action_world_refresh_still_feeds_expectation_check(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    _write_watch_config(
+        config_path,
+        tick_ms=10,
+        observe_interval_ms=10_000,
+        heartbeat_enabled=False,
+        halt_on_shutdown=False,
+    )
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    monkeypatch.setattr(runtime, "_monotonic", lambda: 0.01)
+    runtime._last_idle_observe_at = 0.0
+    store = open_state_store(config_path=config_path)
+    store.write_actions(
+        [
+            Action(
+                id="act_pick_for_tick_expected",
+                robot="arm_1",
+                capability="pick",
+                params={"object_id": "red_block"},
+            ),
+            Action(
+                id="act_place_for_tick_expected",
+                robot="arm_1",
+                capability="place",
+                params={"target": "tray"},
+                depends_on=["act_pick_for_tick_expected"],
+                metadata={
+                    "expected": [
+                        {
+                            "path": "objects.red_block.location",
+                            "op": "eq",
+                            "value": "tray",
+                        }
+                    ]
+                },
+            ),
+        ],
+        [],
+        [],
+    )
+
+    try:
+        assert asyncio.run(runtime.tick()) == 2
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    events = _expectation_events(store)
+    assert len(events) == 1
+    assert events[0]["action_id"] == "act_place_for_tick_expected"
+    assert events[0]["status"] == "verified"
+    assert store.read_world()["state"]["objects"]["red_block"]["location"] == "tray"
 
 
 def test_watch_runtime_shutdown_calls_driver_halt(tmp_path, monkeypatch):

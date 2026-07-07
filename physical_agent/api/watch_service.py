@@ -141,7 +141,7 @@ class ApiWatchService:
             await runtime.setup()
             while True:
                 try:
-                    executed = await runtime.step(setup=False)
+                    executed = await _run_watch_tick(runtime)
                     self.events.publish(
                         "watch_step",
                         {
@@ -225,6 +225,13 @@ def _load_watch_runtime_class() -> Any:
     from physical_agent.watch.runtime import WatchRuntime
 
     return WatchRuntime
+
+
+async def _run_watch_tick(runtime: Any) -> Any:
+    tick = getattr(runtime, "tick", None)
+    if callable(tick):
+        return await tick()
+    return await runtime.step(setup=False)
 
 
 def _offer_event(events: queue.Queue[dict[str, Any]], event: dict[str, Any]) -> None:

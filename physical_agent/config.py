@@ -39,6 +39,7 @@ class WorkspaceConfig(BaseModel):
 
 class WatchConfig(BaseModel):
     tick_ms: int = 500
+    observe_interval_ms: int | None = Field(default=None, gt=0)
     require_human_approval: bool = False
     heartbeat_enabled: bool = True
     halt_on_shutdown: bool = True
@@ -93,6 +94,7 @@ def default_config_dict() -> dict[str, Any]:
         "workspace": {"path": "./workspace", "backend": "sqlite"},
         "watch": {
             "tick_ms": 500,
+            "observe_interval_ms": None,
             "require_human_approval": False,
             "heartbeat_enabled": True,
             "halt_on_shutdown": True,

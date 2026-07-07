@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import time
 from typing import Any
 
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config
@@ -39,6 +40,7 @@ class WatchRuntime:
         self.profiles: dict[str, RobotRuntimeProfile] = {}
         self._heartbeat_failure_counts: dict[str, int] = {}
         self._watchdog_halted_robots: set[str] = set()
+        self._last_idle_observe_at: float | None = None
         self.started = False
 
     async def setup(self) -> None:
@@ -105,12 +107,19 @@ class WatchRuntime:
         assert self.config is not None
         try:
             while True:
-                await self.step(setup=False)
+                await self.tick()
                 await asyncio.sleep(self.config.watch.tick_ms / 1000)
         finally:
             await self.shutdown()
 
-    async def step(self, *, setup: bool = True) -> int:
+    async def tick(self) -> int:
+        should_observe = self._should_observe_now()
+        executed_count = await self.step(setup=False, observe_when_idle=should_observe)
+        if executed_count == 0 and should_observe:
+            self._last_idle_observe_at = self._monotonic()
+        return executed_count
+
+    async def step(self, *, setup: bool = True, observe_when_idle: bool = True) -> int:
         if setup:
             await self.setup()
         await self._heartbeat_loaded_drivers()
@@ -214,34 +223,65 @@ class WatchRuntime:
                 raise
             await self._record_expectation_check(action, world)
 
-        if executed_count == 0:
+        if executed_count == 0 and observe_when_idle:
             await self.update_world()
         return executed_count
 
     async def update_world(self) -> Observation:
+        observations, failed_robot_ids = await self._observe_all_robots_concurrently()
+        previous = self._current_world_observation() if failed_robot_ids else None
+        merged = merge_observations(observations, base=previous)
+        self._workspace().write_world(merged)
+        return merged
+
+    async def _observe_all_robots_concurrently(self) -> tuple[list[Observation], list[str]]:
         timeout_s = (
             self.config.watch.observe_timeout_s if self.config is not None else 10.0
         )
+        robot_items = sorted(self.loaded_drivers.items(), key=lambda item: item[0])
+        results = await asyncio.gather(
+            *[
+                self._observe_robot(robot_id, loaded, timeout_s)
+                for robot_id, loaded in robot_items
+            ],
+            return_exceptions=True,
+        )
+
         observations: list[Observation] = []
-        for robot_id, loaded in self.loaded_drivers.items():
-            try:
-                observations.append(
-                    await _call_with_timeout(
-                        loaded.driver.observe(),
-                        timeout_s,
-                        f"Driver observe for robot `{robot_id}`",
-                    )
-                )
-            except DriverCallTimeout as exc:
-                # Log-only: a hung sensor at tick rate would flood feedback.
-                # Persistent failure is escalated by the heartbeat watchdog.
-                self._workspace().append_log(
-                    f"Skipped observation for `{robot_id}`: {exc}",
-                    actor="watch",
-                )
-        merged = merge_observations(observations)
-        self._workspace().write_world(merged)
-        return merged
+        failed_robot_ids: list[str] = []
+        for (robot_id, _loaded), result in zip(robot_items, results):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            if isinstance(result, Exception):
+                failed_robot_ids.append(robot_id)
+                self._record_observe_failure(robot_id, result)
+                continue
+            observations.append(result)
+        return observations, failed_robot_ids
+
+    async def _observe_robot(
+        self,
+        robot_id: str,
+        loaded: LoadedDriver,
+        timeout_s: float,
+    ) -> Observation:
+        return await _call_with_timeout(
+            loaded.driver.observe(),
+            timeout_s,
+            f"Driver observe for robot `{robot_id}`",
+        )
+
+    def _record_observe_failure(self, robot_id: str, exc: Exception) -> None:
+        # Log-only: a hung sensor at tick rate would flood feedback.
+        # Persistent failure is escalated by the heartbeat watchdog.
+        if isinstance(exc, DriverCallTimeout):
+            message = f"Skipped observation for `{robot_id}`: {exc}"
+        else:
+            message = (
+                f"Skipped observation for `{robot_id}`: Driver observe failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+        self._workspace().append_log(message, actor="watch")
 
     def _capabilities_document(self) -> dict[str, Any]:
         document: dict[str, Any] = {}
@@ -420,6 +460,40 @@ class WatchRuntime:
     def _halt_timeout_s(self) -> float:
         return self.config.watch.halt_timeout_s if self.config is not None else 5.0
 
+    def _observe_interval_ms(self) -> int:
+        if self.config is None:
+            return 500
+        configured = self.config.watch.observe_interval_ms
+        return self.config.watch.tick_ms if configured is None else configured
+
+    def _should_observe_now(self) -> bool:
+        if self._last_idle_observe_at is None:
+            return True
+        elapsed_s = self._monotonic() - self._last_idle_observe_at
+        return elapsed_s >= (self._observe_interval_ms() / 1000.0)
+
+    def _monotonic(self) -> float:
+        return time.monotonic()
+
+    def _current_world_observation(self) -> Observation | None:
+        world = self._workspace().read_world()
+        observation = world.get("observation")
+        if isinstance(observation, Observation):
+            return observation
+        if isinstance(observation, dict):
+            return Observation.model_validate(observation)
+        state = world.get("state") or {}
+        if not isinstance(state, dict):
+            return None
+        return Observation(
+            summary=str(world.get("summary") or ""),
+            robots=dict(state.get("robots") or {}),
+            objects=dict(state.get("objects") or {}),
+            environment=dict(state.get("environment") or {}),
+            artifacts=list(state.get("artifacts") or []),
+            raw=dict(state.get("raw") or {}),
+        )
+
     async def _maybe_halt_for_heartbeat_failure(
         self,
         robot_id: str,
@@ -584,15 +658,21 @@ class WatchRuntime:
         return self.workspace
 
 
-def merge_observations(observations: list[Observation]) -> Observation:
+def merge_observations(
+    observations: list[Observation],
+    *,
+    base: Observation | None = None,
+) -> Observation:
+    if not observations and base is not None:
+        return _ordered_observation(base)
     if not observations:
         return Observation(summary="No robots are configured.")
     summary = " ".join(observation.summary for observation in observations if observation.summary)
-    robots: dict[str, Any] = {}
-    objects: dict[str, Any] = {}
-    environment: dict[str, Any] = {}
-    artifacts: list[str] = []
-    raw: dict[str, Any] = {}
+    robots: dict[str, Any] = dict(base.robots) if base is not None else {}
+    objects: dict[str, Any] = dict(base.objects) if base is not None else {}
+    environment: dict[str, Any] = dict(base.environment) if base is not None else {}
+    artifacts: list[str] = list(base.artifacts) if base is not None else []
+    raw: dict[str, Any] = dict(base.raw) if base is not None else {}
     for observation in observations:
         robots.update(observation.robots)
         objects.update(observation.objects)
@@ -601,12 +681,27 @@ def merge_observations(observations: list[Observation]) -> Observation:
         raw.update(observation.raw)
     return Observation(
         summary=summary,
-        robots=robots,
-        objects=objects,
-        environment=environment,
+        robots=_ordered_mapping(robots),
+        objects=_ordered_mapping(objects),
+        environment=_ordered_mapping(environment),
         artifacts=artifacts,
-        raw=raw,
+        raw=_ordered_mapping(raw),
     )
+
+
+def _ordered_observation(observation: Observation) -> Observation:
+    return Observation(
+        summary=observation.summary,
+        robots=_ordered_mapping(observation.robots),
+        objects=_ordered_mapping(observation.objects),
+        environment=_ordered_mapping(observation.environment),
+        artifacts=list(observation.artifacts),
+        raw=_ordered_mapping(observation.raw),
+    )
+
+
+def _ordered_mapping(value: dict[str, Any]) -> dict[str, Any]:
+    return {key: value[key] for key in sorted(value, key=str)}
 
 
 def _expected_checks(action: Action) -> list[dict[str, Any]]:

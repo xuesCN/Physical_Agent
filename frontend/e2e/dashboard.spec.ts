@@ -514,11 +514,15 @@ test("F2.5 state overview uses productized schema components with collapsed raw 
   await expect(page.getByTestId("world-objects-table")).toContainText("tray");
   await expect(page.getByTestId("world-objects-table")).toContainText("available");
   await expect(page.getByTestId("raw-debug-panel")).toContainText("Unknown/raw fields");
-  await expect(
-    page.getByTestId("raw-debug-fallback").locator(".ant-collapse-content-active"),
-  ).toHaveCount(0);
+  await expect(page.getByTestId("raw-debug-collapse").locator(".ant-collapse-content-active"))
+    .toHaveCount(0);
+  await expect(page.getByTestId("raw-debug-panel").locator(".ant-tree")).toHaveCount(0);
   await expect(page.getByTestId("raw-debug-panel").locator(".json-tree")).toHaveCount(0);
   await expect(page.getByTestId("raw-debug-panel")).not.toContainText("driver_note");
+  await page.getByTestId("raw-debug-collapse").getByText("Unknown/raw fields").click();
+  await expect(page.getByTestId("raw-debug-panel").locator(".ant-tree")).toBeVisible();
+  await expect(page.getByTestId("raw-debug-panel")).toContainText("world_raw");
+  await expect(page.getByTestId("raw-debug-panel")).toContainText("driver_note");
   await expect(page.getByText("Full state JSON")).toHaveCount(0);
   expectNoConsoleErrors(consoleErrors);
 });

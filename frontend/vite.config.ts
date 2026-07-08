@@ -64,9 +64,6 @@ export default defineConfig({
           ) {
             return "markdown-vendor";
           }
-          if (normalized.includes("/react18-json-view/")) {
-            return "json-view";
-          }
           return undefined;
         }
       }

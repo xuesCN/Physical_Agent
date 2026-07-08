@@ -50,6 +50,10 @@ export function parseArgs(argv: string[]): CliOptions {
       );
       continue;
     }
+    if (looksLikeApiBase(arg)) {
+      options.apiBase = arg;
+      continue;
+    }
     throw new Error(`Unknown option: ${arg}`);
   }
 
@@ -63,6 +67,7 @@ export function helpText(): string {
     "",
     "Usage:",
     "  npm start -- --api http://127.0.0.1:8766",
+    "  npm start -- http://127.0.0.1:8766",
     "",
     "Options:",
     "  --api <url>                API base URL (default: http://127.0.0.1:8766)",
@@ -104,4 +109,8 @@ function parsePositiveInt(value: string, name: string): number {
     throw new Error(`${name} must be a positive integer`);
   }
   return parsed;
+}
+
+function looksLikeApiBase(value: string): boolean {
+  return /^https?:\/\//i.test(value);
 }

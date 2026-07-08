@@ -385,39 +385,51 @@ body {
   padding: 0;
 }
 
-.raw-json-collapse {
+.raw-debug-collapse {
   max-width: 100%;
 }
 
-.raw-json-collapse .ant-collapse-header {
+.raw-debug-collapse .ant-collapse-header {
   align-items: center !important;
   padding: 2px 0 !important;
 }
 
-.raw-json-collapse .ant-collapse-content-box {
-  padding: 4px 0 0 !important;
+.raw-debug-collapse .ant-collapse-content-box {
+  padding: 8px 0 0 !important;
 }
 
-.raw-json-label,
-.json-tree-loading {
+.raw-debug-label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
 
-.json-tree-loading {
-  padding: 8px 0;
-}
-
-.json-tree {
+.raw-debug-tree {
   max-height: 320px;
   overflow: auto;
   padding: 8px;
-  background: var(--pa-json-bg);
+  background: var(--pa-card-bg);
   border: 1px solid var(--pa-soft-border);
   border-radius: 6px;
+}
+
+.raw-debug-tree .ant-tree-node-content-wrapper {
+  min-width: 0;
+}
+
+.raw-debug-node {
+  max-width: 100%;
+}
+
+.raw-debug-key,
+.raw-debug-value {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
+}
+
+.raw-debug-value {
+  max-width: 560px;
+  overflow-wrap: anywhere;
 }
 
 .mono-cell {

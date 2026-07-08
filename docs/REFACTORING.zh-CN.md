@@ -29,6 +29,7 @@
 | F2 | 结构化信息可读化：feedback/world/capabilities + lazy JSON tree | `58a75b0` |
 | F2.5 | State Overview 产品化收口：viewmodels + AntD schema components + scoped RawDebug | 本轮提交 |
 | F2.5-json-style | 非 RawDebug JSON 展示统一为 Overview capability 摘要样式 | 本轮提交 |
+| F2.5-raw-debug-antd | RawDebug 改为 AntD 原生 Collapse/Tree，移除 react18-json-view | 本轮提交 |
 | F3 | context_builder 解耦：reply/proposal/planner/tool_loop 上下文统一 | `9cbb540` |
 | F4 | 期望-比对-回灌：expected 确定性比对、feedback 回灌、前端可见性 | `b5be3b7` |
 | W2 | 观察并发化 + observe 频率与 tick 解耦 | `4e0f732` |
@@ -36,6 +37,7 @@
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
+| TUI-api-arg-fix | 兼容 Windows/npm 启动时裸 API URL 参数 | 本轮提交 |
 | TUI-chat-cli-fix | 修复 SSE summary 覆盖 chat/actions，并改成纵向 CLI transcript | 本轮提交 |
 | TUI-llm-status-rendering | 取消 chat 硬截断，显示 LLM key/连接状态 | 本轮提交 |
 | TUI-append-only-scroll | chat 历史改为 append-only scrollback，降低空闲 watch 重绘 | 本轮提交 |
@@ -113,13 +115,19 @@ A1 最初被跳过（工具循环建在自研 urllib 客户端上"够用"），�
 
 动机：F2 已把若干 Context tab 从裸 JSON 改成可读组件，但 Overview 首屏仍更像把状态 JSON tree 当主材料，用户需要来回点 tab/raw 才能回答系统 ready、backend、robot、capability、world objects 与 workspace bounds。过程：新增 `frontend/src/viewmodels/overview.ts`、`robot.ts`、`capability.ts`、`world.ts`、`environment.ts` 五个纯 formatter，把后端 state JSON 先转为 UI viewmodel，再交给 AntD 组件渲染。新增 `StateOverviewPanel`，首屏依次展示 `SystemStatusCard`（Card + Statistic + Tag）、`RobotsTable`（id/driver/mode/health/capability count）、`CapabilityCards`（Card/List，展示 name/description/params summary/requires approval）、`EnvironmentDescriptions`（x/y/z bounds）和 `WorldObjectsTable`（object id/type/location/pose/status）。Overview 保留 Actions/Chat 与原 ContextTabs，避免破坏既有工作流，但状态可读性入口前置到页面顶部。
 
-RawDebug 收口：`RawDebug` 不再接收整份 state 并显示 `Full state JSON`，而是通过 `formatRawDebugFields()` 只收集 top-level unknown、backend private、world raw、environment unknown、object unknown、capability/robot unknown 字段；`react18-json-view` 仍由 `JsonTreeLazy` 懒加载，默认折叠，仅作为 fallback。边界保持：未改 backend API、watch、SafetyGate、driver、SQLite；没有新增 UI 库。验证：`cd frontend && npm run build` 通过；`cd frontend && npx playwright test` 19 passed（新增 F2.5 mock state 验证 robots table、capability cards、environment descriptions、world table、RawDebug 默认折叠、无 `Full state JSON` 标题）；`.\.venv\Scripts\python.exe -m pytest` 304 passed（1 个既有 StarletteDeprecationWarning）。
+RawDebug 收口：`RawDebug` 不再接收整份 state 并显示 `Full state JSON`，而是通过 `formatRawDebugFields()` 只收集 top-level unknown、backend private、world raw、environment unknown、object unknown、capability/robot unknown 字段；该轮仍由 `react18-json-view` 懒加载并默认折叠，后续 F2.5-raw-debug-antd 已继续收口为 AntD 原生 Tree。边界保持：未改 backend API、watch、SafetyGate、driver、SQLite；没有新增 UI 库。验证：`cd frontend && npm run build` 通过；`cd frontend && npx playwright test` 19 passed（新增 F2.5 mock state 验证 robots table、capability cards、environment descriptions、world table、RawDebug 默认折叠、无 `Full state JSON` 标题）；`.\.venv\Scripts\python.exe -m pytest` 304 passed（1 个既有 StarletteDeprecationWarning）。
 
 ### F2.5-json-style：JSON 展示样式统一
 
 动机：Overview capability cards 的 `Params:` / `Constraints:` 摘要已经比 JSON tree 更适合首屏阅读，但 Actions、Chat draft、Config、World、Feedback、Events、Safety、Settings 等区域仍复用旧 `RawJsonFallback`，视觉上像回到了“折叠 JSON 是主展示”。过程：新增 `JsonSummaryLine` / `JsonSummaryStack`，复用 `schema-summary` 的轻量 monospace 摘要样式；把非 RawDebug 的 params/expected/config/plan/event payload/object raw/safety raw/feedback raw/capability raw 全部改为 `Label: key=value` 摘要。`RawJsonFallback` 与 `JsonTreeLazy` 只保留给 `RawDebug`，真正需要用户编辑的 ProposalPanel `Params JSON` 输入框保留 textarea，不把输入控件伪装成展示组件。
 
-边界保持：未改 backend API、watch、SafetyGate、driver、SQLite；未新增 UI 库；`react18-json-view` 仍懒加载且只作为 RawDebug fallback。验证：`rg RawJsonFallback frontend/src/components frontend/src/App.tsx` 只剩 `RawDebug` 与 `JsonTreeLazy` 定义；`cd frontend && npm run build` 通过；`cd frontend && npx playwright test --grep "F2"` 2 passed；`cd frontend && npx playwright test` 19 passed；`.\.venv\Scripts\python.exe -m pytest` 304 passed（1 个既有 StarletteDeprecationWarning）。
+当轮边界：未改 backend API、watch、SafetyGate、driver、SQLite；未新增 UI 库；`react18-json-view` 当时仍懒加载且只作为 RawDebug fallback（后续见下一小节继续收口）。验证：`rg RawJsonFallback frontend/src/components frontend/src/App.tsx` 只剩 `RawDebug` 与 `JsonTreeLazy` 定义；`cd frontend && npm run build` 通过；`cd frontend && npx playwright test --grep "F2"` 2 passed；`cd frontend && npx playwright test` 19 passed；`.\.venv\Scripts\python.exe -m pytest` 304 passed（1 个既有 StarletteDeprecationWarning）。
+
+### F2.5-raw-debug-antd：RawDebug 原生 AntD 收口
+
+动机：用户确认 Overview capability 摘要风格可接受后，Raw Debug 中 `react18-json-view` 的树形视觉仍像旧 JSON viewer，容易被误认为产品主展示的一部分。过程：`RawDebug` 改为直接使用 AntD `Collapse + Tree + Tag + Typography` 渲染 unknown/raw/backend private 字段；默认仍折叠，展开后只显示 `formatRawDebugFields()` 收集的片段，不恢复整份 state JSON。删除 `JsonTreeLazy.tsx`、`.json-tree`/`.raw-json-*` CSS、`react18-json-view` npm 依赖与 Vite `json-view` chunk 规则，避免旧 viewer 留在构建路径里。
+
+边界保持：未改 backend API、watch、SafetyGate、driver、SQLite；未新增 UI 库；RawDebug 的字段收集口径不变。验证：`cd frontend && npm run build` 通过且产物无 `json-view` chunk；`cd frontend && npx playwright test --grep "F2"` 2 passed，覆盖 RawDebug 默认折叠、展开后出现 AntD tree、页面无 `Full state JSON`。
 
 ### F3：context_builder 解耦
 
@@ -156,6 +164,10 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 ### TUI-review-fix：stream 清理、SSE EOF 降级、watch 状态
 
 动机：修复 review 指出的三个 TUI 可用性问题，不扩大到后端或 GUI。过程：把 chat stream 处理收敛到 `runTuiChatStream()`，确保 reject/AbortError/done 都在 `finally` 清理 `streaming`；`/api/events` SSE 正常 EOF 与异常断开统一进入 degraded/polling（组件清理触发的 abort 不降级）；从 hello 事件读取 `watch_enabled`，StatusBar 显示 `Watch: enabled/disabled/unknown`，不再把 snapshot 当 watch 状态。边界保持：TUI 仍只走 HTTP API/SSE，未改 watch、driver、SafetyGate、SQLite 或 Python CLI。验证：`cd tui && npm test` 20 passed；`cd tui && npm run build` 通过；`pytest -q tests/test_safety_boundaries.py` 2 passed。
+
+### TUI-api-arg-fix：Windows/npm 启动参数兼容
+
+动机：Windows Terminal / PowerShell 下用户按文档运行 `npm start -- --api http://127.0.0.1:8766` 时，实际落到 `tsx src/main.tsx http://127.0.0.1:8766`，`--api` 被 npm/tsx 链路吞掉，TUI 把裸 URL 当未知参数退出。过程：`parseArgs()` 在保留 `--api URL` 与 `--api=URL` 的同时，兼容 positional `http://`/`https://` API base；help text 同步给出 `npm start -- http://127.0.0.1:8766` 作为 Windows 友好启动方式。边界保持：TUI 仍只走 HTTP API/SSE，不读 workspace/SQLite，不改后端 API、watch、driver、SafetyGate 或 Python CLI。验证：新增 `tui/src/cli/args.test.ts` 覆盖默认值、两种 `--api` 写法、裸 URL 与非 URL 参数拒绝；`cd tui && npm test` 47 passed；`cd tui && npm run build` 通过。
 
 ### TUI-chat-cli-fix：chat/actions 持久化与纵向 CLI
 
@@ -196,7 +208,7 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 11. **退役 active backend 与保留迁移 reader 分离**（B6）：运行态只支持 SQLite；旧 Markdown 文件只作为迁移输入读取，迁移 reader 不实现 `StateStore`，不进入 factory，也不承担新功能字段。
 12. **两个 Approve 必须拆语义**（F1）：Chat draft 的按钮叫 Add to Actions，只代表"创建 action"；Actions 板的 Approve execution 才代表"放行 requires_approval action 被 watch claim/execute"。
 13. **approval.required 不信任认知侧或 UI**（F1）：LLM draft、前端表单、API caller 都不能决定是否需要审批；后端每次写入/读取/claim 前按真实 robot/capability 重新归一化。
-14. **raw JSON tree 是兜底，不是主界面**（F2）：`react18-json-view` 允许作为折叠 raw/debug 后备，并必须懒加载拆包；已知协议字段仍写定制组件，避免把"漂亮 JSON"误当成可读产品。
+14. **raw/debug 是兜底，不是主界面**（F2/F2.5）：已知协议字段仍写定制组件；unknown/raw/private 字段可以折叠展示，但优先用 AntD 原生 Tree 或轻量摘要，避免把"漂亮 JSON"误当成可读产品。
 15. **上下文组装是只读边界**（F3）：`context_builder` 只读 StateStore，不写 log/memory/action，不 import watch/driver/SafetyGate，不发 LLM 请求；planner purpose 保持独立，避免把结构化 action plan prompt 硬并进 chat proposal。
 16. **expected 是诊断元数据，不是安全规则**（F4）：它可由 LLM 提出、可被 UI 展示、可回灌给 LLM，但永远不替代 SafetyGate；坏 expected 只能让 expectation check skipped，不能阻止或放行动作。
 17. **可复用 schema 放 protocol，执行编排留 watch**（F4）：expected 的 schema/归一化/纯比对函数在 `protocol/expectations.py`，watch 只负责在唯一执行链路中决定何时调用；这样 API/state 顶层可处理 metadata，却不加载 watch/drivers。
@@ -210,6 +222,8 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 25. **终端 raw fallback 只做摘要**（T3）：Ink 里没有 dashboard 的可折叠 JSON tree，默认展示已知字段与短 raw summary，避免把 config/robot/upload 视图退回整页 JSON。
 26. **Overview 不把整份 state 交给 RawDebug**（F2.5）：已知 schema 先经 viewmodel 消费并定制渲染；RawDebug 只展示 unknown/raw/backend private 片段，避免“折叠全量 JSON”再次成为事实上的主界面。
 27. **展示摘要与 JSON 输入要分开**（F2.5-json-style）：展示区统一用 `JsonSummaryLine` 摘要；仍需用户手写参数的 ProposalPanel 保持明确的 `Params JSON` textarea，避免把输入能力误删。
+28. **RawDebug 也用 AntD 原生组件**（F2.5-raw-debug-antd）：unknown/raw 字段仍可展开调试，但视觉语言必须与 Overview 产品组件一致；因此移除 `react18-json-view`，避免 JSON viewer 成为新的事实主界面。
+29. **TUI 启动参数接受裸 API URL**（TUI-api-arg-fix）：Windows/npm/tsx 链路可能吞掉 `--api` flag；CLI 入口兼容 positional URL，保持文档命令和实际落地命令都能启动，不改变 TUI 的 API-only 边界。
 
 ## 4. 经验教训（流程侧）
 

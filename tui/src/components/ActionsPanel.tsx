@@ -6,11 +6,12 @@ import type { AgentState, ActionItem } from "../types.js";
 interface ActionsPanelProps {
   state: AgentState | null;
   error?: string | null;
+  force?: boolean;
 }
 
-export function ActionsPanel({ state, error }: ActionsPanelProps) {
+export function ActionsPanel({ state, error, force = false }: ActionsPanelProps) {
   const actions = flattenActions(state);
-  if (!error && state?.ready && actions.length === 0) {
+  if (!force && !error && state?.ready && actions.length === 0) {
     return null;
   }
   return (
@@ -18,6 +19,7 @@ export function ActionsPanel({ state, error }: ActionsPanelProps) {
       <Text color="gray">actions</Text>
       {error ? <Text color="red">API unavailable: {error}</Text> : null}
       {!error && !state?.ready ? <Text color="yellow">{state?.message ?? "Workspace is not ready."}</Text> : null}
+      {!error && state?.ready && actions.length === 0 ? <Text color="gray">No actions.</Text> : null}
       {actions.slice(0, 8).map((action) => (
         <ActionRow key={`${action.status}-${action.id}`} action={action} />
       ))}

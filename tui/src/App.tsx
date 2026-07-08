@@ -5,29 +5,42 @@ import { COMMAND_HELP, parseCommand } from "./commands/parser.js";
 import { ActionsPanel } from "./components/ActionsPanel.js";
 import { ChatPanel } from "./components/ChatPanel.js";
 import { CommandInput } from "./components/CommandInput.js";
+import { ConfigPanel } from "./components/ConfigPanel.js";
+import { RobotDetailPanel } from "./components/RobotDetailPanel.js";
+import { RobotsPanel } from "./components/RobotsPanel.js";
 import { StatusBar } from "./components/StatusBar.js";
+import { StatusPanel } from "./components/StatusPanel.js";
 import { Transcript } from "./components/Transcript.js";
+import { UploadsPanel } from "./components/UploadsPanel.js";
 import type {
   AgentState,
   ApiEvent,
   ChatMessage,
+  ConfigResponse,
   HealthState,
   LLMSettingsResponse,
   LlmRuntimeStatus,
+  RegisterRobotPayload,
+  RegisterRobotResponse,
   RuntimeStatus,
   TranscriptEntry,
+  TuiView,
+  UploadResponse,
   WatchStatus
 } from "./types.js";
 
 export interface TuiClient {
   health(): Promise<HealthState>;
   state(): Promise<AgentState>;
+  config(): Promise<ConfigResponse>;
   llmSettings(): Promise<LLMSettingsResponse>;
   testLlmSettings(): Promise<LLMSettingsResponse>;
   submitTask(task: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
   approveAction(actionId: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
   rejectAction(actionId: string, reason: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
   resetWorkspace(confirm: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
+  registerRobot(payload: RegisterRobotPayload): Promise<RegisterRobotResponse>;
+  uploadFile(path: string): Promise<UploadResponse>;
   sendChatStream(message: string, onEvent: (event: ApiEvent) => void, signal?: AbortSignal): Promise<void>;
   events(onEvent: (event: ApiEvent) => void, signal?: AbortSignal): Promise<void>;
 }
@@ -44,11 +57,16 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
   const { exit } = useApp();
   const [health, setHealth] = useState<HealthState | null>(null);
   const [state, setState] = useState<AgentState | null>(null);
+  const [configResponse, setConfigResponse] = useState<ConfigResponse | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
   const [transcriptEntries, setTranscriptEntries] = useState<TranscriptEntry[]>([]);
+  const [activeView, setActiveView] = useState<TuiView>("chat");
+  const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null);
+  const [lastUpload, setLastUpload] = useState<UploadResponse | null>(null);
   const [mode, setMode] = useState<RuntimeStatus["mode"]>(useSse ? "sse" : "polling");
   const [connected, setConnected] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
@@ -100,6 +118,20 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const refreshConfig = useCallback(async () => {
+    try {
+      const nextConfig = await client.config();
+      setConfigResponse(nextConfig);
+      setConfigError(null);
+    } catch (err) {
+      setConfigError(readError(err));
+    }
+  }, [client]);
+
+  useEffect(() => {
+    void refreshConfig();
+  }, [refreshConfig]);
 
   useEffect(() => {
     const additions: TranscriptEntry[] = [];
@@ -246,8 +278,45 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
     setBusy(true);
     try {
       if (command.type === "refresh") {
-        await Promise.all([refresh(), refreshLlmStatus()]);
+        await Promise.all([refresh(), refreshLlmStatus(), refreshConfig()]);
         setNotice("Snapshot refreshed.");
+      } else if (command.type === "view") {
+        setActiveView(command.view);
+        if (["config", "robots", "uploads", "status", "actions"].includes(command.view)) {
+          await Promise.all([refresh(), refreshConfig()]);
+        }
+        setNotice(`View: ${command.view}`);
+      } else if (command.type === "robot") {
+        setSelectedRobotId(command.robotId);
+        setActiveView("robot");
+        await Promise.all([refresh(), refreshConfig()]);
+        setNotice(`Robot: ${command.robotId}`);
+      } else if (command.type === "capabilities") {
+        setSelectedRobotId(command.robotId);
+        setActiveView("capabilities");
+        await Promise.all([refresh(), refreshConfig()]);
+        setNotice(`Capabilities: ${command.robotId}`);
+      } else if (command.type === "upload") {
+        setActiveView("uploads");
+        const response = await client.uploadFile(command.path);
+        setLastUpload(response);
+        setState(response.state);
+        setNotice(response.message);
+      } else if (command.type === "registerRobot") {
+        const response = await client.registerRobot(command.payload);
+        if (response.config) {
+          setConfigResponse({
+            ok: response.ok,
+            message: response.message,
+            config_path: response.config_path,
+            config: response.config
+          });
+        } else {
+          await refreshConfig();
+        }
+        setSelectedRobotId(response.robot_id ?? command.payload.robot_id);
+        setActiveView("config");
+        setNotice(response.message);
       } else if (command.type === "task") {
         const response = await client.submitTask(command.text);
         setState(response.state);
@@ -287,21 +356,89 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
 
   return (
     <>
-      <Transcript entries={transcriptEntries} />
+      {activeView === "chat" ? <Transcript entries={transcriptEntries} /> : null}
       <Box flexDirection="column" gap={1}>
         <StatusBar status={status} busy={busy || streaming} />
-        <ChatPanel
-          hasTranscript={transcriptEntries.length > 0}
-          streamingText={streamingText}
-          streaming={streaming}
-          error={error}
-        />
-        <ActionsPanel state={state} error={error} />
+        {renderActiveView({
+          activeView,
+          status,
+          health,
+          state,
+          configResponse,
+          configError,
+          selectedRobotId,
+          lastUpload,
+          transcriptEntries,
+          streamingText,
+          streaming,
+          error
+        })}
         {notice ? <Box paddingX={1}><Text color="gray">{notice}</Text></Box> : null}
         <CommandInput value={input} onChange={setInput} onSubmit={handleSubmit} disabled={busy} />
       </Box>
     </>
   );
+}
+
+interface ActiveViewProps {
+  activeView: TuiView;
+  status: RuntimeStatus;
+  health: HealthState | null;
+  state: AgentState | null;
+  configResponse: ConfigResponse | null;
+  configError: string | null;
+  selectedRobotId: string | null;
+  lastUpload: UploadResponse | null;
+  transcriptEntries: TranscriptEntry[];
+  streamingText: string;
+  streaming: boolean;
+  error: string | null;
+}
+
+function renderActiveView(props: ActiveViewProps) {
+  switch (props.activeView) {
+    case "status":
+      return <StatusPanel status={props.status} health={props.health} state={props.state} config={props.configResponse} />;
+    case "actions":
+      return <ActionsPanel state={props.state} error={props.error} force />;
+    case "robots":
+      return <RobotsPanel state={props.state} config={props.configResponse} error={props.configError} />;
+    case "config":
+      return <ConfigPanel state={props.state} config={props.configResponse} error={props.configError} />;
+    case "uploads":
+      return <UploadsPanel state={props.state} lastUpload={props.lastUpload} />;
+    case "robot":
+      return (
+        <RobotDetailPanel
+          state={props.state}
+          config={props.configResponse}
+          robotId={props.selectedRobotId}
+          mode="detail"
+        />
+      );
+    case "capabilities":
+      return (
+        <RobotDetailPanel
+          state={props.state}
+          config={props.configResponse}
+          robotId={props.selectedRobotId}
+          mode="capabilities"
+        />
+      );
+    case "chat":
+    default:
+      return (
+        <>
+          <ChatPanel
+            hasTranscript={props.transcriptEntries.length > 0}
+            streamingText={props.streamingText}
+            streaming={props.streaming}
+            error={props.error}
+          />
+          <ActionsPanel state={props.state} error={props.error} />
+        </>
+      );
+  }
 }
 
 export type EventStateApplyResult = "full" | "summary" | "ignored";

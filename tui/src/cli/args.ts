@@ -75,10 +75,18 @@ export function helpText(): string {
     "  /task <text>               Submit task proposal",
     "  /approve <action_id>       Approve execution",
     "  /reject <action_id> <why>  Reject execution",
-    "  /reset <CONFIRM_TEXT>      Reset workspace; backend currently requires true",
-    "  /refresh                   Refresh snapshot",
-    "  /help                      Show commands",
-    "  /quit                      Exit"
+  "  /reset <CONFIRM_TEXT>      Reset workspace; backend currently requires true",
+  "  /refresh                   Refresh snapshot",
+  "  /view <name>               Show status/chat/actions/robots/config/uploads",
+  "  /config                    Show effective config",
+  "  /robots                    Show robot list",
+  "  /robot <robot_id>          Show robot detail",
+  "  /capabilities <robot_id>   Show robot capabilities",
+  "  /upload <path>             Upload and ingest a local text file through API",
+  "  /ingest <path>             Alias for /upload",
+  "  /register-robot <json>     Register robot through existing config API",
+  "  /help                      Show commands",
+  "  /quit                      Exit"
   ].join("\n");
 }
 

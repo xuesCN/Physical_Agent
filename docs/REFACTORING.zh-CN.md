@@ -37,6 +37,7 @@
 | TUI-chat-cli-fix | 修复 SSE summary 覆盖 chat/actions，并改成纵向 CLI transcript | 本轮提交 |
 | TUI-llm-status-rendering | 取消 chat 硬截断，显示 LLM key/连接状态 | 本轮提交 |
 | TUI-append-only-scroll | chat 历史改为 append-only scrollback，降低空闲 watch 重绘 | 本轮提交 |
+| TUI-T3-config-robots-upload | 补齐 Ink TUI config/robots/uploads 视图、上传和注册命令 | 本轮提交 |
 
 ## 2. 分阶段过程记录
 
@@ -154,6 +155,12 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 
 动机：用户实际使用 Windows Terminal 鼠标滚轮查看 TUI 输出时，Ink live frame 持续重绘会把视图拉回活动画面；尤其 watch 每 500ms 发空闲 `watch_step`，TUI 之前每次都更新 `lastRefresh` 并触发完整 refresh。过程：新增 `Transcript` 组件，用 Ink `Static` 把 chat 历史作为 append-only 输出写入终端 scrollback；live 区只保留 StatusBar、streaming/error、Actions、notice 和输入框。`state.chat.messages` 只追加未见过的新消息，用户输入先本地追加并在后端同内容消息回来时抵消，避免重复；stream `done` 若只有 summary，可把最终 assistant 文本追加到 transcript。SSE 空闲 `watch_step executed=0` 不再触发完整 `/api/state` refresh，也不更新 `lastRefresh`，只有 `state` 事件或执行过动作的 watch tick 才刷新 live 区。边界保持：TUI 仍只走 HTTP API/SSE，不读 SQLite/workspace，不改后端 API、watch、driver、SafetyGate 或 Python CLI。验证：`cd tui && npm test` 28 passed；`cd tui && npm run build` 通过；`pytest -q tests/test_safety_boundaries.py` 2 passed；TUI 侧 grep 未发现 watch/driver import、sqlite/fs 直接访问。
 
+### TUI-T3-config-robots-upload：config/robots/uploads 补齐
+
+动机：T1/T2-lite 已让 TUI 能聊天、提交任务、审批与重置，但无 GUI 时仍看不到有效配置、robot/capability 细节，也不能走现有上传摄入路径。过程：在 `tui/` 内补 `TuiView` 单主视图与命令 parser，默认保持 chat transcript + actions 体验，新增 `/view status|chat|actions|robots|config|uploads`、`/config`、`/robots`、`/robot <id>`、`/capabilities <id>`、`/upload`/`/ingest`、`/register-robot <json>`。API client 只复用既有 `GET /api/config`、`POST /api/config/robots`、`POST /api/upload`；新增 formatter 集中做 schema/constraints/endpoint/config 摘要与 secret key 过滤。ConfigPanel 展示 workspace/watch/agent/robots 与 capability schema 摘要，不显示 `api_key`/secret/token；RobotsPanel 与 RobotDetailPanel 合并 config、world、capabilities，显示 driver/mode/endpoint/health、capability 数、requires_approval、params_schema 与 constraints；UploadsPanel 只显示 filename/size/sha/id/status/untrusted/chunks 元数据，不显示正文 preview。
+
+上传边界：TUI 本地读文件只为构造 multipart 请求，先拒绝目录、非允许文本后缀、超过 5MB、明显二进制或非 UTF-8 内容；所有落盘、memory/chunks、untrusted 标记仍由后端 `/api/upload` 完成。`/ingest` 在 TUI 中作为 `/upload` 别名，不走后端本机路径式 `/api/ingest-file`，避免把路径语义扩散到服务端。`/register-robot` 只接受 JSON object 并调用既有后端配置注册 API；TUI 不做通用 YAML 编辑器，也不直接写 `physical-agent.yaml`。边界保持：未改 watch、SafetyGate、driver、approval 或 claim 语义；TUI 仍不 import Python watch/drivers，不读写 SQLite，不新增 execute/driver/hardware-control 命令。验证：`cd tui && npm test` 44 passed；`cd tui && npm run build` 通过；TUI 安全 grep 覆盖无 `driver.execute`、无 `physical_agent.watch`/`physical_agent.drivers` import、无 SQLite 直接访问。
+
 ### CI-lite：宽松 CI 与解释文档
 
 动机：用户希望先理解并使用 CI，但担心测试过严会限制后续重构。过程：将 `.github/workflows/ci.yml` 从默认全量检查改成三层策略：默认阻塞 `Python safety smoke` 与 `Frontend build`；`Ink TUI advisory` 和 `Playwright dashboard advisory` 保留自动反馈但 `continue-on-error`，其中 dashboard e2e 只在 PR 或手动运行触发；Python 3.11/3.12 全量 `pytest` 矩阵改为 `workflow_dispatch` 的 `full=true` 手动触发。新增 `permissions: contents: read` 与 concurrency 取消同分支过期 run，继续在 workflow env 清代理变量与关闭 LLM trace。
@@ -184,6 +191,9 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 20. **TUI 是纯 API/SSE 客户端**（T）：TUI 不直接读写 SQLite/workspace，不 import watch/runtime/driver，不新增硬件控制命令；审批只解除“等人”，不改变 SafetyGate。
 21. **前端偏好用轻量字典与 AntD token，不上重库**（C4/E3）：当前需求只需要高频文案和主题切换，i18next 与新 UI 库继续不引入。
 22. **默认 CI 测安全契约，full run 手动收口**（CI-lite）：自动阻塞项只覆盖安全边界和主 GUI 构建；慢 e2e、TUI 与 Python 版本矩阵提供信号但不默认卡住日常重构。
+23. **TUI upload 只通过 API**（T3）：本地文件读取只用于构造 multipart `POST /api/upload`，不直接写 workspace/uploads，不调用后端路径式 ingest 作为交互入口，untrusted/memory/chunks 仍以后端结果为准。
+24. **TUI 不做 YAML 编辑器**（T3）：config 视图只读，robot 注册只调用既有 `POST /api/config/robots`；编辑已有 robot 或任意 yaml 字段继续由人手改配置并重启 watch。
+25. **终端 raw fallback 只做摘要**（T3）：Ink 里没有 dashboard 的可折叠 JSON tree，默认展示已知字段与短 raw summary，避免把 config/robot/upload 视图退回整页 JSON。
 
 ## 4. 经验教训（流程侧）
 
@@ -198,5 +208,6 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 - **新增全局 UI 叠层先给 e2e 默认关闭路径**（E3 的教训）：首次 Tour 这类全局浮层会遮挡旧流程测试；默认测试态应显式写 localStorage 关闭，再单独测试首次打开/关闭/重开。
 - **e2e webServer 不应复用用户本地配置**（T/C4/E3 的教训）：Playwright 启动 API 前先写 `.tmp/e2e/physical-agent.yaml` 与临时 workspace，避免 `--force` 初始化覆盖根目录 ignored 的个人运行配置。
 - **CI 分层要写给人看**（CI-lite 的教训）：只在 yaml 里调 `continue-on-error` 不够；必须说明哪些检查阻塞、哪些只是信号、什么时候手动 full run，否则“宽松”会被误读成“可以忽略”。
+- **同一能力多入口要复用同一后端边界**（T3 的教训）：dashboard 已有 `/api/upload`、`/api/config`、`/api/config/robots` 时，TUI 只补客户端和展示，不应另开路径或把本地文件/配置写入规则复制到终端侧。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

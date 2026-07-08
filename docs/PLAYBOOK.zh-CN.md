@@ -121,7 +121,8 @@
 **坑**：Ink 是 Node 生态——引入了第二运行时依赖，若在意可改用 Python 的 Textual（同语言零新增依赖），**决策记录：选 Ink 是因为技能与 dashboard 的 React 复用 + Claude Code 同款生态**；SSE 断线要做和 dashboard 一样的降级轮询；终端宽度自适应用 Ink 的 flexbox，别写死列宽。
 **验收**：T1 三面板可用、chat 流式不卡顿；`ink-testing-library` 覆盖核心组件渲染。
 **实现口径（2026-07-07）**：已落 `tui/` 独立包，包含 API client、SSE parser、command parser 与 StatusBar/ChatPanel/ActionsPanel/CommandInput。TUI 只调用 HTTP API/SSE，不读 SQLite/workspace，不 import Python/watch/driver。T2-lite 已含 chat、`/task`、`/approve`、`/reject`、`/reset true`、`/refresh`、`/help`、`/quit`；`/execute`、`/driver`、`/hardware-control` 明确拒绝。T3 的 config/upload 仍未完成。
-**验证（2026-07-07）**：`cd tui && npm run build` 通过；`cd tui && npm test` 13 passed，覆盖 SSE block、断块流解析、命令解析、StatusBar 与 ActionsPanel 渲染。
+**实现口径（2026-07-08 T3）**：补 view/page 概念，默认仍是 chat transcript + actions 的纵向终端体验；`/view status|chat|actions|robots|config|uploads` 可切单主视图，StatusBar 与 CommandInput 常驻。`/config` 复用 `GET /api/config` 展示 workspace/watch/agent/robots 摘要并过滤 `api_key`/secret/token；`/robots`、`/robot <id>`、`/capabilities <id>` 合并 config、world、capabilities 展示 driver/mode/endpoint/health、requires_approval、params_schema 与 constraints 摘要。`/upload <path>` 与 `/ingest <path>` 只用本地文件构造 multipart `POST /api/upload` 请求，沿用 dashboard 的文本后缀与 5MB 限制，前置拒绝目录、过大、明显二进制或非 UTF-8 文件；上传内容不直接注入 LLM，视图只显示 filename/size/sha/id/untrusted/chunks 元数据。`/register-robot <json>` 仅调用既有 `POST /api/config/robots`，不做 YAML 编辑器、不直接写 `physical-agent.yaml`。Windows Terminal / PowerShell 下推荐用 `cd tui; npm start -- --api http://127.0.0.1:8766` 启动；带空格路径用引号传给 `/upload`。
+**验证**：2026-07-07：`cd tui && npm run build` 通过；`cd tui && npm test` 13 passed。2026-07-08 T3：`cd tui && npm test` 44 passed；`cd tui && npm run build` 通过；TUI 安全 grep 覆盖无 `driver.execute`、无 `physical_agent.watch`/`physical_agent.drivers` import、无 SQLite 直接访问。
 
 ## C4 i18n / E3 视觉打磨
 

@@ -1,5 +1,16 @@
 import { readSseStream } from "./sse.js";
-import type { ActionItem, AgentState, ApiEvent, HealthState, LLMSettingsResponse } from "../types.js";
+import { uploadLocalFile } from "./upload.js";
+import type {
+  ActionItem,
+  AgentState,
+  ApiEvent,
+  ConfigResponse,
+  HealthState,
+  LLMSettingsResponse,
+  RegisterRobotPayload,
+  RegisterRobotResponse,
+  UploadResponse
+} from "../types.js";
 
 export class ApiClient {
   readonly apiBase: string;
@@ -14,6 +25,10 @@ export class ApiClient {
 
   state(): Promise<AgentState> {
     return this.json("/api/state", undefined, true);
+  }
+
+  config(): Promise<ConfigResponse> {
+    return this.json("/api/config", undefined, true);
   }
 
   llmSettings(): Promise<LLMSettingsResponse> {
@@ -50,6 +65,17 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify({ confirm: normalizeResetConfirm(confirm) })
     });
+  }
+
+  registerRobot(payload: RegisterRobotPayload): Promise<RegisterRobotResponse> {
+    return this.json("/api/config/robots", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  }
+
+  uploadFile(path: string): Promise<UploadResponse> {
+    return uploadLocalFile(this.apiBase, path);
   }
 
   async sendChatStream(

@@ -24,7 +24,7 @@ export function StatusBar({ status, busy = false }: StatusBarProps) {
       </Box>
       <Box gap={1} flexWrap="wrap">
         <Text>backend {status.backend}</Text>
-        <Text>watch {status.watch}</Text>
+        <Text>Watch: {status.watch}</Text>
         <Text>last {status.lastRefresh ?? "never"}</Text>
         <Text color={status.message === "Ready." ? "green" : "yellow"}>{status.message}</Text>
       </Box>

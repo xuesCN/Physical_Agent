@@ -22,6 +22,41 @@ test("StatusBar renders connection state", () => {
   assert.match(view.lastFrame() ?? "", /Physical Agent TUI/);
   assert.match(view.lastFrame() ?? "", /sqlite/);
   assert.match(view.lastFrame() ?? "", /SSE/);
+  assert.match(view.lastFrame() ?? "", /Watch: enabled/);
+});
+
+test("StatusBar renders unknown and disabled watch states without snapshot wording", () => {
+  const unknown = render(
+    <StatusBar
+      status={{
+        apiBase: "http://127.0.0.1:8766",
+        connected: false,
+        mode: "polling",
+        lastRefresh: null,
+        backend: "-",
+        watch: "unknown",
+        message: "Loading"
+      }}
+    />
+  );
+  assert.match(unknown.lastFrame() ?? "", /Watch: unknown/);
+  assert.doesNotMatch(unknown.lastFrame() ?? "", /snapshot/);
+  unknown.unmount();
+
+  const disabled = render(
+    <StatusBar
+      status={{
+        apiBase: "http://127.0.0.1:8766",
+        connected: true,
+        mode: "sse",
+        lastRefresh: "12:00:00",
+        backend: "sqlite",
+        watch: "disabled",
+        message: "Ready."
+      }}
+    />
+  );
+  assert.match(disabled.lastFrame() ?? "", /Watch: disabled/);
 });
 
 test("ActionsPanel renders approval status", () => {

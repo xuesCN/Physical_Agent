@@ -48,9 +48,11 @@ export interface RuntimeStatus {
   mode: "sse" | "polling" | "degraded";
   lastRefresh: string | null;
   backend: string;
-  watch: string;
+  watch: WatchStatus;
   message: string;
 }
+
+export type WatchStatus = "enabled" | "disabled" | "unknown";
 
 export type ParsedCommand =
   | { type: "chat"; text: string }

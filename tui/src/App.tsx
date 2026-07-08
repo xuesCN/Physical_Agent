@@ -6,16 +6,28 @@ import { ActionsPanel } from "./components/ActionsPanel.js";
 import { ChatPanel } from "./components/ChatPanel.js";
 import { CommandInput } from "./components/CommandInput.js";
 import { StatusBar } from "./components/StatusBar.js";
-import type { AgentState, ApiEvent, ChatMessage, HealthState, RuntimeStatus } from "./types.js";
+import type { AgentState, ApiEvent, ChatMessage, HealthState, RuntimeStatus, WatchStatus } from "./types.js";
+
+export interface TuiClient {
+  health(): Promise<HealthState>;
+  state(): Promise<AgentState>;
+  submitTask(task: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
+  approveAction(actionId: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
+  rejectAction(actionId: string, reason: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
+  resetWorkspace(confirm: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
+  sendChatStream(message: string, onEvent: (event: ApiEvent) => void, signal?: AbortSignal): Promise<void>;
+  events(onEvent: (event: ApiEvent) => void, signal?: AbortSignal): Promise<void>;
+}
 
 interface AppProps {
   apiBase: string;
   pollIntervalMs: number;
   useSse: boolean;
+  client?: TuiClient;
 }
 
-export function App({ apiBase, pollIntervalMs, useSse }: AppProps) {
-  const client = useMemo(() => new ApiClient(apiBase), [apiBase]);
+export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }: AppProps) {
+  const client = useMemo<TuiClient>(() => injectedClient ?? new ApiClient(apiBase), [apiBase, injectedClient]);
   const { exit } = useApp();
   const [health, setHealth] = useState<HealthState | null>(null);
   const [state, setState] = useState<AgentState | null>(null);
@@ -28,6 +40,7 @@ export function App({ apiBase, pollIntervalMs, useSse }: AppProps) {
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(COMMAND_HELP);
   const [error, setError] = useState<string | null>(null);
+  const [watchStatus, setWatchStatus] = useState<WatchStatus>("unknown");
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   const refresh = useCallback(async () => {
@@ -68,18 +81,30 @@ export function App({ apiBase, pollIntervalMs, useSse }: AppProps) {
       return;
     }
     const controller = new AbortController();
+    const enterPollingFallback = (reason: string) => {
+      setMode("degraded");
+      setConnected(false);
+      setError(reason);
+    };
     client
       .events((event) => {
         setConnected(true);
         setMode("sse");
+        const nextWatchStatus = watchStatusFromEvent(event);
+        if (nextWatchStatus) {
+          setWatchStatus(nextWatchStatus);
+        }
         applyEvent(event, setState);
         setLastRefresh(new Date().toLocaleTimeString());
       }, controller.signal)
+      .then(() => {
+        if (shouldFallbackAfterSseClose(controller.signal)) {
+          enterPollingFallback(sseClosedFallbackMessage());
+        }
+      })
       .catch((err) => {
-        if (!controller.signal.aborted) {
-          setMode("degraded");
-          setConnected(false);
-          setError(`SSE disconnected; polling fallback active. ${readError(err)}`);
+        if (shouldFallbackAfterSseClose(controller.signal)) {
+          enterPollingFallback(sseErrorFallbackMessage(err));
         }
       });
     return () => controller.abort();
@@ -91,7 +116,7 @@ export function App({ apiBase, pollIntervalMs, useSse }: AppProps) {
     mode,
     lastRefresh,
     backend: state?.backend ?? health?.backend ?? "-",
-    watch: state ? "snapshot" : "unknown",
+    watch: watchStatus,
     message: state?.message ?? health?.message ?? (error ? "API unavailable" : "Loading")
   };
 
@@ -143,28 +168,12 @@ export function App({ apiBase, pollIntervalMs, useSse }: AppProps) {
   }
 
   async function runChat(text: string) {
-    setStreaming(true);
-    setStreamingText("");
-    let content = "";
-    await client.sendChatStream(text, (event) => {
-      const payload = event.payload ?? {};
-      if (event.type === "delta") {
-        content += String(payload.delta ?? "");
-        setStreamingText(content);
-      }
-      if (event.type === "done") {
-        if (isAgentState(payload.state)) {
-          setState(payload.state);
-          setStreamingText("");
-        } else {
-          setStreamingText(String(payload.reply ?? content));
-        }
-      }
-      if (event.type === "error") {
-        setNotice(String(payload.message ?? "Streaming chat failed."));
-      }
+    await runTuiChatStream(client, text, {
+      setStreaming,
+      setStreamingText,
+      setState,
+      setNotice
     });
-    setStreaming(false);
   }
 
   const messages: ChatMessage[] = state?.chat?.messages ?? [];
@@ -194,8 +203,80 @@ function applyEvent(event: ApiEvent, setState: (state: AgentState) => void) {
   }
 }
 
+export function watchStatusFromEvent(event: ApiEvent): WatchStatus | null {
+  const value = event.payload?.watch_enabled;
+  if (value === true) {
+    return "enabled";
+  }
+  if (value === false) {
+    return "disabled";
+  }
+  return null;
+}
+
+export function shouldFallbackAfterSseClose(signal: AbortSignal): boolean {
+  return !signal.aborted;
+}
+
+export function sseClosedFallbackMessage(): string {
+  return "SSE stream closed; using polling fallback.";
+}
+
+export function sseErrorFallbackMessage(error: unknown): string {
+  return `SSE disconnected; polling fallback active. ${readError(error)}`;
+}
+
+interface ChatStreamHandlers {
+  setStreaming: (value: boolean) => void;
+  setStreamingText: (value: string) => void;
+  setState: (state: AgentState) => void;
+  setNotice: (message: string) => void;
+}
+
+export async function runTuiChatStream(
+  client: Pick<TuiClient, "sendChatStream">,
+  text: string,
+  handlers: ChatStreamHandlers
+): Promise<void> {
+  handlers.setStreaming(true);
+  handlers.setStreamingText("");
+  let content = "";
+  try {
+    await client.sendChatStream(text, (event) => {
+      const payload = event.payload ?? {};
+      if (event.type === "delta") {
+        content += String(payload.delta ?? "");
+        handlers.setStreamingText(content);
+      }
+      if (event.type === "done") {
+        if (isAgentState(payload.state)) {
+          handlers.setState(payload.state);
+          handlers.setStreamingText("");
+        } else {
+          handlers.setStreamingText(String(payload.reply ?? content));
+        }
+      }
+      if (event.type === "error") {
+        handlers.setNotice(String(payload.message ?? "Streaming chat failed."));
+      }
+    });
+  } catch (err) {
+    if (!isAbortError(err)) {
+      handlers.setNotice(`Streaming chat failed. ${readError(err)}`);
+    }
+  } finally {
+    handlers.setStreaming(false);
+  }
+}
+
 function isAgentState(value: unknown): value is AgentState {
   return Boolean(value && typeof value === "object" && "ready" in value);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException
+    ? error.name === "AbortError"
+    : error instanceof Error && error.name === "AbortError";
 }
 
 function readError(error: unknown): string {

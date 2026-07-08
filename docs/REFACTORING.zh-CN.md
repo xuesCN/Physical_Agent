@@ -33,6 +33,7 @@
 | W3 | transport 断线重连：可选 policy、fail-fast、driver reinit hook | `1d9a812`, `7762c0f` |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
+| TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
 
 ## 2. 分阶段过程记录
 
@@ -133,6 +134,10 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 动机：给 SSH/无 GUI/开发者日常场景一个交互式终端入口，同时把 GUI 的语言、暗色与首次引导补齐，并把 E0 遗留的 reset/hardware/config 主路径纳入 e2e。过程：新增 `tui/` 独立 Node/TypeScript/Ink 包，入口 `npm start -- --api http://127.0.0.1:8766`，只封装 HTTP API 与 SSE，状态/chat/actions 三面板 + polling fallback，T2-lite 命令覆盖 chat、task、approve/reject、reset/refresh/help/quit；直接硬件控制命令显式拒绝。React GUI 侧新增 `frontend/src/locales/`、`MessagesProvider`、AntD locale、`darkAlgorithm`、`body[data-theme]` 变量和 3 步 Tour；Settings 提供语言、主题、重开 Tour。e2e 先固定默认 English/light/Tour dismissed，避免新引导遮挡旧流程，再单独测试首次 Tour；Playwright webServer 先初始化 `.tmp/e2e` 临时 workspace，避免覆盖根目录本地配置。CI 新增 Python matrix、frontend build、Playwright e2e、tui build/test，并让 Playwright webServer 命令支持 Windows/Linux 与环境变量覆盖。legacy GUI server 同步去重为“HTTP/静态路由 + 复用 `gui.controller.GuiController`”，controller 通过 `open_state_store` 保持 markdown/sqlite 后端兼容。
 
 边界保持：没有修改 `physical_agent/watch`、driver loader、SafetyGate 或 `driver.execute` 调用链；TUI 不读 SQLite/workspace，不 import Python backend/watch/driver，只通过 API 提案/审批。验证：`.\.venv\Scripts\python.exe -m pytest -q` 304 passed（1 个既有 StarletteDeprecationWarning）；`cd frontend && npm run build` 通过；`cd frontend && npx playwright test` 18 passed；`cd tui && npm run build` 通过；`cd tui && npm test` 13 passed。
+
+### TUI-review-fix：stream 清理、SSE EOF 降级、watch 状态
+
+动机：修复 review 指出的三个 TUI 可用性问题，不扩大到后端或 GUI。过程：把 chat stream 处理收敛到 `runTuiChatStream()`，确保 reject/AbortError/done 都在 `finally` 清理 `streaming`；`/api/events` SSE 正常 EOF 与异常断开统一进入 degraded/polling（组件清理触发的 abort 不降级）；从 hello 事件读取 `watch_enabled`，StatusBar 显示 `Watch: enabled/disabled/unknown`，不再把 snapshot 当 watch 状态。边界保持：TUI 仍只走 HTTP API/SSE，未改 watch、driver、SafetyGate、SQLite 或 Python CLI。验证：`cd tui && npm test` 20 passed；`cd tui && npm run build` 通过；`pytest -q tests/test_safety_boundaries.py` 2 passed。
 
 ### CI-lite：宽松 CI 与解释文档
 

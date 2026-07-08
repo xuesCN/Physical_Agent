@@ -10,7 +10,7 @@
     "start": "tsx src/main.tsx",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\""
+    "test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\" \"tests/**/*.test.ts\" \"tests/**/*.test.tsx\""
   },
   "dependencies": {
     "ink": "^5.0.1",

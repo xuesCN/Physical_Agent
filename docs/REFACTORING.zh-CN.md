@@ -42,6 +42,7 @@
 | TUI-llm-status-rendering | 取消 chat 硬截断，显示 LLM key/连接状态 | 本轮提交 |
 | TUI-append-only-scroll | chat 历史改为 append-only scrollback，降低空闲 watch 重绘 | 本轮提交 |
 | TUI-T3-config-robots-upload | 补齐 Ink TUI config/robots/uploads 视图、上传和注册命令 | 本轮提交 |
+| TUI-command-acceptance | 增加 Ink TUI 用户命令场景验收与命令矩阵 | 本轮提交 |
 
 ## 2. 分阶段过程记录
 
@@ -187,6 +188,10 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 
 上传边界：TUI 本地读文件只为构造 multipart 请求，先拒绝目录、非允许文本后缀、超过 5MB、明显二进制或非 UTF-8 内容；所有落盘、memory/chunks、untrusted 标记仍由后端 `/api/upload` 完成。`/ingest` 在 TUI 中作为 `/upload` 别名，不走后端本机路径式 `/api/ingest-file`，避免把路径语义扩散到服务端。`/register-robot` 只接受 JSON object 并调用既有后端配置注册 API；TUI 不做通用 YAML 编辑器，也不直接写 `physical-agent.yaml`。边界保持：未改 watch、SafetyGate、driver、approval 或 claim 语义；TUI 仍不 import Python watch/drivers，不读写 SQLite，不新增 execute/driver/hardware-control 命令。验证：`cd tui && npm test` 44 passed；`cd tui && npm run build` 通过；TUI 安全 grep 覆盖无 `driver.execute`、无 `physical_agent.watch`/`physical_agent.drivers` import、无 SQLite 直接访问。
 
+### TUI-command-acceptance：命令场景验收
+
+动机：TUI 已有 parser、组件、SSE 和 upload 单元测试，但用户真实输入路径仍缺少“输入命令→mock API/SSE→终端输出→状态变化”的完整验收；这会让 README/帮助里新增命令时只测到解析，不测到实际交互。过程：新增 `tui/tests/scenarios/{basic,chat,actions,config,robots,upload,error}.scenario`，每个场景声明命令输入、API/SSE mock、输出断言、调用次数和 state/config 断言；新增 `tests/scenario-runner.test.tsx` 用自定义 Ink stdin/stdout harness 驱动真实 `App`，并把 `tests/**/*.test.tsx` 纳入 `npm test`。覆盖 `/help`、`/view status|chat|actions|config|robots|uploads`、`/task`、`/approve`、`/reject`、`/reset`、`/config`、`/robots`、`/robot`、`/capabilities`、`/upload`、`/ingest`、`/register-robot`、`/refresh`、`/quit`，以及 API offline、SSE error、SSE clean EOF、polling fallback、缺参、非法命令、上传失败和 reset confirmation failure。新增 `docs/tui-command-matrix.md` 把命令、用途、API endpoint、测试文件和覆盖状态对齐。边界保持：未改后端 API、watch、SafetyGate、driver 或 SQLite；TUI 仍是纯 API/SSE 客户端。验证：`node --import tsx --test tests/scenario-runner.test.tsx` 11 passed；`cd tui && npm test` 58 passed；`cd tui && npm run build` 通过。
+
 ### CI-lite：宽松 CI 与解释文档
 
 动机：用户希望先理解并使用 CI，但担心测试过严会限制后续重构。过程：将 `.github/workflows/ci.yml` 从默认全量检查改成三层策略：默认阻塞 `Python safety smoke` 与 `Frontend build`；`Ink TUI advisory` 和 `Playwright dashboard advisory` 保留自动反馈但 `continue-on-error`，其中 dashboard e2e 只在 PR 或手动运行触发；Python 3.11/3.12 全量 `pytest` 矩阵改为 `workflow_dispatch` 的 `full=true` 手动触发。新增 `permissions: contents: read` 与 concurrency 取消同分支过期 run，继续在 workflow env 清代理变量与关闭 LLM trace。
@@ -224,6 +229,7 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 27. **展示摘要与 JSON 输入要分开**（F2.5-json-style）：展示区统一用 `JsonSummaryLine` 摘要；仍需用户手写参数的 ProposalPanel 保持明确的 `Params JSON` textarea，避免把输入能力误删。
 28. **RawDebug 也用 AntD 原生组件**（F2.5-raw-debug-antd）：unknown/raw 字段仍可展开调试，但视觉语言必须与 Overview 产品组件一致；因此移除 `react18-json-view`，避免 JSON viewer 成为新的事实主界面。
 29. **TUI 启动参数接受裸 API URL**（TUI-api-arg-fix）：Windows/npm/tsx 链路可能吞掉 `--api` flag；CLI 入口兼容 positional URL，保持文档命令和实际落地命令都能启动，不改变 TUI 的 API-only 边界。
+30. **TUI 命令验收以场景文件为真源**（TUI-command-acceptance）：命令级回归不只测 parser 或组件，而是用 `.scenario` 记录输入、mock API/SSE、输出与状态变化；新增命令必须更新场景和 `docs/tui-command-matrix.md`，避免 README/帮助与可测行为分叉。
 
 ## 4. 经验教训（流程侧）
 
@@ -239,6 +245,7 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 - **e2e webServer 不应复用用户本地配置**（T/C4/E3 的教训）：Playwright 启动 API 前先写 `.tmp/e2e/physical-agent.yaml` 与临时 workspace，避免 `--force` 初始化覆盖根目录 ignored 的个人运行配置。
 - **CI 分层要写给人看**（CI-lite 的教训）：只在 yaml 里调 `continue-on-error` 不够；必须说明哪些检查阻塞、哪些只是信号、什么时候手动 full run，否则“宽松”会被误读成“可以忽略”。
 - **同一能力多入口要复用同一后端边界**（T3 的教训）：dashboard 已有 `/api/upload`、`/api/config`、`/api/config/robots` 时，TUI 只补客户端和展示，不应另开路径或把本地文件/配置写入规则复制到终端侧。
+- **Ink 交互测试要模拟 readable stdin，而不是只测组件快照**（TUI-command-acceptance 的教训）：Ink 5 通过 `stdin.read()` 和 `readable` 驱动输入，scenario runner 需要提供带 `ref/unref/read` 的测试流；命令粘贴与回车之间也要留给 React/Ink 一次状态更新，否则容易测到旧输入值。
 - **可读性验收要锁“不开 raw 能否回答问题”**（F2.5 的教训）：只断言 JSON tree 折叠不够；Playwright 应直接检查用户问题对应的表格、卡片、Descriptions 是否存在，并确认 raw 内容默认不可见。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

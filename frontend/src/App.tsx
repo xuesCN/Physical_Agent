@@ -16,9 +16,11 @@ import { ActionBoard } from "./components/ActionBoard";
 import { ChatPanel } from "./components/ChatPanel";
 import { ContextTabs } from "./components/ContextTabs";
 import { ProposalPanel } from "./components/ProposalPanel";
+import { RawDebug } from "./components/RawDebug";
 import { RobotsPanel } from "./components/RobotsPanel";
 import { SidebarNav } from "./components/SidebarNav";
 import type { PageKey } from "./components/SidebarNav";
+import { StateOverviewPanel } from "./components/StateOverviewPanel";
 import { StatusBar } from "./components/StatusBar";
 import {
   LANGUAGE_STORAGE_KEY,
@@ -54,9 +56,6 @@ const UploadPanel = lazy(() =>
 );
 const EventsPanel = lazy(() =>
   import("./components/EventsPanel").then((m) => ({ default: m.EventsPanel }))
-);
-const RawDebug = lazy(() =>
-  import("./components/RawDebug").then((m) => ({ default: m.RawDebug }))
 );
 const SettingsPanel = lazy(() =>
   import("./components/SettingsPanel").then((m) => ({ default: m.SettingsPanel }))
@@ -783,6 +782,7 @@ function renderPageContent({
 
   return (
     <div className="overview-grid">
+      <StateOverviewPanel state={state} health={health} />
       <div className="main-column">
         <ActionBoard
           actions={state?.actions}

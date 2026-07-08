@@ -13,6 +13,7 @@ interface JsonTreeLazyProps {
 
 interface RawJsonFallbackProps extends JsonTreeLazyProps {
   label?: string;
+  testId?: string;
 }
 
 export function JsonTreeLazy({ value, className }: JsonTreeLazyProps) {
@@ -38,13 +39,19 @@ export function JsonTreeLazy({ value, className }: JsonTreeLazyProps) {
   );
 }
 
-export function RawJsonFallback({ value, label = "Raw JSON", className }: RawJsonFallbackProps) {
+export function RawJsonFallback({
+  value,
+  label = "Raw JSON",
+  className,
+  testId
+}: RawJsonFallbackProps) {
   return (
     <Collapse
       ghost
       size="small"
       destroyOnHidden
       className="raw-json-collapse"
+      data-testid={testId}
       items={[
         {
           key: "raw",

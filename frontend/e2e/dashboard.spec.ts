@@ -417,6 +417,107 @@ test("F2 readable context shows feedback world and capabilities without raw debu
   expectNoConsoleErrors(consoleErrors);
 });
 
+test("F2.5 state overview uses productized schema components with collapsed raw debug", async ({
+  page,
+}) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await mockReadyApiWithRobot(page, {
+    backend_private_snapshot: { revision: 7 },
+    capabilities: {
+      robots: {
+        arm_1: {
+          kind: "arm",
+          driver: "mock_arm",
+          mode: "simulation",
+          status: "connected",
+          custom_driver_note: "hidden in raw debug",
+          capabilities: [
+            {
+              name: "pick",
+              description: "Pick up a known object.",
+              params_schema: {
+                type: "object",
+                properties: { object_id: { type: "string" } },
+                required: ["object_id"],
+              },
+              requires_approval: true,
+            },
+            {
+              name: "place",
+              description: "Place a held object at a named target.",
+              params_schema: {
+                type: "object",
+                properties: { target_id: { type: "string" } },
+                required: ["target_id"],
+              },
+              requires_approval: false,
+            },
+          ],
+        },
+      },
+    },
+    world: {
+      summary: "The arm is idle. Visible objects: red_block, tray.",
+      state: {
+        robots: {
+          arm_1: { health: "ok", mode: "simulation" },
+        },
+        objects: {
+          red_block: {
+            type: "block",
+            location: "table",
+            pose: { x: 0.2, y: 0.1, z: 0.0 },
+            status: "available",
+            color: "red",
+          },
+          tray: {
+            type: "tray",
+            location: "bench",
+            pose: { x: 0.5, y: 0.2, z: 0.0 },
+            status: "ready",
+          },
+        },
+        environment: {
+          bounds: { x_min: -1, x_max: 1, y_min: -0.5, y_max: 0.5, z_min: 0, z_max: 1 },
+          calibration_note: "hidden in raw debug",
+        },
+        raw: { driver_note: "mock-arm snapshot" },
+      },
+    },
+  });
+
+  await page.goto("/");
+  await expectHealthyShell(page);
+
+  await expect(page.getByTestId("system-status-card")).toContainText("Ready");
+  await expect(page.getByTestId("system-status-card")).toContainText("sqlite");
+  await expect(page.getByTestId("system-status-card")).toContainText(
+    "C:/tmp/physical-agent-workspace",
+  );
+  await expect(page.getByTestId("robots-table")).toContainText("arm_1");
+  await expect(page.getByTestId("robots-table")).toContainText("mock_arm");
+  await expect(page.getByTestId("robots-table")).toContainText("simulation");
+  await expect(page.getByTestId("robots-table")).toContainText("2");
+  await expect(page.getByTestId("capability-cards")).toContainText("pick");
+  await expect(page.getByTestId("capability-cards")).toContainText("place");
+  await expect(page.getByTestId("capability-cards")).toContainText("object_id*: string");
+  await expect(page.getByTestId("capability-cards")).toContainText("approval required");
+  await expect(page.getByTestId("environment-descriptions")).toContainText("x bounds");
+  await expect(page.getByTestId("environment-descriptions")).toContainText("-1 to 1");
+  await expect(page.getByTestId("environment-descriptions")).toContainText("-0.5 to 0.5");
+  await expect(page.getByTestId("world-objects-table")).toContainText("red_block");
+  await expect(page.getByTestId("world-objects-table")).toContainText("tray");
+  await expect(page.getByTestId("world-objects-table")).toContainText("available");
+  await expect(page.getByTestId("raw-debug-panel")).toContainText("Unknown/raw fields");
+  await expect(
+    page.getByTestId("raw-debug-fallback").locator(".ant-collapse-content-active"),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("raw-debug-panel").locator(".json-tree")).toHaveCount(0);
+  await expect(page.getByTestId("raw-debug-panel")).not.toContainText("driver_note");
+  await expect(page.getByText("Full state JSON")).toHaveCount(0);
+  expectNoConsoleErrors(consoleErrors);
+});
+
 test("settings panel saves and tests LLM settings with mocked API", async ({
   page,
 }) => {

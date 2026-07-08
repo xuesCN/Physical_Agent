@@ -35,6 +35,13 @@ export interface ChatMessage {
   metadata?: Record<string, unknown>;
 }
 
+export interface TranscriptEntry {
+  id: string;
+  role: string;
+  content: string;
+  created_at?: string;
+}
+
 export interface ApiEvent {
   id?: number;
   type: string;

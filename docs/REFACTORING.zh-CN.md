@@ -36,6 +36,7 @@
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
 | TUI-chat-cli-fix | 修复 SSE summary 覆盖 chat/actions，并改成纵向 CLI transcript | 本轮提交 |
 | TUI-llm-status-rendering | 取消 chat 硬截断，显示 LLM key/连接状态 | 本轮提交 |
+| TUI-append-only-scroll | chat 历史改为 append-only scrollback，降低空闲 watch 重绘 | 本轮提交 |
 
 ## 2. 分阶段过程记录
 
@@ -148,6 +149,10 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 ### TUI-llm-status-rendering：LLM 状态与 chat 全量显示
 
 动机：用户发现 TUI chat 速度异常快且问答像固定模板，实际检查显示 LLM settings 指向 Ark/Doubao 但连接测试返回 401 `API key status is not active`，同时 TUI 单条 chat 被压成一行并硬截断到 220 字符。过程：TUI client 增加 `/api/settings/llm` 与 `/api/settings/llm/test` 读取，启动和用户 `/refresh` 时检查一次 LLM 状态，StatusBar 显示模型、`key set/missing` 与 `LLM connected/failed` 的短原因（401/key inactive 压缩为短文案，不显示 key 明文）；chat 渲染取消 `replace(/\s+/g, " ").slice(0, 220)`，保留换行与完整文本，只继续限制最近 10 条历史以免旧记录淹没终端。边界保持：TUI 仍只走 HTTP API，不读 `.llm.json`、SQLite 或 workspace 文件，不改后端 LLM fallback、安全链、watch、driver 或 Python CLI。验证：`cd tui && npm test` 25 passed；`cd tui && npm run build` 通过；`pytest -q tests/test_safety_boundaries.py` 2 passed；TUI 侧 grep 未发现 watch/driver import、sqlite/fs 直接访问。
+
+### TUI-append-only-scroll：终端 scrollback 与空闲重绘
+
+动机：用户实际使用 Windows Terminal 鼠标滚轮查看 TUI 输出时，Ink live frame 持续重绘会把视图拉回活动画面；尤其 watch 每 500ms 发空闲 `watch_step`，TUI 之前每次都更新 `lastRefresh` 并触发完整 refresh。过程：新增 `Transcript` 组件，用 Ink `Static` 把 chat 历史作为 append-only 输出写入终端 scrollback；live 区只保留 StatusBar、streaming/error、Actions、notice 和输入框。`state.chat.messages` 只追加未见过的新消息，用户输入先本地追加并在后端同内容消息回来时抵消，避免重复；stream `done` 若只有 summary，可把最终 assistant 文本追加到 transcript。SSE 空闲 `watch_step executed=0` 不再触发完整 `/api/state` refresh，也不更新 `lastRefresh`，只有 `state` 事件或执行过动作的 watch tick 才刷新 live 区。边界保持：TUI 仍只走 HTTP API/SSE，不读 SQLite/workspace，不改后端 API、watch、driver、SafetyGate 或 Python CLI。验证：`cd tui && npm test` 28 passed；`cd tui && npm run build` 通过；`pytest -q tests/test_safety_boundaries.py` 2 passed；TUI 侧 grep 未发现 watch/driver import、sqlite/fs 直接访问。
 
 ### CI-lite：宽松 CI 与解释文档
 

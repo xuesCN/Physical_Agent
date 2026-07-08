@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   applyEvent,
   runTuiChatStream,
+  shouldRefreshFullStateFromEvent,
+  shouldUpdateLastRefreshFromEvent,
   shouldFallbackAfterSseClose,
   sseClosedFallbackMessage,
   sseErrorFallbackMessage,
@@ -99,6 +101,35 @@ test("chat stream done with summary state keeps visible reply text", async () =>
   assert.deepEqual(calls.states, []);
 });
 
+test("chat stream done with summary state can append reply to transcript", async () => {
+  const calls = createChatCalls({ includeTranscript: true });
+
+  await runTuiChatStream(
+    {
+      sendChatStream: async (_message, onEvent) => {
+        onEvent({ type: "delta", payload: { delta: "hello" } });
+        onEvent({
+          type: "done",
+          payload: {
+            reply: "hello",
+            state: {
+              ok: true,
+              ready: true,
+              chat_messages: 2
+            }
+          }
+        });
+      }
+    },
+    "hello",
+    calls.handlers
+  );
+
+  assert.deepEqual(calls.streamingText, ["", "hello", ""]);
+  assert.deepEqual(calls.transcript, [{ role: "assistant", content: "hello" }]);
+  assert.deepEqual(calls.states, []);
+});
+
 test("SSE summary state does not overwrite full TUI state", () => {
   const states: AgentState[] = [];
   const result = applyEvent(
@@ -140,6 +171,37 @@ test("full SSE state applies normally", () => {
   assert.deepEqual(states, [readyState]);
 });
 
+test("idle watch_step summary does not force live refresh churn", () => {
+  assert.equal(
+    shouldRefreshFullStateFromEvent({
+      type: "watch_step",
+      payload: { executed: 0, state: { ok: true, ready: true, chat_messages: 2 } }
+    }),
+    false
+  );
+  assert.equal(
+    shouldUpdateLastRefreshFromEvent({
+      type: "watch_step",
+      payload: { executed: 0 }
+    }),
+    false
+  );
+  assert.equal(
+    shouldRefreshFullStateFromEvent({
+      type: "watch_step",
+      payload: { executed: 1, state: { ok: true, ready: true, chat_messages: 2 } }
+    }),
+    true
+  );
+  assert.equal(
+    shouldUpdateLastRefreshFromEvent({
+      type: "state",
+      payload: { state: { ok: true, ready: true, chat_messages: 2 } }
+    }),
+    true
+  );
+});
+
 test("SSE clean EOF fallback ignores only intentional abort", () => {
   const controller = new AbortController();
   assert.equal(shouldFallbackAfterSseClose(controller.signal), true);
@@ -163,16 +225,18 @@ test("watch_enabled hello event maps to real watch status", () => {
   assert.equal(watchStatusFromEvent({ type: "state", payload: {} }), null);
 });
 
-function createChatCalls() {
+function createChatCalls(options: { includeTranscript?: boolean } = {}) {
   const streaming: boolean[] = [];
   const streamingText: string[] = [];
   const states: AgentState[] = [];
   const notices: string[] = [];
-  return {
+  const transcript: Array<{ role: string; content: string }> = [];
+  const result = {
     streaming,
     streamingText,
     states,
     notices,
+    transcript,
     handlers: {
       setStreaming(value: boolean) {
         streaming.push(value);
@@ -186,8 +250,20 @@ function createChatCalls() {
       setNotice(message: string) {
         notices.push(message);
       }
+    } as {
+      setStreaming(value: boolean): void;
+      setStreamingText(value: string): void;
+      setState(state: AgentState): void;
+      setNotice(message: string): void;
+      appendTranscript?: (role: string, content: string) => void;
     }
   };
+  if (options.includeTranscript) {
+    result.handlers.appendTranscript = (role: string, content: string) => {
+      transcript.push({ role, content });
+    };
+  }
+  return result;
 }
 
 function createReadyState(): AgentState {

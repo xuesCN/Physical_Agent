@@ -6,6 +6,7 @@ import { ActionsPanel } from "./components/ActionsPanel.js";
 import { ChatPanel } from "./components/ChatPanel.js";
 import { CommandInput } from "./components/CommandInput.js";
 import { StatusBar } from "./components/StatusBar.js";
+import { Transcript } from "./components/Transcript.js";
 import type {
   AgentState,
   ApiEvent,
@@ -14,6 +15,7 @@ import type {
   LLMSettingsResponse,
   LlmRuntimeStatus,
   RuntimeStatus,
+  TranscriptEntry,
   WatchStatus
 } from "./types.js";
 
@@ -46,6 +48,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
   const [busy, setBusy] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
+  const [transcriptEntries, setTranscriptEntries] = useState<TranscriptEntry[]>([]);
   const [mode, setMode] = useState<RuntimeStatus["mode"]>(useSse ? "sse" : "polling");
   const [connected, setConnected] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
@@ -58,6 +61,27 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
     hasApiKey: null
   });
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const transcriptCounterRef = useRef(0);
+  const seenChatKeysRef = useRef<Set<string>>(new Set());
+  const pendingLocalChatRef = useRef<Array<{ role: string; content: string }>>([]);
+  const messages: ChatMessage[] = state?.chat?.messages ?? [];
+
+  const appendLocalChat = useCallback((role: string, content: string) => {
+    const normalized = normalizeChatContent(content);
+    if (!normalized) {
+      return;
+    }
+    pendingLocalChatRef.current.push({ role, content: normalized });
+    const id = `local-${Date.now()}-${transcriptCounterRef.current++}`;
+    setTranscriptEntries((previous) => [
+      ...previous,
+      {
+        id,
+        role,
+        content: normalized
+      }
+    ]);
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -76,6 +100,39 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    const additions: TranscriptEntry[] = [];
+    messages.forEach((message, index) => {
+      const content = normalizeChatContent(message.content);
+      if (!content) {
+        return;
+      }
+      const key = chatMessageKey(message, index);
+      if (seenChatKeysRef.current.has(key)) {
+        return;
+      }
+      seenChatKeysRef.current.add(key);
+
+      const pendingIndex = pendingLocalChatRef.current.findIndex(
+        (pending) => pending.role === message.role && pending.content === content
+      );
+      if (pendingIndex >= 0) {
+        pendingLocalChatRef.current.splice(pendingIndex, 1);
+        return;
+      }
+
+      additions.push({
+        id: key,
+        role: message.role,
+        content,
+        created_at: message.created_at
+      });
+    });
+    if (additions.length > 0) {
+      setTranscriptEntries((previous) => [...previous, ...additions]);
+    }
+  }, [messages]);
 
   const refreshLlmStatus = useCallback(async () => {
     setLlmStatus((previous) => ({ ...previous, state: "checking", message: undefined }));
@@ -139,10 +196,12 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
           setWatchStatus(nextWatchStatus);
         }
         const applyResult = applyEvent(event, setState);
-        if (applyResult === "summary") {
+        if (applyResult === "summary" && shouldRefreshFullStateFromEvent(event)) {
           void refresh();
         }
-        setLastRefresh(new Date().toLocaleTimeString());
+        if (shouldUpdateLastRefreshFromEvent(event)) {
+          setLastRefresh(new Date().toLocaleTimeString());
+        }
       }, controller.signal)
       .then(() => {
         if (shouldFallbackAfterSseClose(controller.signal)) {
@@ -216,24 +275,32 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
   }
 
   async function runChat(text: string) {
+    appendLocalChat("user", text);
     await runTuiChatStream(client, text, {
       setStreaming,
       setStreamingText,
       setState,
-      setNotice
+      setNotice,
+      appendTranscript: (role, content) => appendLocalChat(role, content)
     });
   }
 
-  const messages: ChatMessage[] = state?.chat?.messages ?? [];
-
   return (
-    <Box flexDirection="column" gap={1}>
-      <StatusBar status={status} busy={busy || streaming} />
-      <ChatPanel messages={messages} streamingText={streamingText} streaming={streaming} error={error} />
-      <ActionsPanel state={state} error={error} />
-      {notice ? <Box paddingX={1}><Text color="gray">{notice}</Text></Box> : null}
-      <CommandInput value={input} onChange={setInput} onSubmit={handleSubmit} disabled={busy} />
-    </Box>
+    <>
+      <Transcript entries={transcriptEntries} />
+      <Box flexDirection="column" gap={1}>
+        <StatusBar status={status} busy={busy || streaming} />
+        <ChatPanel
+          hasTranscript={transcriptEntries.length > 0}
+          streamingText={streamingText}
+          streaming={streaming}
+          error={error}
+        />
+        <ActionsPanel state={state} error={error} />
+        {notice ? <Box paddingX={1}><Text color="gray">{notice}</Text></Box> : null}
+        <CommandInput value={input} onChange={setInput} onSubmit={handleSubmit} disabled={busy} />
+      </Box>
+    </>
   );
 }
 
@@ -263,6 +330,20 @@ export function watchStatusFromEvent(event: ApiEvent): WatchStatus | null {
   return null;
 }
 
+export function shouldRefreshFullStateFromEvent(event: ApiEvent): boolean {
+  if (event.type === "state") {
+    return true;
+  }
+  if (event.type === "watch_step") {
+    return Number(event.payload?.executed ?? 0) > 0;
+  }
+  return false;
+}
+
+export function shouldUpdateLastRefreshFromEvent(event: ApiEvent): boolean {
+  return event.type !== "watch_step" || Number(event.payload?.executed ?? 0) > 0;
+}
+
 export function shouldFallbackAfterSseClose(signal: AbortSignal): boolean {
   return !signal.aborted;
 }
@@ -280,6 +361,7 @@ interface ChatStreamHandlers {
   setStreamingText: (value: string) => void;
   setState: (state: AgentState) => void;
   setNotice: (message: string) => void;
+  appendTranscript?: (role: string, content: string) => void;
 }
 
 export async function runTuiChatStream(
@@ -302,7 +384,13 @@ export async function runTuiChatStream(
           handlers.setState(payload.state);
           handlers.setStreamingText("");
         } else {
-          handlers.setStreamingText(String(payload.reply ?? content));
+          const reply = String(payload.reply ?? content);
+          if (handlers.appendTranscript) {
+            handlers.appendTranscript("assistant", reply);
+            handlers.setStreamingText("");
+          } else {
+            handlers.setStreamingText(reply);
+          }
         }
       }
       if (event.type === "error") {
@@ -358,4 +446,20 @@ function llmRuntimeStatusFromSettings(settings: { model?: string; has_api_key?: 
     model: settings.model?.trim() || "-",
     hasApiKey: typeof settings.has_api_key === "boolean" ? settings.has_api_key : null
   };
+}
+
+function chatMessageKey(message: ChatMessage, index: number): string {
+  return `chat-${message.created_at ?? index}-${message.role}-${stableTextHash(message.content)}`;
+}
+
+function normalizeChatContent(content: string): string {
+  return content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+}
+
+function stableTextHash(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(36);
 }

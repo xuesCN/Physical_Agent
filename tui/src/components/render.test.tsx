@@ -5,6 +5,7 @@ import { render } from "ink-testing-library";
 import { ActionsPanel } from "./ActionsPanel.js";
 import { ChatPanel } from "./ChatPanel.js";
 import { StatusBar } from "./StatusBar.js";
+import { normalizeTerminalText } from "./textFormat.js";
 
 test("StatusBar renders connection state", () => {
   const view = render(
@@ -103,22 +104,21 @@ test("StatusBar renders unknown and disabled watch states without snapshot wordi
   assert.match(disabled.lastFrame() ?? "", /Watch: disabled/);
 });
 
-test("ChatPanel renders long content without hard truncation", () => {
+test("Transcript content keeps long text and normalizes newlines", () => {
   const longAnswer = `first line ${"x".repeat(230)}\nsecond line survives`;
-  const view = render(
-    <ChatPanel
-      messages={[
-        {
-          role: "assistant",
-          content: longAnswer,
-          created_at: "2026-07-08T12:00:00Z"
-        }
-      ]}
-    />
-  );
+  const rendered = normalizeTerminalText(`${longAnswer}\r\nthird line survives`);
 
-  const frame = view.lastFrame() ?? "";
-  assert.match(frame, /second line survives/);
+  assert.match(rendered, /second line survives/);
+  assert.match(rendered, /third line survives/);
+  assert.equal(rendered.includes("\r"), false);
+});
+
+test("ChatPanel renders only live streaming state", () => {
+  const view = render(<ChatPanel hasTranscript={true} streamingText="partial reply" streaming={true} />);
+  assert.match(view.lastFrame() ?? "", /streaming/);
+  assert.match(view.lastFrame() ?? "", /partial reply/);
+  assert.doesNotMatch(view.lastFrame() ?? "", /No chat yet/);
+  view.unmount();
 });
 
 test("ActionsPanel renders approval status", () => {

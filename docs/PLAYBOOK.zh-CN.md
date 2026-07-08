@@ -32,7 +32,7 @@
 **首批落地**（改 `ContextTabs.tsx` 为主）：① feedback 时间线：antd Timeline/Table，`status` 红绿灯 Tag，**失败原因读 `message` 字段**（不是 detail），`action_id` 点击跳 Actions 页（复用 setActivePage），事件类条目（`event: driver_*`）用不同图标；② world：objects 转表格（id/type/location/pose），environment 用 Descriptions，summary 置顶；③ raw 兜底：使用 AntD 原生折叠/Tree 或 `JsonSummaryLine` 摘要，继续只服务 unknown/raw/private 字段，不把 JSON viewer 当产品组件。
 **实现口径（2026-07-07 已落地，2026-07-08 收口）**：`ContextTabs` 拆出 world/feedback/safety/capabilities 四个可读 tab；`FeedbackTimeline` 合并 feedback history、action approval/source metadata 与 chat `refusal_reason`；`WorldObjectsTable` 展示 objects/environment/robots/artifacts，未知 object 字段折叠进 raw。首轮曾用 `react18-json-view` 做懒加载 raw tree；F2.5 后续已改为 AntD 原生 RawDebug，非 RawDebug 展示统一为 `JsonSummaryLine`，`ActionBoard`、`ChatPanel`、`ConfigPanel`、`SettingsPanel`、`RawDebug` 均不再用裸 `<pre>` 或第三方 JSON viewer 展示状态 JSON。
 **实现经验**：status 颜色映射、pose/location/schema 摘要应集中在 formatter，避免各面板各写一套；JSON tree 只作为折叠兜底，首屏仍优先放人能直接读的 message、action、robot、capability、approval 与 world summary；Playwright mocked 场景比 live workspace 更适合锁 UI 可读性，live smoke 继续覆盖真实 API 拼接。
-**后续批次**：integration 结果与 state-check 可继续补更细的诊断分组；audit 导出内容的页内预览（远期）；若 F6 SceneView 落地，world 表格可与图形视图联动但不替代 raw 兜底。
+**后续批次**：integration 结果与 state-check 可继续补更细的诊断分组；audit 导出内容的 Dashboard 页内预览仍远期；2026-07-08 已先以 `docs/current-architecture-audit.html` 落一版 current architecture audit 静态展示；若 F6 SceneView 落地，world 表格可与图形视图联动但不替代 raw 兜底。
 **验收**：mock 跑 demo 全程不点 Raw Debug 能看懂发生了什么；坏任务拒绝原因在时间线直接可读；全应用 `<pre>` 出现次数下降可统计。
 
 ## F3 context_builder 解耦

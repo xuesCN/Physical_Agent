@@ -30,6 +30,7 @@
 | F2.5 | State Overview 产品化收口：viewmodels + AntD schema components + scoped RawDebug | 本轮提交 |
 | F2.5-json-style | 非 RawDebug JSON 展示统一为 Overview capability 摘要样式 | 本轮提交 |
 | F2.5-raw-debug-antd | RawDebug 改为 AntD 原生 Collapse/Tree，移除 react18-json-view | 本轮提交 |
+| Audit-doc-html | current architecture audit 静态 HTML 阅读页 | 本轮提交 |
 | F3 | context_builder 解耦：reply/proposal/planner/tool_loop 上下文统一 | `9cbb540` |
 | F4 | 期望-比对-回灌：expected 确定性比对、feedback 回灌、前端可见性 | `b5be3b7` |
 | W2 | 观察并发化 + observe 频率与 tick 解耦 | `4e0f732` |
@@ -129,6 +130,12 @@ RawDebug 收口：`RawDebug` 不再接收整份 state 并显示 `Full state JSON
 动机：用户确认 Overview capability 摘要风格可接受后，Raw Debug 中 `react18-json-view` 的树形视觉仍像旧 JSON viewer，容易被误认为产品主展示的一部分。过程：`RawDebug` 改为直接使用 AntD `Collapse + Tree + Tag + Typography` 渲染 unknown/raw/backend private 字段；默认仍折叠，展开后只显示 `formatRawDebugFields()` 收集的片段，不恢复整份 state JSON。删除 `JsonTreeLazy.tsx`、`.json-tree`/`.raw-json-*` CSS、`react18-json-view` npm 依赖与 Vite `json-view` chunk 规则，避免旧 viewer 留在构建路径里。
 
 边界保持：未改 backend API、watch、SafetyGate、driver、SQLite；未新增 UI 库；RawDebug 的字段收集口径不变。验证：`cd frontend && npm run build` 通过且产物无 `json-view` chunk；`cd frontend && npx playwright test --grep "F2"` 2 passed，覆盖 RawDebug 默认折叠、展开后出现 AntD tree、页面无 `Full state JSON`。
+
+### Audit-doc-html：current architecture audit 静态展示
+
+动机：`docs/current-architecture-audit.md` 已经把当前架构、安全偏差和未来三轮路线梳理成一份长审计文档，但纯 Markdown 在浏览器里只能 raw 阅读，不利于快速扫描目录、表格和代码路径。过程：新增 `scripts/render_audit_html.py`，从该 Markdown 生成 `docs/current-architecture-audit.html`；HTML 内嵌源 Markdown 与 sha256，客户端用零依赖小渲染器处理标题、表格、列表、代码块和 inline code，并提供侧栏目录与搜索。设计上按 F2 原则只做“读”，把已知内容结构化展示，未知/raw 不变。
+
+边界保持：未改 backend API、watch、SafetyGate、driver、SQLite，也未把页面接入 React dashboard 或 FastAPI 路由；该页是 docs 静态阅读器，直接打开即可。验证：新增 `tests/test_docs_audit_html.py` 校验 HTML 内嵌内容与 Markdown 一致、source hash 一致且不依赖 fetch/外部 URL；Playwright 直接加载 file URL 验证桌面/移动端渲染、目录、表格、代码块、搜索和无控制台错误，移动端无页面级横向溢出。
 
 ### F3：context_builder 解耦
 
@@ -230,6 +237,7 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 28. **RawDebug 也用 AntD 原生组件**（F2.5-raw-debug-antd）：unknown/raw 字段仍可展开调试，但视觉语言必须与 Overview 产品组件一致；因此移除 `react18-json-view`，避免 JSON viewer 成为新的事实主界面。
 29. **TUI 启动参数接受裸 API URL**（TUI-api-arg-fix）：Windows/npm/tsx 链路可能吞掉 `--api` flag；CLI 入口兼容 positional URL，保持文档命令和实际落地命令都能启动，不改变 TUI 的 API-only 边界。
 30. **TUI 命令验收以场景文件为真源**（TUI-command-acceptance）：命令级回归不只测 parser 或组件，而是用 `.scenario` 记录输入、mock API/SSE、输出与状态变化；新增命令必须更新场景和 `docs/tui-command-matrix.md`，避免 README/帮助与可测行为分叉。
+31. **audit 文档展示先落静态 docs 页**（Audit-doc-html）：这轮目标是把已有审计内容呈现出来，不是把 audit export 接入 Dashboard；选择 `docs/current-architecture-audit.html` 可直接打开、零运行态依赖、零 SafetyGate/watch/API 触碰，Dashboard 内页预览继续留作 F2 远期后续。
 
 ## 4. 经验教训（流程侧）
 

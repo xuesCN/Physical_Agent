@@ -36,6 +36,8 @@ push 和 pull request 默认会跑：
 
 这两项失败时，一般应该先修。它们代表“安全底线”和“主 GUI 至少能构建”。
 
+注意：GitHub Actions 的 workflow `env:` map 会把变量名按大小写不敏感处理。因此不能同时写 `HTTP_PROXY` 和 `http_proxy`、`NO_PROXY` 和 `no_proxy`。CI 里只保留一套大写代理变量；如果需要在测试进程内处理更多宿主环境差异，应放到测试 fixture 或命令步骤里，而不是在同一个 `env:` map 中重复声明。
+
 ## 建议性检查
 
 这些检查默认会显示结果，但 workflow 标记为 `continue-on-error`，失败时不直接阻塞：

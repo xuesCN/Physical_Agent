@@ -22,14 +22,13 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # GitHub Actions treats env keys as case-insensitive in workflow YAML.
+  # Keep one spelling here; declaring HTTP_PROXY and http_proxy together
+  # makes the workflow invalid before jobs start.
   HTTP_PROXY: ""
   HTTPS_PROXY: ""
   ALL_PROXY: ""
-  http_proxy: ""
-  https_proxy: ""
-  all_proxy: ""
   NO_PROXY: "127.0.0.1,localhost"
-  no_proxy: "127.0.0.1,localhost"
   PA_LLM_TRACE: "0"
 
 jobs:

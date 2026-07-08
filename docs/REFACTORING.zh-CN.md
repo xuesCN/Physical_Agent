@@ -138,7 +138,7 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 
 动机：用户希望先理解并使用 CI，但担心测试过严会限制后续重构。过程：将 `.github/workflows/ci.yml` 从默认全量检查改成三层策略：默认阻塞 `Python safety smoke` 与 `Frontend build`；`Ink TUI advisory` 和 `Playwright dashboard advisory` 保留自动反馈但 `continue-on-error`，其中 dashboard e2e 只在 PR 或手动运行触发；Python 3.11/3.12 全量 `pytest` 矩阵改为 `workflow_dispatch` 的 `full=true` 手动触发。新增 `permissions: contents: read` 与 concurrency 取消同分支过期 run，继续在 workflow env 清代理变量与关闭 LLM trace。
 
-边界保持：没有修改 watch、driver、SafetyGate、API 行为或任何测试断言；默认 smoke 仍覆盖 `test_safety_boundaries`、`test_safety`、API 请求侧不得实例化 watch/driver、HTTP auto-step 不启动 watch、SQLite 默认后端与 watch 单步执行。新增 `docs/CI.zh-CN.md` 解释 CI 概念、本仓库分层策略、本地复现命令、失败判断与“测试行为契约而不是内部实现”的写测原则。验证：workflow YAML 解析通过；`.\.venv\Scripts\python.exe -m pytest -q` 304 passed（1 个既有 StarletteDeprecationWarning）；新 CI safety smoke 15 passed；`cd frontend && npm run build` 通过；`cd tui && npm run build` 与 `npm test` 13 passed。
+边界保持：没有修改 watch、driver、SafetyGate、API 行为或任何测试断言；默认 smoke 仍覆盖 `test_safety_boundaries`、`test_safety`、API 请求侧不得实例化 watch/driver、HTTP auto-step 不启动 watch、SQLite 默认后端与 watch 单步执行。新增 `docs/CI.zh-CN.md` 解释 CI 概念、本仓库分层策略、本地复现命令、失败判断与“测试行为契约而不是内部实现”的写测原则。后续修复 GitHub Actions workflow 解析失败：`env:` map 不能同时声明 `HTTP_PROXY`/`http_proxy` 这类大小写变体，保留大写代理变量并在文档中说明。验证：workflow YAML 解析与 env key 大小写折叠重复检查通过；`.\.venv\Scripts\python.exe -m pytest -q` 304 passed（1 个既有 StarletteDeprecationWarning）；新 CI safety smoke 15 passed；`cd frontend && npm run build` 通过；`cd tui && npm run build` 与 `npm test` 13 passed。
 
 ## 3. 关键决策与偏离（跨阶段汇总）
 

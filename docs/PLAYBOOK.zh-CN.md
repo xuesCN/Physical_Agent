@@ -140,3 +140,4 @@
 **思路**：`.github/workflows/ci.yml` 三 job：① pytest（matrix 3.11/3.12，`pip install -e .[dev,server,llm]`，**env 里清空代理变量**）；② 前端 `npm ci && tsc -b && vite build`；③ e2e smoke（Playwright chromium，只跑 overview 用例）。触发 push+PR。
 **坑**：测试内建 env-scrub fixture（`tests/conftest.py` 里 monkeypatch 删代理变量）比在 CI yaml 里清更治本——两处都做。
 **实现口径（2026-07-07）**：新增 `.github/workflows/ci.yml`，包含 Python 3.11/3.12 pytest、frontend `npm ci` + build、TUI `npm ci` + build/test、Playwright Chromium e2e。`frontend/playwright.config.ts` 的 webServer 命令改为 Windows/Linux 分支，先初始化 `.tmp/e2e` 临时 workspace，再启动 API，并允许 `PA_E2E_API_COMMAND` / `PA_E2E_DEV_COMMAND` 覆盖。
+**实现口径（2026-07-08）**：按“宽松但守底线”调整 CI：默认阻塞项只保留 Python safety smoke 与 frontend build；TUI 和 dashboard e2e 改为 `continue-on-error` advisory；Python 3.11/3.12 全量 pytest 矩阵改为 `workflow_dispatch` + `full=true` 手动触发；CI 策略、失败处理与本地复现写入 `docs/CI.zh-CN.md`。

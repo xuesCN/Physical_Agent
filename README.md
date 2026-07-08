@@ -4,6 +4,8 @@
 
 Physical Agent is a safe runtime for physical-world agents with a SQLite active state backend and Markdown audit / migration compatibility.
 
+For the current GitHub Actions and testing policy, see [`docs/CI.zh-CN.md`](docs/CI.zh-CN.md).
+
 The core idea is deliberately small:
 
 ```text

@@ -84,7 +84,7 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | E3 | 暗色模式 + 首次引导 | PLAYBOOK 同名条目 | ✅ 2026-07-07 完成：AntD `darkAlgorithm` + CSS 变量暗色适配 + localStorage；首次 3 步 Tour 与 Settings 重开入口 |
 | E0-e2e | Hardware/注册/DangerZone/ConfigPanel 的 Playwright 用例 | PLAYBOOK 同名条目 | ✅ 2026-07-07 完成：补 Danger Zone reset、Hardware scaffold→register→ConfigPanel、i18n、dark mode、Tour；dashboard e2e 18 passed |
 | B4-vec | 真实向量 RAG（sqlite-vec + embedding） | 延后项；原设计见 git 历史 optimization-spec §4 | ⏸ |
-| 基建 | CI（pytest 3.11/3.12 + 前端 build）；push 纪律；测试 env-scrub fixture | 流程欠账 | ✅ 2026-07-07 完成轻量 CI：Python 3.11/3.12 pytest、frontend build/e2e、tui build/test；CI env 清代理变量 |
+| 基建 | CI（pytest 3.11/3.12 + 前端 build）；push 纪律；测试 env-scrub fixture | 流程欠账 | ✅ 2026-07-08 调整为宽松 CI：默认阻塞 Python safety smoke + frontend build；TUI/e2e 为 advisory；Python 3.11/3.12 全量 pytest 改为手动 full run；新增 `docs/CI.zh-CN.md` |
 
 ## 5. 验证环境备注
 

@@ -28,6 +28,7 @@
 | F1 | 提案卡片 + Add to Actions + action 级审批流 | `0f49a3c` |
 | F2 | 结构化信息可读化：feedback/world/capabilities + lazy JSON tree | `58a75b0` |
 | F2.5 | State Overview 产品化收口：viewmodels + AntD schema components + scoped RawDebug | 本轮提交 |
+| F2.5-json-style | 非 RawDebug JSON 展示统一为 Overview capability 摘要样式 | 本轮提交 |
 | F3 | context_builder 解耦：reply/proposal/planner/tool_loop 上下文统一 | `9cbb540` |
 | F4 | 期望-比对-回灌：expected 确定性比对、feedback 回灌、前端可见性 | `b5be3b7` |
 | W2 | 观察并发化 + observe 频率与 tick 解耦 | `4e0f732` |
@@ -113,6 +114,12 @@ A1 最初被跳过（工具循环建在自研 urllib 客户端上"够用"），�
 动机：F2 已把若干 Context tab 从裸 JSON 改成可读组件，但 Overview 首屏仍更像把状态 JSON tree 当主材料，用户需要来回点 tab/raw 才能回答系统 ready、backend、robot、capability、world objects 与 workspace bounds。过程：新增 `frontend/src/viewmodels/overview.ts`、`robot.ts`、`capability.ts`、`world.ts`、`environment.ts` 五个纯 formatter，把后端 state JSON 先转为 UI viewmodel，再交给 AntD 组件渲染。新增 `StateOverviewPanel`，首屏依次展示 `SystemStatusCard`（Card + Statistic + Tag）、`RobotsTable`（id/driver/mode/health/capability count）、`CapabilityCards`（Card/List，展示 name/description/params summary/requires approval）、`EnvironmentDescriptions`（x/y/z bounds）和 `WorldObjectsTable`（object id/type/location/pose/status）。Overview 保留 Actions/Chat 与原 ContextTabs，避免破坏既有工作流，但状态可读性入口前置到页面顶部。
 
 RawDebug 收口：`RawDebug` 不再接收整份 state 并显示 `Full state JSON`，而是通过 `formatRawDebugFields()` 只收集 top-level unknown、backend private、world raw、environment unknown、object unknown、capability/robot unknown 字段；`react18-json-view` 仍由 `JsonTreeLazy` 懒加载，默认折叠，仅作为 fallback。边界保持：未改 backend API、watch、SafetyGate、driver、SQLite；没有新增 UI 库。验证：`cd frontend && npm run build` 通过；`cd frontend && npx playwright test` 19 passed（新增 F2.5 mock state 验证 robots table、capability cards、environment descriptions、world table、RawDebug 默认折叠、无 `Full state JSON` 标题）；`.\.venv\Scripts\python.exe -m pytest` 304 passed（1 个既有 StarletteDeprecationWarning）。
+
+### F2.5-json-style：JSON 展示样式统一
+
+动机：Overview capability cards 的 `Params:` / `Constraints:` 摘要已经比 JSON tree 更适合首屏阅读，但 Actions、Chat draft、Config、World、Feedback、Events、Safety、Settings 等区域仍复用旧 `RawJsonFallback`，视觉上像回到了“折叠 JSON 是主展示”。过程：新增 `JsonSummaryLine` / `JsonSummaryStack`，复用 `schema-summary` 的轻量 monospace 摘要样式；把非 RawDebug 的 params/expected/config/plan/event payload/object raw/safety raw/feedback raw/capability raw 全部改为 `Label: key=value` 摘要。`RawJsonFallback` 与 `JsonTreeLazy` 只保留给 `RawDebug`，真正需要用户编辑的 ProposalPanel `Params JSON` 输入框保留 textarea，不把输入控件伪装成展示组件。
+
+边界保持：未改 backend API、watch、SafetyGate、driver、SQLite；未新增 UI 库；`react18-json-view` 仍懒加载且只作为 RawDebug fallback。验证：`rg RawJsonFallback frontend/src/components frontend/src/App.tsx` 只剩 `RawDebug` 与 `JsonTreeLazy` 定义；`cd frontend && npm run build` 通过；`cd frontend && npx playwright test --grep "F2"` 2 passed；`cd frontend && npx playwright test` 19 passed；`.\.venv\Scripts\python.exe -m pytest` 304 passed（1 个既有 StarletteDeprecationWarning）。
 
 ### F3：context_builder 解耦
 
@@ -202,6 +209,7 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 24. **TUI 不做 YAML 编辑器**（T3）：config 视图只读，robot 注册只调用既有 `POST /api/config/robots`；编辑已有 robot 或任意 yaml 字段继续由人手改配置并重启 watch。
 25. **终端 raw fallback 只做摘要**（T3）：Ink 里没有 dashboard 的可折叠 JSON tree，默认展示已知字段与短 raw summary，避免把 config/robot/upload 视图退回整页 JSON。
 26. **Overview 不把整份 state 交给 RawDebug**（F2.5）：已知 schema 先经 viewmodel 消费并定制渲染；RawDebug 只展示 unknown/raw/backend private 片段，避免“折叠全量 JSON”再次成为事实上的主界面。
+27. **展示摘要与 JSON 输入要分开**（F2.5-json-style）：展示区统一用 `JsonSummaryLine` 摘要；仍需用户手写参数的 ProposalPanel 保持明确的 `Params JSON` textarea，避免把输入能力误删。
 
 ## 4. 经验教训（流程侧）
 

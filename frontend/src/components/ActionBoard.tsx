@@ -8,12 +8,10 @@ import { Button, Card, Popconfirm, Segmented, Space, Table, Tag, Typography } fr
 import { useMemo, useState } from "react";
 import { useMessages } from "../locales/context";
 import type { ActionItem, AgentState } from "../types";
-import { RawJsonFallback } from "./JsonTreeLazy";
+import { JsonSummaryLine } from "./JsonSummary";
 import {
-  asRecord,
   expectedSummary,
-  formatObjectValue,
-  isNonEmptyRecord
+  formatObjectValue
 } from "./readableFormatters";
 
 type BoardKey = "pending" | "completed" | "cancelled";
@@ -103,14 +101,11 @@ export function ActionBoard({
             dataIndex: "params",
             width: 300,
             render: (value) => (
-              <Space direction="vertical" size={4} className="full-width">
-                <Typography.Text className="mono-cell">
-                  {formatObjectValue(value, labels.actions.noParams)}
-                </Typography.Text>
-                {isNonEmptyRecord(asRecord(value)) && (
-                  <RawJsonFallback label="Params raw" value={value} />
-                )}
-              </Space>
+              <JsonSummaryLine
+                label={labels.actions.params}
+                value={value}
+                fallback={labels.actions.noParams}
+              />
             )
           },
           {
@@ -138,10 +133,7 @@ export function ActionBoard({
                 return <Typography.Text type="secondary">-</Typography.Text>;
               }
               return (
-                <Space direction="vertical" size={4} className="full-width">
-                  <Typography.Text className="source-cell">{summary}</Typography.Text>
-                  <RawJsonFallback label="Expected raw" value={expected} />
-                </Space>
+                <JsonSummaryLine label={labels.actions.expected} text={summary} />
               );
             }
           },

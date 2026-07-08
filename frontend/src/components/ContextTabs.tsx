@@ -10,10 +10,10 @@ import { useMessages } from "../locales/context";
 import type { AgentState } from "../types";
 import { CapabilitiesGrid } from "./CapabilityCard";
 import { FeedbackTimeline } from "./FeedbackTimeline";
-import { RawJsonFallback } from "./JsonTreeLazy";
+import { JsonSummaryLine } from "./JsonSummary";
 import { WorldObjectsTable } from "./WorldObjectsTable";
 import { FeedbackStatusTag } from "./FeedbackStatusTag";
-import { asRecord, formatObjectValue, statusText } from "./readableFormatters";
+import { asRecord, formatObjectValue, isNonEmptyRecord, statusText } from "./readableFormatters";
 
 interface ContextTabsProps {
   state: AgentState | null;
@@ -106,7 +106,9 @@ function SafetyView({ safety }: { safety: AgentState["safety"] | undefined }) {
           </Descriptions.Item>
         ))}
       </Descriptions>
-      <RawJsonFallback label="Safety raw fields" value={safety ?? {}} />
+      {isNonEmptyRecord(asRecord(safety)) && (
+        <JsonSummaryLine label="Raw" value={safety ?? {}} />
+      )}
     </Space>
   );
 }

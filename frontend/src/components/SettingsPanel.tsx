@@ -30,7 +30,7 @@ import {
 } from "../api";
 import type { Language, Messages, ThemeMode } from "../locales";
 import type { AgentState, ExportAuditResponse, HealthState, LLMSettingsSummary, StateCheckResult } from "../types";
-import { RawJsonFallback } from "./JsonTreeLazy";
+import { JsonSummaryLine } from "./JsonSummary";
 import { oneLine } from "./utils";
 
 interface SettingsPanelProps {
@@ -435,7 +435,7 @@ export function SettingsPanel({
       </Space>
       <div className="panel-divider" />
       <Typography.Text strong>{labels.settings.plan}</Typography.Text>
-      <RawJsonFallback label="Plan JSON" value={state?.plan ?? {}} />
+      <JsonSummaryLine label={labels.settings.plan} value={state?.plan ?? {}} />
       <div className="panel-divider" />
       <Space
         direction="vertical"

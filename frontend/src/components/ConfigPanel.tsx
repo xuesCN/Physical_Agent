@@ -5,8 +5,7 @@ import { useEffect, useState } from "react";
 import { fetchConfig } from "../api";
 import { useMessages } from "../locales/context";
 import type { ConfigResponse } from "../types";
-import { RawJsonFallback } from "./JsonTreeLazy";
-import { formatObjectValue } from "./readableFormatters";
+import { JsonSummaryLine } from "./JsonSummary";
 
 interface ConfigPanelProps {
   refreshToken?: number;
@@ -65,12 +64,11 @@ export function ConfigPanel({ refreshToken = 0 }: ConfigPanelProps) {
       dataIndex: "config",
       ellipsis: true,
       render: (value: Record<string, unknown>) => (
-        <Space direction="vertical" size={4} className="full-width">
-          <Typography.Text type="secondary" className="schema-summary">
-            {formatObjectValue(value, labels.config.noConfig)}
-          </Typography.Text>
-          <RawJsonFallback label="Robot config" value={value} />
-        </Space>
+        <JsonSummaryLine
+          label={labels.config.config}
+          value={value}
+          fallback={labels.config.noConfig}
+        />
       )
     }
   ];

@@ -13,13 +13,8 @@ import ReactMarkdown from "react-markdown";
 import { parseActionDrafts } from "../actionDraft";
 import { useMessages } from "../locales/context";
 import type { ActionItem, ChatMessage } from "../types";
-import { RawJsonFallback } from "./JsonTreeLazy";
-import {
-  asRecord,
-  expectedSummary,
-  formatObjectValue,
-  isNonEmptyRecord
-} from "./readableFormatters";
+import { JsonSummaryLine } from "./JsonSummary";
+import { expectedSummary } from "./readableFormatters";
 
 interface ChatPanelProps {
   messages: ChatMessage[];
@@ -257,24 +252,18 @@ function DraftActionCard({
             </Typography.Text>
           </Descriptions.Item>
           <Descriptions.Item label={labels.chat.params}>
-            <Space direction="vertical" size={4} className="full-width">
-              <Typography.Text className="mono-cell">
-                {formatObjectValue(action.params, labels.chat.noParams)}
-              </Typography.Text>
-              {isNonEmptyRecord(asRecord(action.params)) && (
-                <RawJsonFallback label="Draft params raw" value={action.params} />
-              )}
-            </Space>
+            <JsonSummaryLine
+              label={labels.chat.params}
+              value={action.params}
+              fallback={labels.chat.noParams}
+            />
           </Descriptions.Item>
           <Descriptions.Item label={labels.chat.reason}>
             <Typography.Text>{action.reason || "-"}</Typography.Text>
           </Descriptions.Item>
           {expectedText && (
             <Descriptions.Item label={labels.chat.expected}>
-              <Space direction="vertical" size={4} className="full-width">
-                <Typography.Text>{expectedText}</Typography.Text>
-                <RawJsonFallback label="Expected raw" value={expected} />
-              </Space>
+              <JsonSummaryLine label={labels.chat.expected} text={expectedText} />
             </Descriptions.Item>
           )}
         </Descriptions>

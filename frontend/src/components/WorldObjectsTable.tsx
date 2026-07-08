@@ -3,7 +3,7 @@ import { Descriptions, Empty, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { ReactNode } from "react";
 import type { AgentState } from "../types";
-import { RawJsonFallback } from "./JsonTreeLazy";
+import { JsonSummaryLine } from "./JsonSummary";
 import { FeedbackStatusTag } from "./FeedbackStatusTag";
 import {
   asRecord,
@@ -91,7 +91,7 @@ export function WorldObjectsTable({ world }: WorldObjectsTableProps) {
           ))}
         </Space>
       )}
-      {isNonEmptyRecord(raw) && <RawJsonFallback label="World raw fields" value={raw} />}
+      {isNonEmptyRecord(raw) && <JsonSummaryLine label="Raw" value={raw} />}
     </Space>
   );
 }
@@ -119,7 +119,7 @@ const columns: ColumnsType<WorldObjectRow> = [
     width: 220,
     render: (value: Record<string, unknown>) =>
       isNonEmptyRecord(value) ? (
-        <RawJsonFallback label="Object raw fields" value={value} />
+        <JsonSummaryLine label="Raw" value={value} />
       ) : (
         <Typography.Text type="secondary">-</Typography.Text>
       )
@@ -184,10 +184,7 @@ function WorldDescriptions({
         {entries.map(([key, item]) => (
           <Descriptions.Item key={key} label={key}>
             {typeof item === "object" && item !== null ? (
-              <Space direction="vertical" size={4} className="full-width">
-                <Typography.Text>{formatObjectValue(item)}</Typography.Text>
-                <RawJsonFallback label={`${key} raw`} value={item} />
-              </Space>
+              <JsonSummaryLine label={key} value={item} />
             ) : (
               formatObjectValue(item)
             )}

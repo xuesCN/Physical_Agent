@@ -393,6 +393,8 @@ test("F2 readable context shows feedback world and capabilities without raw debu
 
   await page.goto("/");
   await expectHealthyShell(page);
+  await expect(page.getByTestId("action-board")).toContainText("Params: object_id=red_block");
+  await expect(page.getByTestId("action-board").locator(".raw-json-collapse")).toHaveCount(0);
   await expect(page.getByTestId("context-tabs")).toContainText("red_block");
   await expect(page.getByTestId("context-tabs")).toContainText("x=0.2");
   await expect(page.getByTestId("context-tabs")).toContainText("workspace");
@@ -407,13 +409,16 @@ test("F2 readable context shows feedback world and capabilities without raw debu
   await expect(page.getByTestId("context-tabs")).toContainText(
     "No listed capability can pour coffee",
   );
+  await expect(page.getByTestId("context-tabs")).toContainText("Raw:");
+  await expect(page.getByTestId("context-tabs").locator(".raw-json-collapse")).toHaveCount(0);
   await page.getByRole("button", { name: /action act_pick_1/ }).first().click();
   await expect(page.getByTestId("page-actions")).toBeVisible();
 
   await page.getByRole("tab", { name: /Capabilities/ }).click();
   await expect(page.getByTestId("context-tabs")).toContainText("pick");
-  await expect(page.getByTestId("context-tabs")).toContainText("object_id*: string");
+  await expect(page.getByTestId("context-tabs")).toContainText("Params: object_id*: string");
   await expect(page.getByTestId("context-tabs")).toContainText("approval required");
+  await expect(page.getByTestId("context-tabs").locator(".raw-json-collapse")).toHaveCount(0);
   expectNoConsoleErrors(consoleErrors);
 });
 

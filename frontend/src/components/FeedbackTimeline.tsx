@@ -8,7 +8,7 @@ import {
 } from "@ant-design/icons";
 import { Button, Empty, Space, Timeline, Tag, Typography } from "antd";
 import type { ActionItem, AgentState, ChatMessage } from "../types";
-import { RawJsonFallback } from "./JsonTreeLazy";
+import { JsonSummaryLine } from "./JsonSummary";
 import { FeedbackStatusTag } from "./FeedbackStatusTag";
 import {
   allActions,
@@ -121,7 +121,7 @@ function FeedbackTimelineItem({
         {entry.capability && <Tag>{entry.capability}</Tag>}
         {entry.source && <Tag color="blue">source {entry.source}</Tag>}
       </Space>
-      {isNonEmptyRecord(entry.raw) && <RawJsonFallback label="Event raw fields" value={entry.raw} />}
+      {isNonEmptyRecord(entry.raw) && <JsonSummaryLine label="Raw" value={entry.raw} />}
     </Space>
   );
 }

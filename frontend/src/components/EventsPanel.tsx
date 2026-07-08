@@ -1,7 +1,7 @@
 import { ThunderboltOutlined } from "@ant-design/icons";
 import { Card, Empty, List, Space, Tag, Typography } from "antd";
 import type { ApiEvent } from "../types";
-import { RawJsonFallback } from "./JsonTreeLazy";
+import { JsonSummaryLine } from "./JsonSummary";
 import { FeedbackStatusTag } from "./FeedbackStatusTag";
 import { asRecord, formatObjectValue, formatPrimitive, readableDate } from "./readableFormatters";
 
@@ -60,7 +60,7 @@ function ReadableApiEvent({ event }: { event: ApiEvent }) {
           <Tag>{`action ${formatObjectValue(latestFeedback.action_id)}`}</Tag>
         )}
       </Space>
-      <RawJsonFallback label="Event payload" value={event.payload} />
+      <JsonSummaryLine label="Payload" value={event.payload} />
     </Space>
   );
 }

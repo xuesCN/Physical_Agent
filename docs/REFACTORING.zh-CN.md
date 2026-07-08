@@ -35,6 +35,7 @@
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
 | TUI-chat-cli-fix | 修复 SSE summary 覆盖 chat/actions，并改成纵向 CLI transcript | 本轮提交 |
+| TUI-llm-status-rendering | 取消 chat 硬截断，显示 LLM key/连接状态 | 本轮提交 |
 
 ## 2. 分阶段过程记录
 
@@ -143,6 +144,10 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 ### TUI-chat-cli-fix：chat/actions 持久化与纵向 CLI
 
 动机：用户在实际运行中看到流式 chat 回答先出现、完成后立刻消失，Actions 也存在同类风险；同时左右双面板更像 dashboard，不像 Claude Code 式交互 CLI。根因是 `/api/events` 只推送 `summarize_state()` 轻量 summary（`chat_messages`、pending ids/count 等），TUI 用“含 ready 即 AgentState”的宽松判断把 summary 当完整 state 覆盖，导致 `state.chat.messages` 与 `state.actions` 被清空。过程：将 SSE state 识别拆成 `full/summary/ignored`，只有含 `actions/chat/world/capabilities/feedback` 的完整 state 才直接覆盖；summary 只触发一次完整 `/api/state` refresh，不再写入 UI state；stream `done` 若只带 summary，也保留当前可见 reply text。交互层把首屏大 help、边框双栏与空 actions 占位收起，改为状态行 + chat transcript + 有内容才显示 actions + 紧凑输入提示。边界保持：TUI 仍只走 HTTP API/SSE，未改 API、watch、driver、SafetyGate、SQLite 或 Python CLI。验证：`cd tui && npm test` 23 passed；`cd tui && npm run build` 通过；`pytest -q tests/test_safety_boundaries.py` 2 passed，TUI 侧 grep 未发现 `driver.execute`、watch/driver import、sqlite/fs 直接访问。
+
+### TUI-llm-status-rendering：LLM 状态与 chat 全量显示
+
+动机：用户发现 TUI chat 速度异常快且问答像固定模板，实际检查显示 LLM settings 指向 Ark/Doubao 但连接测试返回 401 `API key status is not active`，同时 TUI 单条 chat 被压成一行并硬截断到 220 字符。过程：TUI client 增加 `/api/settings/llm` 与 `/api/settings/llm/test` 读取，启动和用户 `/refresh` 时检查一次 LLM 状态，StatusBar 显示模型、`key set/missing` 与 `LLM connected/failed` 的短原因（401/key inactive 压缩为短文案，不显示 key 明文）；chat 渲染取消 `replace(/\s+/g, " ").slice(0, 220)`，保留换行与完整文本，只继续限制最近 10 条历史以免旧记录淹没终端。边界保持：TUI 仍只走 HTTP API，不读 `.llm.json`、SQLite 或 workspace 文件，不改后端 LLM fallback、安全链、watch、driver 或 Python CLI。验证：`cd tui && npm test` 25 passed；`cd tui && npm run build` 通过；`pytest -q tests/test_safety_boundaries.py` 2 passed；TUI 侧 grep 未发现 watch/driver import、sqlite/fs 直接访问。
 
 ### CI-lite：宽松 CI 与解释文档
 

@@ -49,10 +49,34 @@ export interface RuntimeStatus {
   lastRefresh: string | null;
   backend: string;
   watch: WatchStatus;
+  llm: LlmRuntimeStatus;
   message: string;
 }
 
 export type WatchStatus = "enabled" | "disabled" | "unknown";
+
+export interface LLMSettingsSummary {
+  base_url?: string;
+  model?: string;
+  api_mode?: string;
+  has_api_key?: boolean;
+  masked_api_key?: string;
+  settings_path?: string;
+}
+
+export interface LLMSettingsResponse extends LLMSettingsSummary {
+  ok: boolean;
+  message?: string;
+  result?: Record<string, unknown>;
+  settings?: LLMSettingsSummary;
+}
+
+export interface LlmRuntimeStatus {
+  state: "unknown" | "checking" | "ok" | "failed" | "unavailable";
+  model: string;
+  hasApiKey: boolean | null;
+  message?: string;
+}
 
 export type ParsedCommand =
   | { type: "chat"; text: string }

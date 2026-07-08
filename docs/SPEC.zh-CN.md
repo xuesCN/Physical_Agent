@@ -78,8 +78,8 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | F6.3 | BYO conformance 测试套件（`sim-verify`） | §2 | ⏸ 随 F6.2 |
 | F6.4 | 真臂 URDF 数字孪生 + 预演 Gate | §2 | ⏸ 远期 |
 | MuJoCo-harness | 无头批量评测（原 F6.2，降级为远期候选） | git 历史可查设计 | ⏸ |
-| T1 | Ink 终端 UI 只读三面板（状态/chat/actions） | T 独立线 | ✅ 2026-07-07 完成：`tui/` 独立 Node/TS/Ink 包，状态/chat/actions 三面板，SSE 优先 + polling/degraded fallback，纯 HTTP API/SSE 客户端；2026-07-08 review fix：SSE clean EOF 降级轮询、真实 watch enabled/disabled/unknown 状态；2026-07-08 chat/actions 持久化修复：`/api/events` summary 不再覆盖完整 state，而是触发完整 `/api/state` 刷新 |
-| T2/T3 | Ink 交互（审批依赖 F1.3）与补齐 | T 独立线 | 🟡 2026-07-07 T2-lite 完成：chat、`/task`、`/approve`、`/reject`、`/reset true`、`/refresh`、`/help`、`/quit`；2026-07-08 review fix：chat stream 异常/AbortError 均清理 streaming/busy 状态；2026-07-08 交互改为更接近 Claude Code 的纵向 transcript；T3 config/upload 未做 |
+| T1 | Ink 终端 UI 只读三面板（状态/chat/actions） | T 独立线 | ✅ 2026-07-07 完成：`tui/` 独立 Node/TS/Ink 包，状态/chat/actions 三面板，SSE 优先 + polling/degraded fallback，纯 HTTP API/SSE 客户端；2026-07-08 review fix：SSE clean EOF 降级轮询、真实 watch enabled/disabled/unknown 状态；2026-07-08 chat/actions 持久化修复：`/api/events` summary 不再覆盖完整 state，而是触发完整 `/api/state` 刷新；2026-07-08 LLM 状态显示：启动/`/refresh` 检查 LLM settings/test，显示模型、key 是否配置与短失败原因 |
+| T2/T3 | Ink 交互（审批依赖 F1.3）与补齐 | T 独立线 | 🟡 2026-07-07 T2-lite 完成：chat、`/task`、`/approve`、`/reject`、`/reset true`、`/refresh`、`/help`、`/quit`；2026-07-08 review fix：chat stream 异常/AbortError 均清理 streaming/busy 状态；2026-07-08 交互改为更接近 Claude Code 的纵向 transcript；2026-07-08 取消单条 chat 220 字符硬截断并保留换行；T3 config/upload 未做 |
 | C4 | 前端 zh/EN i18n | PLAYBOOK 同名条目 | ✅ 2026-07-07 完成：轻量字典 + AntD locale + Settings 切换 + localStorage；高频导航/状态/Actions/Chat/Settings/Hardware/Config 文案已抽取 |
 | E3 | 暗色模式 + 首次引导 | PLAYBOOK 同名条目 | ✅ 2026-07-07 完成：AntD `darkAlgorithm` + CSS 变量暗色适配 + localStorage；首次 3 步 Tour 与 Settings 重开入口 |
 | E0-e2e | Hardware/注册/DangerZone/ConfigPanel 的 Playwright 用例 | PLAYBOOK 同名条目 | ✅ 2026-07-07 完成：补 Danger Zone reset、Hardware scaffold→register→ConfigPanel、i18n、dark mode、Tour；dashboard e2e 18 passed |

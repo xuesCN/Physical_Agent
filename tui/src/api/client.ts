@@ -1,5 +1,5 @@
 import { readSseStream } from "./sse.js";
-import type { ActionItem, AgentState, ApiEvent, HealthState } from "../types.js";
+import type { ActionItem, AgentState, ApiEvent, HealthState, LLMSettingsResponse } from "../types.js";
 
 export class ApiClient {
   readonly apiBase: string;
@@ -14,6 +14,14 @@ export class ApiClient {
 
   state(): Promise<AgentState> {
     return this.json("/api/state", undefined, true);
+  }
+
+  llmSettings(): Promise<LLMSettingsResponse> {
+    return this.json("/api/settings/llm", undefined, true);
+  }
+
+  testLlmSettings(): Promise<LLMSettingsResponse> {
+    return this.json("/api/settings/llm/test", { method: "POST" }, true);
   }
 
   submitTask(task: string): Promise<{ ok: boolean; message: string; state: AgentState }> {

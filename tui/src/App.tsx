@@ -6,11 +6,22 @@ import { ActionsPanel } from "./components/ActionsPanel.js";
 import { ChatPanel } from "./components/ChatPanel.js";
 import { CommandInput } from "./components/CommandInput.js";
 import { StatusBar } from "./components/StatusBar.js";
-import type { AgentState, ApiEvent, ChatMessage, HealthState, RuntimeStatus, WatchStatus } from "./types.js";
+import type {
+  AgentState,
+  ApiEvent,
+  ChatMessage,
+  HealthState,
+  LLMSettingsResponse,
+  LlmRuntimeStatus,
+  RuntimeStatus,
+  WatchStatus
+} from "./types.js";
 
 export interface TuiClient {
   health(): Promise<HealthState>;
   state(): Promise<AgentState>;
+  llmSettings(): Promise<LLMSettingsResponse>;
+  testLlmSettings(): Promise<LLMSettingsResponse>;
   submitTask(task: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
   approveAction(actionId: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
   rejectAction(actionId: string, reason: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
@@ -41,6 +52,11 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
   const [notice, setNotice] = useState<string | null>("Type /help for commands. Enter text to chat.");
   const [error, setError] = useState<string | null>(null);
   const [watchStatus, setWatchStatus] = useState<WatchStatus>("unknown");
+  const [llmStatus, setLlmStatus] = useState<LlmRuntimeStatus>({
+    state: "unknown",
+    model: "-",
+    hasApiKey: null
+  });
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   const refresh = useCallback(async () => {
@@ -60,6 +76,34 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const refreshLlmStatus = useCallback(async () => {
+    setLlmStatus((previous) => ({ ...previous, state: "checking", message: undefined }));
+    try {
+      const settingsResponse = await client.llmSettings();
+      const settings = settingsResponse.settings ?? settingsResponse;
+      const baseStatus = llmRuntimeStatusFromSettings(settings);
+      setLlmStatus(baseStatus);
+
+      const testResponse = await client.testLlmSettings();
+      const testedSettings = testResponse.settings ?? testResponse;
+      setLlmStatus({
+        ...llmRuntimeStatusFromSettings(testedSettings),
+        state: testResponse.ok ? "ok" : "failed",
+        message: testResponse.message
+      });
+    } catch (err) {
+      setLlmStatus((previous) => ({
+        ...previous,
+        state: "unavailable",
+        message: readError(err)
+      }));
+    }
+  }, [client]);
+
+  useEffect(() => {
+    void refreshLlmStatus();
+  }, [refreshLlmStatus]);
 
   useEffect(() => {
     if (pollingRef.current) {
@@ -120,6 +164,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
     lastRefresh,
     backend: state?.backend ?? health?.backend ?? "-",
     watch: watchStatus,
+    llm: llmStatus,
     message: state?.message ?? health?.message ?? (error ? "API unavailable" : "Loading")
   };
 
@@ -142,7 +187,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
     setBusy(true);
     try {
       if (command.type === "refresh") {
-        await refresh();
+        await Promise.all([refresh(), refreshLlmStatus()]);
         setNotice("Snapshot refreshed.");
       } else if (command.type === "task") {
         const response = await client.submitTask(command.text);
@@ -305,4 +350,12 @@ function isAbortError(error: unknown): boolean {
 
 function readError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function llmRuntimeStatusFromSettings(settings: { model?: string; has_api_key?: boolean }): LlmRuntimeStatus {
+  return {
+    state: "checking",
+    model: settings.model?.trim() || "-",
+    hasApiKey: typeof settings.has_api_key === "boolean" ? settings.has_api_key : null
+  };
 }

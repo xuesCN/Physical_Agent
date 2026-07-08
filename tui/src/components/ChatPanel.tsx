@@ -22,13 +22,13 @@ export function ChatPanel({ messages, streamingText = "", streaming = false, err
       {visible.map((message, index) => (
         <Text key={`${message.created_at ?? index}-${message.role}`}>
           <Text color={roleColor(message.role)}>{rolePrefix(message.role)} </Text>
-          {formatContent(message.content)}
+          {renderContent(message.content)}
         </Text>
       ))}
       {streamingText ? (
         <Text>
           <Text color="cyan">assistant </Text>
-          {formatContent(streamingText)}
+          {renderContent(streamingText)}
         </Text>
       ) : null}
       {error ? <Text color="red">{error}</Text> : null}
@@ -56,6 +56,6 @@ function roleColor(role: string): "cyan" | "green" | "gray" {
   return "gray";
 }
 
-function formatContent(value: string): string {
-  return value.replace(/\s+/g, " ").slice(0, 220);
+function renderContent(value: string): string {
+  return value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }

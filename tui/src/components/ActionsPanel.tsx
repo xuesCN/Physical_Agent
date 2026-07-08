@@ -10,12 +10,14 @@ interface ActionsPanelProps {
 
 export function ActionsPanel({ state, error }: ActionsPanelProps) {
   const actions = flattenActions(state);
+  if (!error && state?.ready && actions.length === 0) {
+    return null;
+  }
   return (
-    <Box flexDirection="column" borderStyle="round" paddingX={1} minHeight={8}>
-      <Text bold>Actions</Text>
+    <Box flexDirection="column" paddingX={1}>
+      <Text color="gray">actions</Text>
       {error ? <Text color="red">API unavailable: {error}</Text> : null}
       {!error && !state?.ready ? <Text color="yellow">{state?.message ?? "Workspace is not ready."}</Text> : null}
-      {!error && state?.ready && actions.length === 0 ? <Text color="gray">No actions yet. Use /task or chat to draft work.</Text> : null}
       {actions.slice(0, 8).map((action) => (
         <ActionRow key={`${action.status}-${action.id}`} action={action} />
       ))}
@@ -28,13 +30,23 @@ function ActionRow({ action }: { action: ActionItem }) {
   const approval = approvalSummary(action);
   return (
     <Box gap={1} flexWrap="wrap">
-      <Text color={statusColor(action.status)}>{action.status ?? "pending"}</Text>
+      <Text color={statusColor(action.status)}>{statusGlyph(action.status)}</Text>
       <Text>{action.id}</Text>
       <Text>{action.robot}.{action.capability}</Text>
       <Text color={approval.includes("required") ? "yellow" : "green"}>{approval}</Text>
       <Text color="gray">{oneLine(action.reason ?? "")}</Text>
     </Box>
   );
+}
+
+function statusGlyph(status: string | undefined): string {
+  if (status === "completed") {
+    return "done";
+  }
+  if (status === "cancelled" || status === "failed") {
+    return "stop";
+  }
+  return "wait";
 }
 
 function approvalSummary(action: ActionItem): string {

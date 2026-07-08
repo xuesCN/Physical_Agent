@@ -38,7 +38,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
   const [mode, setMode] = useState<RuntimeStatus["mode"]>(useSse ? "sse" : "polling");
   const [connected, setConnected] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(COMMAND_HELP);
+  const [notice, setNotice] = useState<string | null>("Type /help for commands. Enter text to chat.");
   const [error, setError] = useState<string | null>(null);
   const [watchStatus, setWatchStatus] = useState<WatchStatus>("unknown");
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
@@ -94,7 +94,10 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
         if (nextWatchStatus) {
           setWatchStatus(nextWatchStatus);
         }
-        applyEvent(event, setState);
+        const applyResult = applyEvent(event, setState);
+        if (applyResult === "summary") {
+          void refresh();
+        }
         setLastRefresh(new Date().toLocaleTimeString());
       }, controller.signal)
       .then(() => {
@@ -108,7 +111,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
         }
       });
     return () => controller.abort();
-  }, [client, useSse]);
+  }, [client, refresh, useSse]);
 
   const status: RuntimeStatus = {
     apiBase,
@@ -180,27 +183,28 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
 
   return (
     <Box flexDirection="column" gap={1}>
-      <StatusBar status={status} busy={busy} />
-      <Box flexDirection="row" gap={1}>
-        <Box flexGrow={1} flexBasis={0}>
-          <ChatPanel messages={messages} streamingText={streamingText} streaming={streaming} error={error} />
-        </Box>
-        <Box flexGrow={1} flexBasis={0}>
-          <ActionsPanel state={state} error={error} />
-        </Box>
-      </Box>
-      {notice ? <Box borderStyle="single" paddingX={1}><Text color="gray">{notice}</Text></Box> : null}
+      <StatusBar status={status} busy={busy || streaming} />
+      <ChatPanel messages={messages} streamingText={streamingText} streaming={streaming} error={error} />
+      <ActionsPanel state={state} error={error} />
+      {notice ? <Box paddingX={1}><Text color="gray">{notice}</Text></Box> : null}
       <CommandInput value={input} onChange={setInput} onSubmit={handleSubmit} disabled={busy} />
     </Box>
   );
 }
 
-function applyEvent(event: ApiEvent, setState: (state: AgentState) => void) {
+export type EventStateApplyResult = "full" | "summary" | "ignored";
+
+export function applyEvent(event: ApiEvent, setState: (state: AgentState) => void): EventStateApplyResult {
   const payload = event.payload ?? {};
   const nestedState = payload.state;
-  if (isAgentState(nestedState)) {
+  if (isFullAgentState(nestedState)) {
     setState(nestedState);
+    return "full";
   }
+  if (isAgentStateSummary(nestedState)) {
+    return "summary";
+  }
+  return "ignored";
 }
 
 export function watchStatusFromEvent(event: ApiEvent): WatchStatus | null {
@@ -249,7 +253,7 @@ export async function runTuiChatStream(
         handlers.setStreamingText(content);
       }
       if (event.type === "done") {
-        if (isAgentState(payload.state)) {
+        if (isFullAgentState(payload.state)) {
           handlers.setState(payload.state);
           handlers.setStreamingText("");
         } else {
@@ -269,8 +273,28 @@ export async function runTuiChatStream(
   }
 }
 
-function isAgentState(value: unknown): value is AgentState {
-  return Boolean(value && typeof value === "object" && "ready" in value);
+function isFullAgentState(value: unknown): value is AgentState {
+  return isRecord(value) && "ready" in value && (
+    "actions" in value ||
+    "chat" in value ||
+    "world" in value ||
+    "capabilities" in value ||
+    "feedback" in value
+  );
+}
+
+function isAgentStateSummary(value: unknown): boolean {
+  return isRecord(value) && "ready" in value && (
+    "chat_messages" in value ||
+    "pending_actions" in value ||
+    "completed_count" in value ||
+    "cancelled_count" in value ||
+    "memory_notes" in value
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object");
 }
 
 function isAbortError(error: unknown): boolean {

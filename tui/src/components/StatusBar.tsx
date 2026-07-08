@@ -14,18 +14,18 @@ export function StatusBar({ status, busy = false }: StatusBarProps) {
     status.mode === "sse" ? "SSE" : status.mode === "polling" ? "polling" : "degraded";
 
   return (
-    <Box flexDirection="column" borderStyle="single" paddingX={1}>
+    <Box flexDirection="column" paddingX={1}>
       <Box gap={1} flexWrap="wrap">
         <Text bold color="cyan">Physical Agent TUI</Text>
         {busy ? <Text color="yellow"><Spinner type="dots" /> busy</Text> : null}
-        <Text>api {status.apiBase}</Text>
+        <Text color="gray">{status.apiBase}</Text>
         <Text color={status.connected ? "green" : "yellow"}>{connection}</Text>
         <Text color={status.mode === "degraded" ? "yellow" : "blue"}>{modeText}</Text>
       </Box>
       <Box gap={1} flexWrap="wrap">
-        <Text>backend {status.backend}</Text>
-        <Text>Watch: {status.watch}</Text>
-        <Text>last {status.lastRefresh ?? "never"}</Text>
+        <Text color="gray">backend {status.backend}</Text>
+        <Text color="gray">Watch: {status.watch}</Text>
+        <Text color="gray">last {status.lastRefresh ?? "never"}</Text>
         <Text color={status.message === "Ready." ? "green" : "yellow"}>{status.message}</Text>
       </Box>
     </Box>

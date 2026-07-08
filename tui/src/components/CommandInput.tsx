@@ -11,7 +11,7 @@ interface CommandInputProps {
 
 export function CommandInput({ value, onChange, onSubmit, disabled = false }: CommandInputProps) {
   return (
-    <Box borderStyle="single" paddingX={1}>
+    <Box paddingX={1}>
       <Text color="green">&gt; </Text>
       <TextInput
         value={value}

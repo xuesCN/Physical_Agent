@@ -34,6 +34,7 @@
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
+| TUI-chat-cli-fix | 修复 SSE summary 覆盖 chat/actions，并改成纵向 CLI transcript | 本轮提交 |
 
 ## 2. 分阶段过程记录
 
@@ -138,6 +139,10 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 ### TUI-review-fix：stream 清理、SSE EOF 降级、watch 状态
 
 动机：修复 review 指出的三个 TUI 可用性问题，不扩大到后端或 GUI。过程：把 chat stream 处理收敛到 `runTuiChatStream()`，确保 reject/AbortError/done 都在 `finally` 清理 `streaming`；`/api/events` SSE 正常 EOF 与异常断开统一进入 degraded/polling（组件清理触发的 abort 不降级）；从 hello 事件读取 `watch_enabled`，StatusBar 显示 `Watch: enabled/disabled/unknown`，不再把 snapshot 当 watch 状态。边界保持：TUI 仍只走 HTTP API/SSE，未改 watch、driver、SafetyGate、SQLite 或 Python CLI。验证：`cd tui && npm test` 20 passed；`cd tui && npm run build` 通过；`pytest -q tests/test_safety_boundaries.py` 2 passed。
+
+### TUI-chat-cli-fix：chat/actions 持久化与纵向 CLI
+
+动机：用户在实际运行中看到流式 chat 回答先出现、完成后立刻消失，Actions 也存在同类风险；同时左右双面板更像 dashboard，不像 Claude Code 式交互 CLI。根因是 `/api/events` 只推送 `summarize_state()` 轻量 summary（`chat_messages`、pending ids/count 等），TUI 用“含 ready 即 AgentState”的宽松判断把 summary 当完整 state 覆盖，导致 `state.chat.messages` 与 `state.actions` 被清空。过程：将 SSE state 识别拆成 `full/summary/ignored`，只有含 `actions/chat/world/capabilities/feedback` 的完整 state 才直接覆盖；summary 只触发一次完整 `/api/state` refresh，不再写入 UI state；stream `done` 若只带 summary，也保留当前可见 reply text。交互层把首屏大 help、边框双栏与空 actions 占位收起，改为状态行 + chat transcript + 有内容才显示 actions + 紧凑输入提示。边界保持：TUI 仍只走 HTTP API/SSE，未改 API、watch、driver、SafetyGate、SQLite 或 Python CLI。验证：`cd tui && npm test` 23 passed；`cd tui && npm run build` 通过；`pytest -q tests/test_safety_boundaries.py` 2 passed，TUI 侧 grep 未发现 `driver.execute`、watch/driver import、sqlite/fs 直接访问。
 
 ### CI-lite：宽松 CI 与解释文档
 

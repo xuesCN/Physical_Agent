@@ -16,7 +16,7 @@
 
 **冻结**：R0-R8 完成前，VNext-3/4、W4/W5/W6.2、F0 后续、F5/F6、B4-vec、registry/read-model 新能力与自动 replan 均不实施。原因是先消除第二 GUI、旧 workspace、兼容 fence 和重复 wire/read model，再判断是否真的需要新增持久化或硬件能力。
 
-**验收**：每个删除项都有前置正反测试或替代入口；双轨有独立一轮证据；wheel 安装后能启动同一 React Dashboard；全量 pytest、frontend build/e2e、TUI build/test、安全扫描与 docs/CLI grep 全绿。R0 第一轮只产出规格和审计，当前仍是删除 No-Go。
+**验收**：每个删除项都有前置正反测试或替代入口；双轨有独立一轮证据；wheel 安装后能启动同一 React Dashboard；全量 pytest、frontend build/e2e、TUI build/test、安全扫描与 docs/CLI grep 全绿。R0 第一轮已完成且只产出规格和审计；R1.5 当前仍是删除 No-Go。
 
 ## F0 LLM planner 实验
 

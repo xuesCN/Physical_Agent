@@ -65,7 +65,7 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 
 | 编号 | 内容 | 归属 | 状态 |
 | --- | --- | --- | --- |
-| **R0-R8** | 架构减法与兼容面退役 | `specs/001-architecture-simplification/` | 🟡 第一轮进行中：已建立 spec/plan/tasks 并完成 legacy GUI parity、Markdown migration/sidecar、streaming/compatibility 三份只读审计；当前仍是删除 No-Go，未删生产代码。后续严格按 1.5→2～8 门禁执行 |
+| **R0-R8** | 架构减法与兼容面退役 | `specs/001-architecture-simplification/` | 🟡 R0 第一轮已完成 `e8750ca`：spec/plan/tasks、legacy GUI parity、Markdown migration/sidecar、streaming/compatibility 三份只读审计和 393 项回归均已收口；R1.5 当前仍是删除 No-Go，未删生产代码。后续严格按 1.5→2～8 门禁执行 |
 | F0 | LLM planner + 本地调用留痕 + 坏任务实验报告 | §2 | ⏸ R0-R8 冻结；既有第一轮 15 条结果保留：10 完成、5 无提案、0 Gate 拦截。**Review 复核（2026-07-06）**：trace 证实 bounds 在 prompt 内、拒绝为知情拒绝；不在本轮继续扩实验或功能 |
 | B6 | 退役 markdown 后端（保留 renderer 与迁移命令） | §2 | ✅ 2026-07-06 完成 `9072b4e`：active backend 只剩 SQLite；旧 Markdown 仅迁移 reader 可读 |
 | F1 | 提案卡片 + Add to Actions + 审批流 | §2 | ✅ 2026-07-07 完成：Chat draft 卡片只提交动作板；Actions 板审批才放行 `requires_approval`；approval required 后端计算，SQLite 原子 claim 跳过未批准动作；拒绝/审批元数据进 LOG/audit |

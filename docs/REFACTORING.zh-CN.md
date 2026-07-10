@@ -40,7 +40,7 @@
 | VNext-2 | materialized AgentOutput + structured feedback + 调度/上下文硬化 | 本轮完成 |
 | VNext-2b | Proposal actions batch 单事务 all-or-nothing | 本轮完成 |
 | W6.1 | workspace watch runtime lease + unique claim-owner CAS/reset guard | 本轮完成 |
-| R0 | 架构减法规格 + GUI/Markdown/streaming 三份退役审计 | 本轮提交 |
+| R0 | 架构减法规格 + GUI/Markdown/streaming 三份退役审计 | `e8750ca` |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |

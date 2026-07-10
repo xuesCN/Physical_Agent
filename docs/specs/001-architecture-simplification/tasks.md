@@ -19,7 +19,7 @@
 - [x] 在 `REFACTORING.zh-CN.md` 只记录本轮规格/审计完成，不提前宣告删除完成。
 - [x] 校验内部路径、关键符号引用、`9072b4e` 历史入口和第一轮文档 diff；`git diff --check` 通过。
 - [x] 清理沙盒代理后，在一次性 Python 3.12 venv 全量 `pytest`：393 passed，1 个既有 StarletteDeprecationWarning。
-- [ ] commit 并 push 第一轮。
+- [x] commit 并 push 第一轮：远端 `e8750ca`（本地等价提交备份 `784b860`）。
 
 第一轮结束条件：本节全部勾选；后续删除项仍保持未勾选。
 

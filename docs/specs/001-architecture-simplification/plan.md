@@ -6,7 +6,7 @@
 
 | 步骤 | 内容 | 当前状态 | 进入下一步的硬门槛 |
 | --- | --- | --- | --- |
-| 1 | 冻结范围、建立规格与退役清单 | 🟡 第一轮执行中 | spec/plan/tasks、三份 surface 审计、SPEC/PLAYBOOK 登记完成 |
+| 1 | 冻结范围、建立规格与退役清单 | ✅ 第一轮完成 | spec/plan/tasks、三份 surface 审计、SPEC/PLAYBOOK 登记完成 |
 | 1.5 | legacy GUI parity + 缺口补齐 + launcher strangler cutover | ⚪ 已枚举，当前 No-Go | 所有保留能力已覆盖；有意退役项有替代说明；thin launcher/wheel smoke 通过 |
 | 2 | 验证 cutover 后删除 legacy GUI | ⚪ | React/FastAPI 成为唯一 GUI；安全/主路径回归通过 |
 | 3 | 退役 Markdown migration，缩成 safety/log sidecar | ⚪ | sidecar 行为等价；旧目录仍 fail closed；救援指针可执行 |

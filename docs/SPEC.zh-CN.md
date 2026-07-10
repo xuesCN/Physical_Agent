@@ -33,22 +33,25 @@
 三入口 = 同一提案管线的自主档位：**档位0** 手动表单（jog）· **档位1** Chat 起草→人批 · **档位2** Task 一次规划 · **档位3** 闭环自主（未建）。
 分工恒定：LLM 只起草 action intent 与 advisory `SafetyIntent`；可信 application 层为每个物理 Action 注入唯一、mandatory、watch-owned `SafetyGateTask`；人类只完成审批义务；watch 最终校验并执行；F4 expected 只做执行后诊断。`SafetyGateTask` 不是 Action/tool，模型不能创建、删除、完成或绕过。
 
-## 2. 当前目标（Phase F：LLM in the Loop）
+## 2. 当前目标（R0-R8：架构减法；Phase F 功能扩张冻结）
 
 | 编号 | 内容 | 要点 |
 | --- | --- | --- |
-| F0 | LLM planner 实验（立即） | yaml 切 `planner: llm`（代码默认不动）；**本地 JSONL 调用留痕**（llm-trace，零新服务，surface 标签区分三条调用路径）；坏任务实验集（越界/幻觉能力/中文/多步）→ 实验报告驱动后续排序 |
-| **B6（已完成历史收口项）** | 状态层收口 | 已删 `MarkdownStateStore`/factory 分支/config legacy 自动探测/矩阵测试 md 侧与 `test_e2e_markdown_loop`；**保留** markdown renderer/parser（SAFETY 真源、LOG 镜像、audit export 依赖）；`migrate-md-to-sqlite` 留一个版本周期仅为读取旧 Markdown workspace 迁移输入，**不代表 Markdown runtime backend 仍被支持**。已在 F1.3 前完成，避免审批元数据继续为退役后端重复实现 |
+| **R0-R8** | 架构减法与兼容面退役（当前唯一实施主线） | 不新增 SPEC 功能；按 `docs/specs/001-architecture-simplification/` 的原子门禁依次完成 GUI parity→legacy GUI 退役→Markdown migration/完整 Workspace 退役→`auto_step` 退役→structured Chat 双轨→read-model/response 去重→全量收口。删除前必须有 parity/双轨/救援证据 |
+| F0 | LLM planner 实验（后续暂停） | 已有实验与本地 JSONL trace 保留；R0-R8 期间不扩样本、不引观测平台、不据此新增 runtime 能力，收口后再按真实失败数据评审 |
+| **B6（已完成历史收口项）** | 状态层收口 | 已删 `MarkdownStateStore`/factory 分支/config legacy backend 自动选择/矩阵测试 md 侧与 `test_e2e_markdown_loop`，但保留旧目录检测以 fail closed；当时承诺 `migrate-md-to-sqlite`/reader 保留一个版本周期。R0 已决定在 R3 提前退役该入口：先抽 SAFETY/LOG sidecar，再删 full Workspace，并用 `9072b4e` 独立 worktree 留历史救援路径；这不改变 SQLite-only runtime 的既有事实 |
 | F1 | 提案卡片 + Add to Actions + 审批流（已完成） | chat draft 固定为 `action-draft` fence，前端解析校验后渲染卡片；Chat 卡片按钮叫 Add to Actions，只创建 pending action，不等同执行审批。`requires_approval` 由后端按 robot/capability 计算，写入 action metadata；Actions 板的 Approve execution / Reject 才改变执行放行状态。watch claim 会原子跳过未批准动作但不阻塞后续 ready action；SafetyGate 仍照常校验 schema、bounds、capability、robot、SAFETY.md。 |
 | F2 | 结构化信息可读化（全应用原则） | **通用原则：已知协议字段一律定制组件呈现，未知/raw 字段 JSON 树兜底（懒加载），`<pre>` 裸 JSON 逐步清零**。首批落地：feedback 时间线（status 灯/action 跳转/失败原因用 `message` 字段）、world objects 表格、capabilities/config/integration 结果的卡片化；协议 schema 由 pydantic 锁定，定制组件不会白写 |
 | F3 | context_builder 解耦（已完成） | `context_builder` 统一 reply/proposal/planner/tool_loop 上下文；ContextBudget 收拢魔法数字；world/capabilities 超限摘要化；memory 按 importance 排序注入；golden-file 测试 |
 | F4 | 闭环地基（已完成） | 提案带 expected 断言 → 执行后**确定性比对**（不用 LLM 当裁判）→ 写入 `expectation_check` feedback；violated/skipped 回灌 LLM 上下文，自动重试默认关 |
-| VNext | Assurance-first Agent runtime（可 materialize 的兼容闭环已落，持久化主体未完成） | 已完成 compiled topology/current projection、verification/dependency/timeout 调度、atomic feedback、proposal actions batch 单事务，以及 workspace singleton watch lease + unique claim-owner CAS/reset guard。仍无独立 task table、持久化 task graph 与 actions 的同一事务、Run/Turn/Event 或 driver/hardware-level fencing token；不得把 current projection 表述成持久化 obligation engine |
-| F5 | 硬件生态（条件触发） | F5.1 舵机臂到手→LeRobot motors 包 driver（D2b 销账）；F5.2 有 ROS 设备→ros_mcp driver（不绕 gate）；F5.3 小车+摄像头→YOLO/VLM 物体列表进 world |
+| VNext | Assurance-first Agent runtime（已落地部分保留，后续扩张暂停） | 已完成 compiled topology/current projection、verification/dependency/timeout 调度、atomic feedback、proposal actions batch 单事务，以及 workspace singleton watch lease + unique claim-owner CAS/reset guard。R0-R8 期间不新增独立 task table、持久化 task graph、Run/Turn/Event 或 registry/read-model；先删除重复兼容面，不把 current projection 表述成持久化 obligation engine |
+| F5 | 硬件生态（条件触发，当前冻结） | R0-R8 期间即使设备条件满足也先不扩实现；收口后再按实机需求重启。原候选：F5.1 LeRobot motors、F5.2 ros_mcp、F5.3 感知语义层 |
 | **T（独立线：Ink 终端 UI）** | 第五入口 | Node/TS/Ink 5 交互式终端工作台（`tui/` 目录，纯 API 客户端零核心改动）；T1 只读（状态+流式 chat+actions 实时）→ T2 交互（提交/审批/重置，审批依赖 F1.3）→ T3 补齐。typer CLI 保留管脚本化，Ink 管交互；选 Ink 而非 Textual 是为复用 dashboard 的 React 技能。与 F 主线无依赖（除 T2 审批），可随时穿插 |
-| F6 | Demo Twin + BYO Simulator（**不做通用仿真**） | **统一技术路线：N 个 sim driver + 一个通用 SceneView 面板**（canvas 顶视图读 world.objects，按对象 type 绘制；新增 demo = driver+图标+场景 yaml，渲染零改动）。F6.0 场景规格先行：每个 demo 一份规格（能力 schema/初始对象/SAFETY 边界/演示任务集）；F6.1 **Hero：机械臂孪生（公司产品）**——能力词汇表继承 mock_arm，加运动插值与对象状态；F6.1b 智能小车第二示例（使用指南性质，能力词汇表从零设计：move_to/stop/dock/patrol）；F6.2 **remote_sim driver + BYO 协议**——WebSocket+JSON 镜像 driver 契约，**必须含 capabilities 发现**（无 params_schema 则 Gate 无从校验，拒连），CoppeliaSim 作参考适配器（高保真 3D 需求者自接）；F6.3 conformance 套件（`sim-verify` CLI）；F6.4 远期：真臂 URDF 数字孪生 + 预演 Gate |
+| F6 | Demo Twin + BYO Simulator（冻结） | F6.0-F6.4 全部暂停；R0-R8 不以 demo、SceneView、remote_sim 或 conformance 为由扩大协议面。收口后若重启，仍需先做场景规格且不做通用仿真平台 |
 
-**挂起（明确不做）**：Langfuse 观测平台（2026-07-05 评估：F0 量级几十次调用，本地 JSONL 留痕足够；重启条件=F4 闭环自动调用量增大或 F6.2 批量评测需要打分 UI，届时优先 Cloud 免费档）、instructor / LiteLLM（等 F0 数据）、自动重规划无人值守档、chat markdown **深度**渲染扩展（基础渲染已由用户以 react-markdown 落地于 ChatPanel；代码高亮/一键复制等扩展不排期）、通用 yaml 编辑器（lite 版已够）、schema 驱动表单库 rjsf/JSON Forms（2026-07-05 评估：产品无手写 JSON 需求——若将来出现高频结构化输入场景再评估，届时选 rjsf + @rjsf/antd）、**通用仿真平台**（2026-07-05 产品决定：只做 demo twin 与 BYO 接口，见 F6）。
+**R0-R8 功能冻结（2026-07-10）**：VNext-3/4、W4/W5/W6.2、F0 后续实验、F5、F6、B4-vec、registry/read-model 新能力、自动 replan/无人值守档均暂停。重启条件=R8 全量收口完成后出现可复现的恢复、硬件或产品需求，并重新排序；不是 R8 后自动恢复旧排期。
+
+**其他挂起（明确不做）**：Langfuse 观测平台（2026-07-05 评估：F0 量级几十次调用，本地 JSONL 留痕足够；重启条件=F4 闭环自动调用量增大或 F6.2 批量评测需要打分 UI，届时优先 Cloud 免费档）、instructor / LiteLLM（等 F0 数据）、chat markdown **深度**渲染扩展（基础渲染已由用户以 react-markdown 落地于 ChatPanel；代码高亮/一键复制等扩展不排期）、通用 yaml 编辑器（lite 版已够）、schema 驱动表单库 rjsf/JSON Forms（2026-07-05 评估：产品无手写 JSON 需求——若将来出现高频结构化输入场景再评估，届时选 rjsf + @rjsf/antd）、**通用仿真平台**（2026-07-05 产品决定：只做 demo twin 与 BYO 接口，若 F6 解冻仍遵守）。
 
 ## 3. 已完成里程碑（速查）
 
@@ -62,7 +65,8 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 
 | 编号 | 内容 | 归属 | 状态 |
 | --- | --- | --- | --- |
-| F0 | LLM planner + 本地调用留痕 + 坏任务实验报告 | §2 | 🟡 第一轮完成；15 条：10 完成、5 无提案、0 Gate 拦截。**Review 复核（2026-07-06）**：trace 证实 bounds 在 prompt 内、拒绝为知情拒绝——报告"F3 优先"论据不成立，顺序维持 F1→F3；Gate 直击组已并入 F1 补齐 |
+| **R0-R8** | 架构减法与兼容面退役 | `specs/001-architecture-simplification/` | 🟡 第一轮进行中：已建立 spec/plan/tasks 并完成 legacy GUI parity、Markdown migration/sidecar、streaming/compatibility 三份只读审计；当前仍是删除 No-Go，未删生产代码。后续严格按 1.5→2～8 门禁执行 |
+| F0 | LLM planner + 本地调用留痕 + 坏任务实验报告 | §2 | ⏸ R0-R8 冻结；既有第一轮 15 条结果保留：10 完成、5 无提案、0 Gate 拦截。**Review 复核（2026-07-06）**：trace 证实 bounds 在 prompt 内、拒绝为知情拒绝；不在本轮继续扩实验或功能 |
 | B6 | 退役 markdown 后端（保留 renderer 与迁移命令） | §2 | ✅ 2026-07-06 完成 `9072b4e`：active backend 只剩 SQLite；旧 Markdown 仅迁移 reader 可读 |
 | F1 | 提案卡片 + Add to Actions + 审批流 | §2 | ✅ 2026-07-07 完成：Chat draft 卡片只提交动作板；Actions 板审批才放行 `requires_approval`；approval required 后端计算，SQLite 原子 claim 跳过未批准动作；拒绝/审批元数据进 LOG/audit |
 | F2 | feedback 时间线 + world 视图 + JSON 树 | §2 | ✅ 2026-07-07 完成：feedback/action approval/refusal_reason 时间线可读，world objects 表格化，capabilities/config/integration 轻量可读；raw JSON 改懒加载树兜底。提交 `58a75b0`。2026-07-08 补 `docs/current-architecture-audit.html` 静态审计阅读页，展示 `docs/current-architecture-audit.md` 内容 |
@@ -73,21 +77,21 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | VNext-1 | AgentOutput + trusted PlanCompiler + assurance task DAG | `agent-architecture-vnext.zh-CN.md` | ✅ 2026-07-10 本轮完成：每个 Action 编译出唯一 mandatory、watch-owned Gate；Approval?/PhysicalAction/Verification? 形成无环依赖；advisory SafetyIntent 进入 schema/prompt；ProposalService、API、MCP、AgentRuntime、Chat draft/tool loop 与 ChatPlan 已接线，定向测试覆盖图不变量与伪造防护 |
 | VNext-2 | materialized AgentOutput + structured feedback + scheduler hardening | `agent-architecture-vnext.zh-CN.md` | ✅ 2026-07-10 本轮完成：`output_projection` 合成当前状态并重建 active tasks；feedback 原子追加；dependency、heartbeat、effective timeout、per-robot claim 已硬化；AgentRuntime 等 verification；Web/TUI 展示 current projection。**这仍不是持久化 obligation engine** |
 | VNext-2b | atomic proposal actions batch | `agent-architecture-vnext.zh-CN.md` | ✅ 2026-07-10 完成：StateStore 增加 `append_pending_actions()`，SQLite 用一个事务归一化并插入整个 batch；ProposalService 只调用 batch API；任一冲突回滚全部 actions，测试覆盖 all-or-nothing |
-| VNext-3 | persistent task/obligation state + persisted graph/action transaction | `agent-architecture-vnext.zh-CN.md` | ⚪ 下一阶段：独立 task table 或等价持久化模型；把 task graph/obligation rows 与已原子化的 actions batch 放入同一事务，并把 server-side id allocation 移入事务；跨重启恢复完整 terminal task history。当前 Action Board/feedback 是运行事实，output projection 是 current read model |
-| VNext-4 | Run/Turn/Event ledger + typed stream + registry/read model | `agent-architecture-vnext.zh-CN.md` | ⚪ 后置：用 additive 账本包装 compiled output、task/Gate/action/observation/verification；不做一次性重写 |
+| VNext-3 | persistent task/obligation state + persisted graph/action transaction | `agent-architecture-vnext.zh-CN.md` | ⏸ R0-R8 冻结：当前 Action Board/feedback 继续作为运行事实，output projection 继续作为 current read model；只有收口后出现明确跨重启 terminal task 恢复需求才重启评审 |
+| VNext-4 | Run/Turn/Event ledger + typed stream + registry/read model | `agent-architecture-vnext.zh-CN.md` | ⏸ R0-R8 冻结：避免在兼容字段与 read model 尚未去重时增加第二套账本/registry；不自动恢复 |
 | W2 | 观察并发化（gather）+ 频率与 tick 解耦 | W1 欠账 | ✅ 2026-07-07 完成 `4e0f732`：`update_world()` 按 robot 并发 observe、按 `robot_id` 稳定 merge；`observe_interval_ms` 未配置时等价 `tick_ms`；长跑 watch/API watch 中 claim 仍按 tick，idle observe 分频，动作后 world refresh 仍立即服务 F4 expectation_check |
 | W3 | transport 断线重连（backoff） | W1 欠账 | ✅ 2026-07-07 完成 `1d9a812`, `7762c0f`：`ReconnectPolicy` 默认关闭；Loopback/WebSocket/Serial 支持 connect retry 与运行中断连后台 backoff；reconnecting/disconnected execute fail-fast、不排队、不重放旧动作；driver 预留 reconnect hook，xiaozhi_mcp 重连后刷新 handshake/tool cache；关闭/取消中的迟到 open 会清理资源且不触发 hook；未做 W4 并行 execute/observed_at |
-| W4 | world freshness + 多机器人并行执行 | W1 欠账 | ⚪ 拆分实施：per-robot claim guard 只防同 robot action overlap，**不代表 W4 完成**；先落 `observed_at/revision/stale`，再评审单 watch 跨 robot 并行 execute；workspace 多 watch 已由 W6.1 singleton lease 阻止，实机 failover 仍需 W6.2 hardware fencing |
-| W5 | driver 编写守则：阻塞调用须带超时或走 to_thread（写进 driver 模板与生成规则） | 讨论产出 | ⚪ 轻 |
+| W4 | world freshness + 多机器人并行执行 | W1 欠账 | ⏸ R0-R8 冻结：per-robot claim guard 只防同 robot overlap，**不代表 W4 完成**；本轮不加 freshness schema 或跨 robot 并行 execute |
+| W5 | driver 编写守则：阻塞调用须带超时或走 to_thread（写进 driver 模板与生成规则） | 讨论产出 | ⏸ R0-R8 冻结；现有安全回归仍必须守住 timeout/to_thread 纪律 |
 | W6.1 | workspace watch runtime lease + unique executor/claim-owner CAS | VNext 执行协调风险 | ✅ 2026-07-10 完成：active `watch-executor` lease 阻止第二 runtime；关键阶段续租，失租 fatal stop；action terminal mutation 校验 unique claim_owner；stale shutdown 不 halt；active lease 阻止 workspace reset |
-| W6.2 | driver/transport/hardware-level fencing token | VNext 执行协调风险 | ⚪ 实机高可用接管前置：数据库 lease 不能撤销 in-flight command，设备也不会拒绝旧 epoch I/O；需 fencing token/独占代理与明确的分区、接管、fresh observe/fail-safe 语义 |
-| F5.1-F5.3 | LeRobot motors / ros_mcp / 感知语义层 | §2 | ⏸ 条件触发 |
-| F6.0 | 场景规格设计（arm 继承 mock_arm；car 能力词汇表从零定） | §2 | ⚪ F6.1 前置 |
-| F6.1 | Hero Demo Twin：机械臂（公司产品）+ 通用 SceneView 面板 | §2 | ⚪ F0 之后 |
-| F6.1b | 智能小车第二示例（使用指南） | §2 | ⏸ 随 F6.1 面板复用 |
-| F6.2 | remote_sim driver + BYO Simulator 协议（含 capabilities 发现；CoppeliaSim 参考适配器） | §2 | ⚪ 排 F6.1 后 |
-| F6.3 | BYO conformance 测试套件（`sim-verify`） | §2 | ⏸ 随 F6.2 |
-| F6.4 | 真臂 URDF 数字孪生 + 预演 Gate | §2 | ⏸ 远期 |
+| W6.2 | driver/transport/hardware-level fencing token | VNext 执行协调风险 | ⏸ R0-R8 冻结：数据库 lease 不能撤销 in-flight command 的风险说明保持；只有明确实机 HA/接管需求才重启 |
+| F5.1-F5.3 | LeRobot motors / ros_mcp / 感知语义层 | §2 | ⏸ R0-R8 冻结；之后仍需设备条件触发 |
+| F6.0 | 场景规格设计（arm 继承 mock_arm；car 能力词汇表从零定） | §2 | ⏸ R0-R8 冻结 |
+| F6.1 | Hero Demo Twin：机械臂（公司产品）+ 通用 SceneView 面板 | §2 | ⏸ R0-R8 冻结 |
+| F6.1b | 智能小车第二示例（使用指南） | §2 | ⏸ R0-R8 冻结 |
+| F6.2 | remote_sim driver + BYO Simulator 协议（含 capabilities 发现；CoppeliaSim 参考适配器） | §2 | ⏸ R0-R8 冻结 |
+| F6.3 | BYO conformance 测试套件（`sim-verify`） | §2 | ⏸ R0-R8 冻结 |
+| F6.4 | 真臂 URDF 数字孪生 + 预演 Gate | §2 | ⏸ R0-R8 冻结/远期 |
 | MuJoCo-harness | 无头批量评测（原 F6.2，降级为远期候选） | git 历史可查设计 | ⏸ |
 | T1 | Ink 终端 UI 只读三面板（状态/chat/actions） | T 独立线 | ✅ 2026-07-07 完成：`tui/` 独立 Node/TS/Ink 包，状态/chat/actions 三面板，SSE 优先 + polling/degraded fallback，纯 HTTP API/SSE 客户端；2026-07-08 review fix：SSE clean EOF 降级轮询、真实 watch enabled/disabled/unknown 状态；2026-07-08 chat/actions 持久化修复：`/api/events` summary 不再覆盖完整 state，而是触发完整 `/api/state` 刷新；2026-07-08 LLM 状态显示：启动/`/refresh` 检查 LLM settings/test，显示模型、key 是否配置与短失败原因；2026-07-08 Windows/npm 启动参数兼容裸 API URL（`npm start -- http://127.0.0.1:8766`） |
 | T2/T3 | Ink 交互（审批依赖 F1.3）与补齐 | T 独立线 | ✅ 2026-07-07 T2-lite 完成：chat、`/task`、`/approve`、`/reject`、`/reset true`、`/refresh`、`/help`、`/quit`；2026-07-08 review fix：chat stream 异常/AbortError 均清理 streaming/busy 状态；2026-07-08 交互改为更接近 Claude Code 的纵向 transcript；2026-07-08 取消单条 chat 220 字符硬截断并保留换行；2026-07-08 chat 历史改为 Ink `Static` append-only 输出，空闲 `watch_step` 不再触发 live 刷新；2026-07-08 T3 完成 config/robots/uploads 视图、`/view`/`/config`/`/robots`/`/robot`/`/capabilities`/`/upload`/`/ingest`/`/register-robot` 命令、API-only multipart 上传与 TUI 安全 grep；2026-07-08 command acceptance 收口：新增 `tui/tests/scenarios/*.scenario` 与 runner，覆盖全部用户命令、API offline、SSE error/EOF、polling fallback、缺参、非法命令、上传失败、reset confirmation failure，并生成 `docs/tui-command-matrix.md`；`cd tui && npm test` 场景纳入默认测试，`npm run build` 通过 |

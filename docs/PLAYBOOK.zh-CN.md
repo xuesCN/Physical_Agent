@@ -2,9 +2,21 @@
 
 > 配套 `SPEC.zh-CN.md` §4 矩阵使用：矩阵管"做什么/状态"，本册管"怎么做"。每项含：思路、关键文件、坑、验收。
 > 写给后续执行者（人或 agent）。动工前先读 SPEC §0 不变量与 REFACTORING §3 决策先例；每项动工时按惯例先出一份轮次 brief。
-> 最后更新：2026-07-07
+> 最后更新：2026-07-10
 
 ---
+
+## R0-R8 架构减法与兼容面退役
+
+**目标**：本条目不推进新的 SPEC 功能，而是删除重复实现和过期兼容面，使 FastAPI+React、SQLite Action Board/feedback、trusted `AgentOutput` 与独立 watch 成为唯一正式主链。完整约束、顺序和原子勾选项见 `docs/specs/001-architecture-simplification/spec.md`、`plan.md`、`tasks.md`。
+
+**顺序**：① 冻结范围并审计；①.⑤ legacy GUI parity/缺口补齐/wheel + thin `gui` launcher strangler cutover；② 独立验证后才删除 legacy GUI；③ 先抽 safety/log sidecar，再删 Markdown migrator/full Workspace；④ 删 `auto_step`；⑤ 建立真正的 structured Chat result 并让 `action-draft` 双轨一轮；⑥ 收敛 read-model/consumer，点名删除 `chat_runtime.py::_append_actions`；⑦ R5+R6 门禁全绿后再删 fence 和 proposal action payload 重复字段；⑧ 文档、wheel 与全量测试收口。不得跳过 1.5，步骤 5 完成后只能进入步骤 6。
+
+**关键取舍**：Dashboard 保留安全初始化、workspace reset、真实 executor health、execution mode 与所有现有 proposal/approval/hardware 主路径；GUI watch start/stop/step、hard-coded Demo、per-message planner selector、browser code skill/raw doctor 有意退役，替代分别是正式 watch 生命周期、`setup --smoke-test`、Dashboard 固定 auto + CLI `chat --planner`、CLI `chat --show-code-result`、operator `doctor`。Markdown migration 不再保留版本周期，但 `SAFETY.md`/`LOG.md`、legacy workspace fail-closed 检测必须保留；旧用户在独立 worktree checkout `9072b4e` 先迁移。`/api/state.actions` 是 Action Board 真值，永不作为“重复 response 字段”删除。
+
+**冻结**：R0-R8 完成前，VNext-3/4、W4/W5/W6.2、F0 后续、F5/F6、B4-vec、registry/read-model 新能力与自动 replan 均不实施。原因是先消除第二 GUI、旧 workspace、兼容 fence 和重复 wire/read model，再判断是否真的需要新增持久化或硬件能力。
+
+**验收**：每个删除项都有前置正反测试或替代入口；双轨有独立一轮证据；wheel 安装后能启动同一 React Dashboard；全量 pytest、frontend build/e2e、TUI build/test、安全扫描与 docs/CLI grep 全绿。R0 第一轮只产出规格和审计，当前仍是删除 No-Go。
 
 ## F0 LLM planner 实验
 
@@ -15,8 +27,8 @@
 ## B6 退役 markdown 后端（已完成，维护约束）
 
 **完成状态**：`MarkdownStateStore` / runtime Markdown backend 已退役；active backend 只支持 SQLite。`workspace.backend: markdown` 和"省略 backend 但存在完整 legacy Markdown workspace"都必须报迁移指引，不能静默打开旧后端。
-**保留边界**：`protocol/markdown.py` 与 parsers/renderers 仍服务 SAFETY.md 文件真源、SQLite 的 LOG.md 人类可读镜像、audit export，以及旧 workspace 迁移输入解析。不要把这类协议工具误删成"markdown 全家退役"。
-**禁止回流**：`LegacyMarkdownWorkspaceReader` 只服务 `migrate-md-to-sqlite`，不得被 runtime factory、watch、API、GUI、agent、chat、planner 或 MCP 直接使用；不得实现 `StateStore`，不得承接新功能字段。后续删除 `migrate-md-to-sqlite` 时，应一并删除 `LegacyMarkdownWorkspaceReader`。
+**保留边界**：R3 会提前退役 migration/full Workspace，但必须先把 SAFETY.md 文件真源与 SQLite 的 LOG.md 人类可读镜像抽成聚焦 sidecar；audit export 仍复制 SAFETY。不要把这类生产能力误删成"markdown 全家退役"。
+**禁止回流**：退役前，`LegacyMarkdownWorkspaceReader` 仍只服务 `migrate-md-to-sqlite`，不得被 runtime factory、watch、API、GUI、agent、chat、planner 或 MCP 直接使用；不得实现 `StateStore`，不得承接新功能字段。R3 将一并删除 reader/command，并保留 legacy workspace fail-closed 检测和 `9072b4e` 救援指针。
 **维护检查**：新增状态字段时只改 SQLite 与审计导出；全仓 grep `LegacyMarkdownWorkspaceReader`、`MarkdownStateStore`、`workspace.backend: markdown`、`backend_role: legacy`，确认旧后端只出现在迁移/历史说明语境。
 
 ## F1 提案卡片 + Approve + 审批流
@@ -25,6 +37,8 @@
 **坑**：两个 Approve 语义必须分开：Chat draft 是"提交到动作板"，Actions 板是"放行执行"。审批≠免检，SafetyGate 只把 `requires_approval` 从"等待人"推进到"继续校验"，schema、bounds、capability、robot、SAFETY.md 仍照跑；approved action 后续被 Gate 拒绝时，保留 approval 记录并记录 safety rejected feedback/log。B6 后只维护 SQLite，不恢复 `MarkdownStateStore`、markdown backend 矩阵或 legacy runtime backend。
 **F0 实验追加的两个子项**：① **planner 拒绝理由透出**——结构化输出加可选 `refusal_reason`，无提案时 GUI 展示"为什么没方案"，旧调用方缺字段仍兼容。② **Gate 直击组**——绕 planner 直接 propose 越界/幻觉动作，留下 LLM 时代 Gate 拦截审计样本，证明 planner 没产出时 Gate 仍能拦。
 **验收**：chat 起草→Add to Actions→Actions 板 Approve execution→watch 执行→feedback 全程 GUI；非 `requires_approval` 不被审批流程阻塞；`requires_approval` 未 approved 不被 claim，approved 后仍经过 SafetyGate；队首未批准动作不阻塞后续 ready action；拒绝动作进 cancelled 并带原因；approval/source/refusal_reason 进入 LOG 镜像与 audit export；全量 pytest 与前端 build 通过。
+
+**退役约束（R5/R7）**：当前 streaming draft 仍依赖正文 `action-draft` fence。先建立与 non-stream 共用的 typed Chat Turn，让 SSE done/assistant metadata 携带同一个 draft `AgentOutput`；React structured-first、fence fallback 双轨一轮并验证完整 Add 主链后，才在后续步骤停产和删除 fence。禁止只把现有“从 fence 反解析”的 `agent_output` 转发出去就宣称结构化迁移完成。
 
 ## F2 结构化信息可读化（全应用原则）
 

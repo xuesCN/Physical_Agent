@@ -40,6 +40,7 @@
 | VNext-2 | materialized AgentOutput + structured feedback + 调度/上下文硬化 | 本轮完成 |
 | VNext-2b | Proposal actions batch 单事务 all-or-nothing | 本轮完成 |
 | W6.1 | workspace watch runtime lease + unique claim-owner CAS/reset guard | 本轮完成 |
+| R0 | 架构减法规格 + GUI/Markdown/streaming 三份退役审计 | 本轮提交 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -108,7 +109,7 @@ A1 最初被跳过（工具循环建在自研 urllib 客户端上"够用"），�
 
 ### B6：退役 MarkdownStateStore 后端
 
-动机：B3.8 后 SQLite 已是默认且经原子动作/lease/audit 硬化；F1.3 审批流即将扩展 action 元数据，继续维护 MarkdownStateStore 会让新审批字段为死后端重复实现。过程：删除 active backend 的 `state/markdown.py` 与 factory markdown 分支，`load_config()` 不再自动探测 legacy Markdown workspace；显式 `workspace.backend: markdown` 或省略 backend 但存在完整旧 Markdown workspace 时均报清晰迁移指引。`migrate-md-to-sqlite` 保留一个版本周期，但改走 `LegacyMarkdownWorkspaceReader` 迁移专用只读路径，不实现 `StateStore`，不进入 factory，不承接新功能字段，避免运行态绕回旧后端。测试侧删除 markdown e2e 与 backend 矩阵 md 侧，保留 SQLite 的原子领取、lease recovery、并发 proposal、SAFETY 文件真源、LOG 镜像、audit export 与迁移回归；`protocol/markdown.py` 与 parsers/renderers 继续服务 SAFETY.md、LOG.md 人类可读镜像、audit export 和旧 workspace 迁移输入。文档同步：`state-backends` 改为 SQLite-only，`sqlite-readiness` 并入删除，bring-up 与 xiaozhi 教程改成 SQLite 黑板口径，旧独立 handoff 删除。
+动机：B3.8 后 SQLite 已是默认且经原子动作/lease/audit 硬化；F1.3 审批流即将扩展 action 元数据，继续维护 MarkdownStateStore 会让新审批字段为死后端重复实现。过程：删除 active backend 的 `state/markdown.py`、factory markdown 分支和自动选择/打开 legacy backend 的 fallback；`load_config()` 仍识别完整旧 Markdown 文件集合，但只用于 fail-closed 拒绝。显式 `workspace.backend: markdown` 或省略 backend 但存在完整旧 Markdown workspace 时均报清晰迁移指引。`migrate-md-to-sqlite` 保留一个版本周期，但改走 `LegacyMarkdownWorkspaceReader` 迁移专用只读路径，不实现 `StateStore`，不进入 factory，不承接新功能字段，避免运行态绕回旧后端。测试侧删除 markdown e2e 与 backend 矩阵 md 侧，保留 SQLite 的原子领取、lease recovery、并发 proposal、SAFETY 文件真源、LOG 镜像、audit export 与迁移回归；`protocol/markdown.py` 与 parsers/renderers 继续服务 SAFETY.md、LOG.md 人类可读镜像、audit export 和旧 workspace 迁移输入。文档同步：`state-backends` 改为 SQLite-only，`sqlite-readiness` 并入删除，bring-up 与 xiaozhi 教程改成 SQLite 黑板口径，旧独立 handoff 删除。
 
 ### F1：提案卡片 + Add to Actions + action 级审批流
 
@@ -240,6 +241,18 @@ watch/state 侧同步修了六类竞态与卡死：① effective timeout 固定�
 
 边界保持：认知侧仍不 import watch/driver；compiler 只编译义务，不预判 Gate 通过；watch 保留最终裁决与唯一 execute 权；`SAFETY.md` 仍是文件真源；F4 expected 仍是执行后诊断。后续持久化、hardware fencing 与账本口径见 `SPEC.zh-CN.md` VNext-3/W6.2/VNext-4 和 `agent-architecture-vnext.zh-CN.md`。
 
+### R0：架构减法规格与删除前审计
+
+动机：VNext-1/2 已把 SafetyGate 升为 `AgentOutput` 中显式、不可伪造的义务，但仓库仍同时维护 legacy GUI/FastAPI+React 两套 Web 栈、一次性 Markdown migration/full Workspace 协议、`auto_step` 兼容形状、streaming fence 与结构化 output、proposal 顶层 actions 和 `agent_output.actions` 等重复面。继续实现 VNext-3/4、W4/W6.2 或 F6 会把这些分叉固化进更多 schema、客户端和测试。因此当前主线从“补功能”切成 `docs/specs/001-architecture-simplification/` 的 R0-R8 架构减法。
+
+本轮只做规格和只读审计，没有删除生产代码。GUI parity 枚举了 legacy 的十个 HTTP 控制面和用户能力，确认 React/FastAPI 仍缺安全首次 Setup、真实 watch runtime health、未启动 watch 时的 execution mode 可见性，以及 wheel 内的 Dashboard 资源；FastAPI LLM hardware integration 和完整 streaming draft→Add to Actions e2e 也需先移植。GUI 内 watch start/stop/step、hard-coded Demo、per-message planner、browser code skill/raw doctor 决定有意退役：执行生命周期改由正式 watch 管理，Demo 用 `setup --smoke-test`，Dashboard chat 固定 auto 而调试 override 用 CLI `chat --planner`，code skill 结构化结果用 CLI `chat --show-code-result`，诊断用 operator doctor。workspace reset 采用保留 YAML、active lease fail closed 的更安全语义，不复制浏览器覆写硬件配置的旧 factory reset。
+
+Markdown 审计确认 migrator、`LegacyMarkdownWorkspaceReader` 和 full Workspace helper/protocol 可以退役，但 `SqliteStateStore` 仍直接借 `protocol.workspace.Workspace` 读写 `SAFETY.md` 与镜像 `LOG.md`，doctor 也依赖最小 front matter。执行顺序因此固定为“先抽 safety/log sidecar 并锁行为，再删 migrator/full Workspace”；显式 markdown backend 和隐式旧文件集合仍必须 fail closed，避免 SQLite 在旧目录旁形成双真源。提前结束 B6 的一个版本迁移窗口时保留历史后路：需要迁移的用户在独立 worktree checkout `9072b4e`（或删除提交之前版本）完成迁移，再回当前版本运行不带 `--force` 的 `physical-agent init`，随后运行 `physical-agent state-check`。
+
+streaming 审计进一步发现：当前 done item 虽已有 `agent_output`，它仍由完成后的文本 fence 反向解析而来，且 API SSE 转发时把该字段丢弃；React 又从正文第二次解析 fence，TUI 只看 state plan。R5 因此先建立 rule/LLM reply/proposal 共用的 typed Chat result，直接编译 draft `AgentOutput`，再由结构化 actions 生成兼容 fence；React structured-first/fence-fallback 双轨一轮，R6 完成官方 consumer migration 后才在 R7 删除 fence。R0 不预先锁死 transport 实现：正式方案必须同时保留一个 authoritative action set、真实首 token/delta 与中途 abort；若 provider-neutral client 无法兼得，暂停并单独做产品取舍，不能用完整结果的本地分块静默降级 streaming。
+
+同时确认 `chat_runtime.py::_append_actions` 零调用，它重复了 ProposalService 已拥有的编号、dependency remap 和 batch append；已点名进入 R6，连同专属 `_normalize_depends_on` import 与 `_max_action_number()` 删除。`/api/state.actions` 明确保留为 Action Board 运行真值；只退役 task/chat/manual proposal response 的顶层 convenience `actions/action`。本轮边界保持：两条安全宪法、watch、SafetyGate、driver、SQLite schema 和运行 API 行为均未修改；当前仍是 GUI/迁移/fence 删除 No-Go。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -297,6 +310,12 @@ watch/state 侧同步修了六类竞态与卡死：① effective timeout 固定�
 53. **失租后的旧 owner 不得善意 halt**（W6.1）：halt 本身也是物理副作用；successor 接管后，stale shutdown 只能断开自己的 transport，不能发送可能干扰新 owner 的 halt。
 54. **reset 不能抹掉活跃 ownership**（W6.1）：workspace reset 与 lease acquire/renew 串行；active lease 时 fail closed，避免删表制造 split brain。
 55. **数据库 lease 不是设备 fencing token**（W6.2）：它能阻止下一次受检查的软件操作，却无法撤销 in-flight I/O 或让硬件拒绝旧 epoch；实机 HA 接管仍需 driver/transport/device 层协议。
+56. **先减兼容面，再扩 Agent runtime**（R0）：VNext-3/4、W4/W5/W6.2、F0 后续、F5/F6、B4-vec、registry/read-model 与自动 replan 在 R0-R8 期间冻结；收口后按真实需求重新排序，不自动恢复旧排期。
+57. **legacy GUI 删除以用户任务 parity 为门禁**（R1.5/R2）：保留命令体验但只启动正式 FastAPI+React；仍支持的任务必须先覆盖并测试，违背 proposal-only 边界的旧能力则显式退役并给替代，不能静默消失，也不机械复制危险语义。
+58. **迁移入口退役不等于删除 safety/log sidecar**（R3）：一次性 Markdown reader/full Workspace 可以删；`SAFETY.md` 文件真源、`LOG.md` 镜像和旧目录 fail-closed 检测属于当前生产安全边界，先抽聚焦 adapter。提前结束迁移窗口以 `9072b4e` 独立 worktree 作为救援指针。
+59. **structured output 必须独立于 fence 生产**（R5/R7）：从 `action-draft` 反向解析出的 AgentOutput 不是新通道；先建立 typed Chat Turn，以 structured actions 生成兼容 fence并双轨验证，后续提交才可删 fence。
+60. **Action Board truth 与 proposal action payload duplication 分开**（R6/R7）：`/api/state.actions`/SQLite board 永久保留；只删除已有 `agent_output.actions` 替代的 task/chat/manual proposal 顶层 `actions/action/draft_actions`，approve/reject mutation result、envelope/status/correlation 和内部 `ProposalResult.actions` 不在此列。
+61. **统一协议，不强行统一 presentation**（R6）：React 与 TUI 可以保留不同 formatter/viewmodel；只统一后端 `AgentOutput`、projection 和 owner/status/Gate 解释，避免跨浏览器/终端的伪共享抽象。
 
 ## 4. 经验教训（流程侧）
 
@@ -318,5 +337,7 @@ watch/state 侧同步修了六类竞态与卡死：① effective timeout 固定�
 - **先做账本会掩盖错误的领域模型**（VNext-1 的教训）：Run/Event 能统一 correlation，却不会自动让隐式 SafetyGate 成为 Agent 的公开义务；演进顺序应先 assurance loop，后 ledger envelope。
 - **把 status overlay 留在客户端会再次分叉**（VNext-2 的教训）：compiled graph、Action Board 与 feedback 的合成规则应集中在 application projection；Web/TUI 只渲染同一 materialized 输出。
 - **软件 ownership 与硬件 fencing 要分层命名**（W6 的教训）：workspace runtime lease 已覆盖单数据库内的执行者排他、claim CAS 和 reset guard；不能因此声称 in-flight command 或设备控制权已被 epoch fence。
+- **删除/迁移清单必须来自代码 surface，不只来自现有测试**（R0 的教训）：legacy GUI 的 setup/watch/doctor/task 多条路径没有直接测试，若只搬测试会再次漏功能；先枚举端点、用户任务、打包入口、文档和负用例，再决定覆盖或有意退役。
+- **兼容字段存在不代表已经有独立新通道**（R0 的教训）：stream done 内部已有 `agent_output`，但它仍由 fence 反解析且 API 丢弃；判断迁移完成要追 producer→transport→consumer→persistence 的事实来源，而不是只看 schema 名称。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

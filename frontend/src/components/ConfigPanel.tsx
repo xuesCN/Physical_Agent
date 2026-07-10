@@ -1,46 +1,32 @@
 import { FileTextOutlined, ReloadOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, Descriptions, Empty, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useEffect, useState } from "react";
-import { fetchConfig } from "../api";
 import { useMessages } from "../locales/context";
 import type { ConfigResponse } from "../types";
 import { JsonSummaryLine } from "./JsonSummary";
 
 interface ConfigPanelProps {
-  refreshToken?: number;
+  response: ConfigResponse | null;
+  error?: string | null;
+  loading?: boolean;
+  onRefresh: () => void;
 }
 
 interface ConfigRobotRow {
   key: string;
   id: string;
   driver: string;
+  executionMode: string;
   config: Record<string, unknown>;
 }
 
-export function ConfigPanel({ refreshToken = 0 }: ConfigPanelProps) {
+export function ConfigPanel({
+  response,
+  error = null,
+  loading = false,
+  onRefresh
+}: ConfigPanelProps) {
   const labels = useMessages();
-  const [response, setResponse] = useState<ConfigResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const next = await fetchConfig();
-      setResponse(next);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshToken]);
 
   const config = response?.config;
   const watch = config?.watch ?? {};
@@ -48,6 +34,7 @@ export function ConfigPanel({ refreshToken = 0 }: ConfigPanelProps) {
     key: id,
     id,
     driver: robot.driver,
+    executionMode: robot.execution_mode ?? "not specified",
     config: robot.config ?? {}
   }));
 
@@ -59,6 +46,12 @@ export function ConfigPanel({ refreshToken = 0 }: ConfigPanelProps) {
       render: (value: string) => <Typography.Text code>{value}</Typography.Text>
     },
     { title: labels.config.driver, dataIndex: "driver", width: 200 },
+    {
+      title: labels.config.executionMode,
+      dataIndex: "executionMode",
+      width: 140,
+      render: (value: string) => <Tag color={value === "hardware" ? "gold" : "blue"}>{value}</Tag>
+    },
     {
       title: labels.config.config,
       dataIndex: "config",
@@ -88,7 +81,7 @@ export function ConfigPanel({ refreshToken = 0 }: ConfigPanelProps) {
           size="small"
           icon={<ReloadOutlined />}
           loading={loading}
-          onClick={() => void load()}
+          onClick={onRefresh}
           data-testid="config-refresh-button"
         >
           {labels.config.refresh}
@@ -126,8 +119,8 @@ export function ConfigPanel({ refreshToken = 0 }: ConfigPanelProps) {
             <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={labels.panels.noRobotsConfigured} />
           )}
           <Typography.Text type="secondary">
-            This is the effective configuration watch loads at startup. To change existing
-            entries, edit physical-agent.yaml and restart watch.
+            This is the effective configuration the executor loads at startup. To change
+            existing entries, edit physical-agent.yaml and restart the executor.
           </Typography.Text>
         </Space>
       )}

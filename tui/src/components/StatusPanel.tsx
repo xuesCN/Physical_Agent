@@ -19,7 +19,7 @@ export function StatusPanel({ status, health, state, config }: StatusPanelProps)
       <Text color="cyan">status</Text>
       <Text>api: {status.apiBase}</Text>
       <Text>backend: {status.backend}</Text>
-      <Text>watch: {status.watch}</Text>
+      <Text>executor: {status.executor?.mode ?? "unknown"} ({status.executor?.status ?? "unknown"})</Text>
       <Text>connection: {status.connected ? "connected" : "disconnected"} via {status.mode}</Text>
       <Text>workspace: {state?.workspace_path ?? health?.workspace_path ?? "-"}</Text>
       <Text>config: {state?.config_path ?? health?.config_path ?? config?.config_path ?? "-"}</Text>

@@ -10,6 +10,7 @@ import type {
   IntegrateResponse,
   LLMSettingsPayload,
   LLMSettingsResponse,
+  ProjectInitializeResponse,
   RegisterRobotPayload,
   RegisterRobotResponse,
   SearchResponse,
@@ -47,6 +48,13 @@ export function fetchHealth(): Promise<HealthState> {
 
 export function fetchState(): Promise<AgentState> {
   return apiJson<AgentState>("/api/state", {}, { allowNotReadyBody: true });
+}
+
+export function initializeProject(): Promise<ProjectInitializeResponse> {
+  return apiJson<ProjectInitializeResponse>("/api/project/initialize", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }
 
 export function fetchStateCheck(): Promise<StateCheckResult> {

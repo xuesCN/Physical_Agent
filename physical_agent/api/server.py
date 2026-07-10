@@ -25,7 +25,12 @@ from physical_agent.api.watch_service import (
     format_sse_event,
     summarize_state,
 )
-from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config
+from physical_agent.config import (
+    DEFAULT_CONFIG_NAME,
+    PhysicalAgentConfig,
+    load_config,
+    write_default_config,
+)
 from physical_agent.ingest.files import (
     ALLOWED_TEXT_SUFFIXES,
     FileIngestionError,
@@ -49,6 +54,7 @@ from physical_agent.state.check import run_state_check, state_check_ok
 
 BROWSER_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
 UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
+EXECUTOR_EVENT_INTERVAL_S = 5.0
 
 SERVER_EXTRA_HINT = (
     "FastAPI backend dependencies are not installed. "
@@ -188,7 +194,11 @@ def create_app(
     globals()["UploadFile"] = UploadFile
 
     events = ApiEventBroker()
-    controller = ApiController(config_path, events=events)
+    controller = ApiController(
+        config_path,
+        events=events,
+        embedded_watch_enabled=enable_watch,
+    )
 
     @asynccontextmanager
     async def lifespan(app: Any) -> Any:
@@ -204,6 +214,7 @@ def create_app(
                 state_provider=controller.state,
             )
             app.state.watch_service = service
+            controller.bind_watch_service(service)
             await service.start()
         try:
             yield
@@ -211,6 +222,7 @@ def create_app(
             service = getattr(app.state, "watch_service", None)
             if service is not None:
                 await service.stop()
+                controller.bind_watch_service(None)
 
     app = FastAPI(
         title="Physical Agent API",
@@ -243,6 +255,13 @@ def create_app(
     def state() -> dict[str, Any]:
         return controller.state()
 
+    @app.post("/api/project/initialize")
+    def initialize_project() -> dict[str, Any]:
+        try:
+            return controller.initialize_project()
+        except ApiRequestError as exc:
+            return handle_error(exc)
+
     @app.get("/api/state-check")
     def state_check() -> dict[str, Any]:
         try:
@@ -273,6 +292,7 @@ def create_app(
                         {
                             "version": "0.1.0",
                             "watch_enabled": bool(enable_watch),
+                            "executor": controller.executor_status(),
                         },
                     )
                 )
@@ -282,11 +302,18 @@ def create_app(
                 if should_stop():
                     return
                 while True:
-                    event = subscription.get(timeout_s=15.0)
+                    event = subscription.get(timeout_s=EXECUTOR_EVENT_INTERVAL_S)
                     if event is None:
-                        if max_events is not None:
+                        yield emit(
+                            events.make_event(
+                                "executor",
+                                {
+                                    "executor": controller.executor_status()
+                                },
+                            )
+                        )
+                        if should_stop():
                             return
-                        yield ": keepalive\n\n"
                         continue
                     yield emit(event)
                     if should_stop():
@@ -511,66 +538,189 @@ class ApiController:
         *,
         events: ApiEventBroker | None = None,
         planner: PlannerPort | None = None,
+        embedded_watch_enabled: bool = False,
     ):
         self.config_path = Path(config_path).resolve()
         self.base_dir = self.config_path.parent
         self.events = events
         self._planner_override = planner
+        self._embedded_watch_enabled = bool(embedded_watch_enabled)
+        self._watch_service: ApiWatchService | None = None
+        self._initialize_lock = threading.Lock()
         self._chat_streams: dict[str, ChatStreamState] = {}
         self._chat_stream_lock = threading.Lock()
 
+    def bind_watch_service(self, service: ApiWatchService | None) -> None:
+        self._watch_service = service
+
     def health(self) -> dict[str, Any]:
         if not self.config_path.exists():
-            return {
-                "ok": False,
-                "ready": False,
-                "message": "Config file is missing.",
-                "config_path": str(self.config_path),
-                "config_exists": False,
-                "workspace_exists": False,
-            }
+            return self._with_executor(
+                {
+                    "ok": False,
+                    "ready": False,
+                    "message": "Config file is missing.",
+                    "config_path": str(self.config_path),
+                    "config_exists": False,
+                    "workspace_exists": False,
+                }
+            )
         try:
             config, store = self._store()
         except Exception as exc:
-            return {
-                "ok": False,
-                "ready": False,
-                "message": str(exc),
-                "config_path": str(self.config_path),
-                "config_exists": True,
-                "workspace_exists": False,
-            }
+            return self._with_executor(
+                {
+                    "ok": False,
+                    "ready": False,
+                    "message": str(exc),
+                    "config_path": str(self.config_path),
+                    "config_exists": True,
+                    "workspace_exists": False,
+                }
+            )
         exists = store.exists()
-        return {
-            "ok": True,
-            "ready": exists,
-            "message": "Ready." if exists else "Workspace is not initialized.",
-            "config_path": str(self.config_path),
-            "workspace_path": str(store.path),
-            "backend": config.workspace.backend,
-            "config_exists": True,
-            "workspace_exists": exists,
-        }
-
-    def state(self) -> dict[str, Any]:
-        if not self.config_path.exists():
-            return {
-                "ok": False,
-                "ready": False,
-                "message": "Config file is missing.",
-                "config_path": str(self.config_path),
-            }
-        config, store = self._store()
-        if not store.exists():
-            return {
-                "ok": False,
-                "ready": False,
-                "message": "Workspace is not initialized.",
+        return self._with_executor(
+            {
+                "ok": True,
+                "ready": exists,
+                "message": "Ready." if exists else "Workspace is not initialized.",
                 "config_path": str(self.config_path),
                 "workspace_path": str(store.path),
                 "backend": config.workspace.backend,
+                "config_exists": True,
+                "workspace_exists": exists,
             }
+        )
+
+    def state(self) -> dict[str, Any]:
+        if not self.config_path.exists():
+            return self._with_executor(
+                {
+                    "ok": False,
+                    "ready": False,
+                    "message": "Config file is missing.",
+                    "config_path": str(self.config_path),
+                }
+            )
+        try:
+            config, store = self._store()
+        except Exception as exc:
+            return self._with_executor(
+                {
+                    "ok": False,
+                    "ready": False,
+                    "message": str(exc),
+                    "config_path": str(self.config_path),
+                }
+            )
+        if not store.exists():
+            return self._with_executor(
+                {
+                    "ok": False,
+                    "ready": False,
+                    "message": "Workspace is not initialized.",
+                    "config_path": str(self.config_path),
+                    "workspace_path": str(store.path),
+                    "backend": config.workspace.backend,
+                }
+            )
         return self._state(config, store)
+
+    def initialize_project(self) -> dict[str, Any]:
+        with self._initialize_lock:
+            return self._initialize_project_once()
+
+    def _initialize_project_once(self) -> dict[str, Any]:
+        config_created = not self.config_path.exists()
+        if config_created:
+            write_default_config(self.config_path, overwrite=False)
+        try:
+            config = load_config(self.config_path)
+            store = open_state_store(config, base_dir=self.base_dir)
+        except Exception as exc:
+            raise ApiRequestError(
+                f"Existing config is invalid; nothing was overwritten: {exc}",
+                status_code=400,
+            ) from exc
+
+        workspace_created = not store.exists()
+        try:
+            store.initialize(overwrite=False)
+        except ActiveRuntimeLeaseError as exc:
+            raise ApiRequestError(str(exc), status_code=409) from exc
+        if config_created or workspace_created:
+            store.append_log(
+                "API initialized the project without replacing existing config or state.",
+                actor="api",
+            )
+        state = self._state(config, store)
+        self._publish_state("project_initialized", state)
+        return {
+            "ok": True,
+            "message": (
+                "Project initialized."
+                if config_created or workspace_created
+                else "Project is already initialized."
+            ),
+            "config_created": config_created,
+            "workspace_created": workspace_created,
+            "state": state,
+        }
+
+    def executor_status(self) -> dict[str, Any]:
+        initialized, lease, projection_error = self._executor_storage_snapshot()
+        service_status = (
+            self._watch_service.status()
+            if self._watch_service is not None
+            else {
+                "phase": "stopped",
+                "task_running": False,
+                "owner": None,
+                "last_error": None,
+            }
+        )
+        lease_active = bool(lease and lease.get("active"))
+        local_owner = service_status.get("owner")
+        lease_owner = lease.get("owner") if lease else None
+
+        if lease_active:
+            mode = (
+                "embedded"
+                if self._embedded_watch_enabled
+                and local_owner is not None
+                and local_owner == lease_owner
+                else "external"
+            )
+        elif self._embedded_watch_enabled:
+            mode = "embedded" if initialized else "waiting_for_init"
+        else:
+            mode = "none"
+
+        if mode == "external":
+            status = "active"
+        elif mode == "waiting_for_init":
+            service_phase = str(service_status.get("phase") or "waiting_for_init")
+            status = (
+                service_phase
+                if service_phase in {"invalid_config", "degraded"}
+                else "waiting_for_init"
+            )
+        elif mode == "embedded":
+            status = str(service_status.get("phase") or "stopped")
+            if initialized and status == "waiting_for_init":
+                status = "starting"
+        else:
+            status = "stopped"
+
+        return {
+            "mode": mode,
+            "status": status,
+            "embedded_enabled": self._embedded_watch_enabled,
+            "lease": _json_safe(lease),
+            "last_error": _json_safe(
+                service_status.get("last_error") or projection_error
+            ),
+        }
 
     def state_check(self) -> dict[str, Any]:
         if not self.config_path.exists():
@@ -1346,6 +1496,29 @@ class ApiController:
         except LLMSettingsError as exc:
             raise ApiRequestError(str(exc), status_code=400) from exc
 
+    def _with_executor(self, payload: dict[str, Any]) -> dict[str, Any]:
+        payload["watch_enabled"] = self._embedded_watch_enabled
+        payload["executor"] = self.executor_status()
+        return payload
+
+    def _executor_storage_snapshot(
+        self,
+    ) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None]:
+        if not self.config_path.exists():
+            return False, None, None
+        try:
+            config = load_config(self.config_path)
+            store = open_state_store(config, base_dir=self.base_dir)
+            initialized = store.exists()
+            lease = (
+                store.read_runtime_lease("watch-executor")
+                if initialized
+                else None
+            )
+            return initialized, lease, None
+        except Exception as exc:
+            return False, None, error_payload(exc, phase="executor_projection")
+
     def _state(self, config: PhysicalAgentConfig, store: StateStore) -> dict[str, Any]:
         actions = store.read_actions()
         feedback = store.read_feedback()
@@ -1354,30 +1527,32 @@ class ApiController:
             actions=actions,
             feedback=feedback,
         )
-        return {
-            "ok": True,
-            "ready": True,
-            "message": "Ready.",
-            "config_path": str(self.config_path),
-            "workspace_path": str(store.path),
-            "backend": config.workspace.backend,
-            "task": store.read_task(),
-            "capabilities": store.read_capabilities(),
-            "world": store.read_world(),
-            "actions": {
-                "pending": _json_safe(actions["pending"]),
-                "in_progress": _json_safe(actions.get("in_progress", [])),
-                "completed": _json_safe(actions["completed"]),
-                "cancelled": _json_safe(actions["cancelled"]),
-            },
-            "feedback": feedback,
-            "safety": store.read_safety(),
-            "chat": _json_safe(store.read_chat()),
-            "plan": _json_safe(plan),
-            "memory": _json_safe(store.read_memory()),
-            "uploads": _json_safe(store.read_uploads()),
-            "chunks": _json_safe(store.read_memory_chunks()),
-        }
+        return self._with_executor(
+            {
+                "ok": True,
+                "ready": True,
+                "message": "Ready.",
+                "config_path": str(self.config_path),
+                "workspace_path": str(store.path),
+                "backend": config.workspace.backend,
+                "task": store.read_task(),
+                "capabilities": store.read_capabilities(),
+                "world": store.read_world(),
+                "actions": {
+                    "pending": _json_safe(actions["pending"]),
+                    "in_progress": _json_safe(actions.get("in_progress", [])),
+                    "completed": _json_safe(actions["completed"]),
+                    "cancelled": _json_safe(actions["cancelled"]),
+                },
+                "feedback": feedback,
+                "safety": store.read_safety(),
+                "chat": _json_safe(store.read_chat()),
+                "plan": _json_safe(plan),
+                "memory": _json_safe(store.read_memory()),
+                "uploads": _json_safe(store.read_uploads()),
+                "chunks": _json_safe(store.read_memory_chunks()),
+            }
+        )
 
     def _publish_state(self, reason: str, state: dict[str, Any] | None = None) -> None:
         if self.events is None:
@@ -1454,9 +1629,12 @@ def _install_frontend_routes(
 
 
 def _frontend_dist_path() -> Path:
+    from physical_agent.dashboard import dashboard_dist_path
+
     candidates = [
-        Path.cwd() / "frontend" / "dist",
+        dashboard_dist_path(),
         Path(__file__).resolve().parents[2] / "frontend" / "dist",
+        Path.cwd() / "frontend" / "dist",
     ]
     for candidate in candidates:
         if (candidate / "index.html").exists():

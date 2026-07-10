@@ -30,10 +30,14 @@ push 和 pull request 默认会跑：
      - SQLite 默认状态后端 smoke
      - watch 单步执行 smoke
 
-2. `Frontend build`
+2. `Frontend build + packaged wheel smoke`
    - Node 20
    - `cd frontend && npm ci`
    - `npm run build`，实际包含 `tsc -b && vite build`
+   - 检查提交的 `physical_agent/dashboard/dist` 与当前源码一致
+   - 构建 wheel，在两个干净 venv 分别验证 base wheel 的 `[server]` 安装提示，
+     以及 wheel + server extra 下 `physical-agent gui`、`physical-agent api`、
+     `/`、hashed assets 和 `/api/health`
 
 3. `Ink TUI contract`
    - Node 20
@@ -88,12 +92,15 @@ python -m pytest -q \
   tests/test_watch_runtime.py::test_watch_runtime_step_executes_action
 ```
 
-前端构建：
+前端构建与 wheel smoke：
 
 ```bash
 cd frontend
 npm ci
 npm run build
+cd ..
+python -m pip install build
+python scripts/smoke_dashboard_wheel.py
 ```
 
 TUI：

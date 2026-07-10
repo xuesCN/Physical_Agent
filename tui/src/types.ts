@@ -5,6 +5,24 @@ export interface HealthState {
   backend?: string;
   workspace_path?: string;
   config_path?: string;
+  executor?: ExecutorProjection;
+}
+
+export type ExecutorMode = "waiting_for_init" | "embedded" | "external" | "none";
+
+export interface ExecutorProjection {
+  mode: ExecutorMode;
+  status?: string;
+  embedded_enabled?: boolean;
+  lease?: {
+    active?: boolean;
+    owner?: string | null;
+    expires_at?: string | null;
+    [key: string]: unknown;
+  } | null;
+  last_error?: { message?: string; error_type?: string; [key: string]: unknown } | string | null;
+  legacy_watch_configured?: boolean;
+  [key: string]: unknown;
 }
 
 export interface AgentState extends HealthState {
@@ -200,12 +218,10 @@ export interface RuntimeStatus {
   mode: "sse" | "polling" | "degraded";
   lastRefresh: string | null;
   backend: string;
-  watch: WatchStatus;
+  executor: ExecutorProjection | null;
   llm: LlmRuntimeStatus;
   message: string;
 }
-
-export type WatchStatus = "enabled" | "disabled" | "unknown";
 
 export interface LLMSettingsSummary {
   base_url?: string;

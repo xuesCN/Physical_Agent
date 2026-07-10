@@ -26,8 +26,12 @@ export const zh = {
     workspace: "工作区",
     ready: "就绪",
     notReady: "未就绪",
-    enabled: "已启用",
-    off: "关闭",
+    executor: "执行器",
+    executorWaiting: "等待初始化",
+    executorEmbedded: "内嵌",
+    executorExternal: "外部",
+    executorNone: "未运行",
+    executorUnknown: "状态未知",
     sseConnected: "SSE 已连接",
     sseDisconnected: "SSE 已断开；轮询降级已启用"
   },
@@ -42,7 +46,7 @@ export const zh = {
     showTour: "重新显示引导",
     dangerZone: "危险区",
     resetTitle: "工作区重置",
-    resetDescription: "清空 world、actions、memory、chat 和上传内容，并恢复默认 SAFETY。physical-agent.yaml 和 LLM 设置会保留。",
+    resetDescription: "清空 world、actions、memory、chat 和上传内容，并恢复默认 SAFETY。physical-agent.yaml 和 LLM 设置会保留；若还要恢复默认配置，请运行 `physical-agent setup --force`。",
     resetConfirmTitle: "重置整个工作区？",
     resetConfirmDescription: "World、actions、memory、chat 和上传内容会被清空。此操作不可撤销。",
     resetOk: "重置工作区",
@@ -151,8 +155,15 @@ export const zh = {
     configFile: "配置文件",
     workspace: "工作区",
     robot: "机器人",
+    executionMode: "执行模式",
     config: "配置",
     noConfig: "无配置"
+  },
+  initialization: {
+    title: "工作区尚未就绪",
+    description: "先安全创建缺失的项目配置与工作区，再提交提案。",
+    action: "初始化项目",
+    success: "项目已初始化"
   },
   drawer: {
     title: "任务 / 动作提案"

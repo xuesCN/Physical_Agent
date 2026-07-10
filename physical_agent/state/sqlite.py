@@ -688,6 +688,31 @@ class SqliteStateStore:
             )
             return cursor.rowcount == 1
 
+    def read_runtime_lease(self, name: str) -> dict[str, Any] | None:
+        """Return a read-only lease projection, including expiry state."""
+
+        with self._connect() as conn:
+            table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'runtime_leases'"
+            ).fetchone()
+            if table_exists is None:
+                return None
+            row = conn.execute(
+                "SELECT name, owner, expires_at, updated_at "
+                "FROM runtime_leases WHERE name = ?",
+                (name,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "name": str(row["name"]),
+            "owner": str(row["owner"]),
+            "expires_at": str(row["expires_at"]),
+            "updated_at": str(row["updated_at"]),
+            "active": str(row["expires_at"]) > _lease_timestamp(),
+        }
+
     def release_runtime_lease(self, name: str, owner: str) -> bool:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")

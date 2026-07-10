@@ -1,10 +1,12 @@
-import { Alert, App as AntApp, ConfigProvider, Drawer, Layout, Spin, Tour, theme } from "antd";
+import { Alert, App as AntApp, Button, ConfigProvider, Drawer, Layout, Spin, Tour, theme } from "antd";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   abortChatStream,
   approveAction,
   fetchHealth,
+  fetchConfig,
   fetchState,
+  initializeProject,
   proposeAction,
   rejectAction,
   resetChat,
@@ -38,6 +40,8 @@ import type {
   AgentState,
   ApiEvent,
   ChatMessage,
+  ConfigResponse,
+  ExecutorProjection,
   HealthState,
   UploadResponse
 } from "./types";
@@ -64,7 +68,7 @@ const ConfigPanel = lazy(() =>
   import("./components/ConfigPanel").then((m) => ({ default: m.ConfigPanel }))
 );
 
-type BusyKey = "refresh" | "chat" | "proposal" | null;
+type BusyKey = "refresh" | "initialize" | "chat" | "proposal" | null;
 
 export default function App() {
   const [language, setLanguage] = useState<Language>(() => resolveInitialLanguage());
@@ -141,7 +145,10 @@ function Dashboard({
   const [state, setState] = useState<AgentState | null>(null);
   const [events, setEvents] = useState<ApiEvent[]>([]);
   const [sseConnected, setSseConnected] = useState(false);
-  const [watchEnabled, setWatchEnabled] = useState<boolean | null>(null);
+  const [executor, setExecutor] = useState<ExecutorProjection | null>(null);
+  const [configResponse, setConfigResponse] = useState<ConfigResponse | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [configLoading, setConfigLoading] = useState(false);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [streamMessages, setStreamMessages] = useState<ChatMessage[] | null>(null);
   const [chatStreamError, setChatStreamError] = useState<string | null>(null);
@@ -150,7 +157,6 @@ function Dashboard({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [tourOpen, setTourOpen] = useState(() => localStorage.getItem(TOUR_STORAGE_KEY) !== "1");
-  const [configVersion, setConfigVersion] = useState(0);
   const [prefillAction, setPrefillAction] = useState<ActionItem | null>(null);
   const [prefillVersion, setPrefillVersion] = useState(0);
   const busyRef = useRef<BusyKey>("refresh");
@@ -174,6 +180,7 @@ function Dashboard({
       const [nextHealth, nextState] = await Promise.all([fetchHealth(), fetchState()]);
       setHealth(nextHealth);
       setState(nextState);
+      setExecutor(nextState.executor ?? nextHealth.executor ?? null);
       setSnapshotError(null);
     } catch (error) {
       setSnapshotError(error instanceof Error ? error.message : String(error));
@@ -187,9 +194,27 @@ function Dashboard({
     void loadSnapshot();
   }, [loadSnapshot]);
 
+  const loadConfiguration = useCallback(async () => {
+    setConfigLoading(true);
+    try {
+      setConfigResponse(await fetchConfig());
+      setConfigError(null);
+    } catch (error) {
+      setConfigError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setConfigLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // Starts alongside the health/state snapshot request; Robots can therefore
+    // render YAML configuration even when no executor has published capabilities.
+    void loadConfiguration();
+  }, [loadConfiguration]);
+
   useEffect(() => {
     const source = new EventSource("/api/events");
-    const eventTypes = ["hello", "state", "watch_step", "error"];
+    const eventTypes = ["hello", "executor", "state", "watch_step", "error"];
 
     source.onopen = () => {
       setSseConnected(true);
@@ -208,9 +233,12 @@ function Dashboard({
       if (!parsed) {
         return;
       }
-      setEvents((current) => [parsed, ...current].slice(0, 30));
-      if (parsed.type === "hello") {
-        setWatchEnabled(Boolean(parsed.payload.watch_enabled));
+      if (parsed.type !== "executor") {
+        setEvents((current) => [parsed, ...current].slice(0, 30));
+      }
+      const nextExecutor = executorFromEventPayload(parsed.payload);
+      if (nextExecutor) {
+        setExecutor(nextExecutor);
       }
       if (parsed.type === "state" || parsed.type === "watch_step") {
         // The watch loop publishes a watch_step every tick (watch.tick_ms,
@@ -228,6 +256,7 @@ function Dashboard({
       }
       if (parsed.type === "error") {
         message.warning(String(parsed.payload.message ?? "API event error"));
+        void loadSnapshot();
       }
     };
 
@@ -371,6 +400,21 @@ function Dashboard({
     }
   }
 
+  async function handleInitialize() {
+    setBusy("initialize");
+    try {
+      const response = await initializeProject();
+      setState(response.state);
+      setExecutor(response.state.executor ?? null);
+      await Promise.all([loadSnapshot(), loadConfiguration()]);
+      message.success(response.message || labels.initialization.success);
+    } catch (error) {
+      showError(message, error);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleAction(action: ActionItem) {
     setBusy("proposal");
     try {
@@ -449,7 +493,7 @@ function Dashboard({
   }
 
   function handleRobotRegistered() {
-    setConfigVersion((current) => current + 1);
+    void loadConfiguration();
   }
 
   function handleOpenAction(actionId: string) {
@@ -474,7 +518,7 @@ function Dashboard({
             health={health}
             state={state}
             sseConnected={sseConnected}
-            watchEnabled={watchEnabled}
+            executor={executor}
             loading={busy === "refresh"}
             activePageLabel={labels.nav[activePage]}
             labels={labels}
@@ -490,6 +534,9 @@ function Dashboard({
                 loading={busy === "refresh"}
                 health={health}
                 state={state}
+                initializing={busy === "initialize"}
+                labels={labels}
+                onInitialize={() => void handleInitialize()}
               />
               <Suspense fallback={<PageFallback />}>
                 {renderPageContent({
@@ -511,7 +558,10 @@ function Dashboard({
                   onStateChange: handleStateChange,
                   onWorkspaceReset: handleWorkspaceReset,
                   onRobotRegistered: handleRobotRegistered,
-                  configVersion,
+                  configResponse,
+                  configError,
+                  configLoading,
+                  onRefreshConfig: () => void loadConfiguration(),
                   onOpenAction: handleOpenAction,
                   labels,
                   language,
@@ -588,7 +638,10 @@ interface RenderPageProps {
   onStateChange: (state: AgentState) => void;
   onWorkspaceReset: (state: AgentState, message: string) => void;
   onRobotRegistered: () => void;
-  configVersion: number;
+  configResponse: ConfigResponse | null;
+  configError: string | null;
+  configLoading: boolean;
+  onRefreshConfig: () => void;
   onOpenAction: (actionId: string) => void;
   labels: Messages;
   language: Language;
@@ -604,6 +657,9 @@ interface WorkspaceNoticeProps {
   loading: boolean;
   health: HealthState | null;
   state: AgentState | null;
+  initializing: boolean;
+  labels: Messages;
+  onInitialize: () => void;
 }
 
 function PageFallback() {
@@ -618,7 +674,15 @@ function PageFallback() {
   );
 }
 
-function WorkspaceNotice({ error, loading, health, state }: WorkspaceNoticeProps) {
+function WorkspaceNotice({
+  error,
+  loading,
+  health,
+  state,
+  initializing,
+  labels,
+  onInitialize
+}: WorkspaceNoticeProps) {
   if (error) {
     return (
       <Alert
@@ -653,8 +717,19 @@ function WorkspaceNotice({ error, loading, health, state }: WorkspaceNoticeProps
         data-testid="workspace-notice"
         type="warning"
         showIcon
-        message="Workspace is not ready"
-        description={snapshot.message || "Initialize the workspace before proposing work."}
+        message={labels.initialization.title}
+        description={snapshot.message || labels.initialization.description}
+        action={
+          <Button
+            data-testid="initialize-project-button"
+            type="primary"
+            size="small"
+            loading={initializing}
+            onClick={onInitialize}
+          >
+            {labels.initialization.action}
+          </Button>
+        }
       />
     );
   }
@@ -681,7 +756,10 @@ function renderPageContent({
   onStateChange,
   onWorkspaceReset,
   onRobotRegistered,
-  configVersion,
+  configResponse,
+  configError,
+  configLoading,
+  onRefreshConfig,
   onOpenAction,
   labels,
   language,
@@ -718,7 +796,7 @@ function renderPageContent({
   }
 
   if (activePage === "robots") {
-    return <RobotsPanel state={state} />;
+    return <RobotsPanel state={state} config={configResponse} />;
   }
 
   if (activePage === "hardware") {
@@ -729,8 +807,13 @@ function renderPageContent({
           onError={onError}
           onRobotRegistered={onRobotRegistered}
         />
-        <ConfigPanel refreshToken={configVersion} />
-        <RobotsPanel state={state} />
+        <ConfigPanel
+          response={configResponse}
+          error={configError}
+          loading={configLoading}
+          onRefresh={onRefreshConfig}
+        />
+        <RobotsPanel state={state} config={configResponse} />
       </div>
     );
   }
@@ -804,7 +887,7 @@ function renderPageContent({
       </div>
       <div className="context-column">
         <ContextTabs state={state} onOpenAction={onOpenAction} />
-        <RobotsPanel state={state} />
+        <RobotsPanel state={state} config={configResponse} />
       </div>
     </div>
   );
@@ -840,6 +923,36 @@ function parseApiEvent(event: MessageEvent<string>): ApiEvent | null {
   } catch {
     return null;
   }
+}
+
+function executorFromEventPayload(payload: Record<string, unknown>): ExecutorProjection | null {
+  const direct = asExecutorProjection(payload.executor);
+  if (direct) {
+    return direct;
+  }
+
+  // Compatibility only: watch_enabled is configuration, not evidence that an
+  // executor owns the workspace lease or is running.
+  if (typeof payload.watch_enabled === "boolean") {
+    return {
+      mode: "none",
+      status: "unknown",
+      embedded_enabled: payload.watch_enabled,
+      legacy_watch_configured: payload.watch_enabled
+    };
+  }
+  return null;
+}
+
+function asExecutorProjection(value: unknown): ExecutorProjection | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (!["waiting_for_init", "embedded", "external", "none"].includes(String(candidate.mode))) {
+    return null;
+  }
+  return candidate as unknown as ExecutorProjection;
 }
 
 function showError(messageApi: ReturnType<typeof AntApp.useApp>["message"], error: unknown) {

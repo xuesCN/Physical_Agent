@@ -12,6 +12,7 @@ export function StatusBar({ status, busy = false }: StatusBarProps) {
   const connection = status.connected ? "connected" : "disconnected";
   const modeText =
     status.mode === "sse" ? "SSE" : status.mode === "polling" ? "polling" : "degraded";
+  const executor = executorLabel(status.executor);
 
   return (
     <Box flexDirection="column" paddingX={1}>
@@ -24,7 +25,7 @@ export function StatusBar({ status, busy = false }: StatusBarProps) {
       </Box>
       <Box gap={1} flexWrap="wrap">
         <Text color="gray">backend {status.backend}</Text>
-        <Text color="gray">Watch: {status.watch}</Text>
+        <Text color={executorColor(status.executor)}>Executor: {executor}</Text>
         <Text color="gray">LLM: {status.llm.model}</Text>
         <Text color={status.llm.hasApiKey ? "green" : "yellow"}>{llmKeyLabel(status.llm.hasApiKey)}</Text>
         <Text color={llmStatusColor(status.llm.state)}>{llmStateLabel(status.llm.state, status.llm.message)}</Text>
@@ -33,6 +34,49 @@ export function StatusBar({ status, busy = false }: StatusBarProps) {
       </Box>
     </Box>
   );
+}
+
+function executorLabel(executor: RuntimeStatus["executor"]): string {
+  if (!executor) {
+    return "status unknown";
+  }
+  if (executor.mode === "waiting_for_init") {
+    return "waiting for initialization";
+  }
+  if (executor.mode === "none" && executor.legacy_watch_configured) {
+    return "status unknown (configured by legacy server)";
+  }
+  const mode =
+    executor.mode === "embedded"
+      ? "embedded"
+      : executor.mode === "external"
+        ? "external"
+        : "not running";
+  const state = (executor.status ?? "").trim();
+  if (!state || (executor.mode === "none" && ["stopped", "disabled", "inactive"].includes(state))) {
+    return mode;
+  }
+  return `${mode} (${state})`;
+}
+
+function executorColor(executor: RuntimeStatus["executor"]): "green" | "yellow" | "red" | "gray" {
+  if (!executor || executor.mode === "waiting_for_init") {
+    return "yellow";
+  }
+  if (["degraded", "error", "failed", "fatal"].includes(executor.status ?? "")) {
+    return "red";
+  }
+  if (
+    (executor.mode === "embedded" || executor.mode === "external") &&
+    executor.lease?.active === true &&
+    ["active", "running", "ready"].includes(executor.status ?? "")
+  ) {
+    return "green";
+  }
+  if (["starting", "standby"].includes(executor.status ?? "")) {
+    return "yellow";
+  }
+  return "gray";
 }
 
 function llmKeyLabel(hasApiKey: boolean | null): string {

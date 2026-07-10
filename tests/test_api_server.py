@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 
@@ -241,6 +242,109 @@ def test_api_controller_contract_runs_without_fastapi(tmp_path):
     ]
     assert board["completed"] == []
     assert board["cancelled"] == []
+
+
+def test_api_project_initialize_is_idempotent_and_does_not_load_watch(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "physical-agent.yaml"
+
+    def fail_loader():
+        raise AssertionError("project initialization must not load WatchRuntime")
+
+    monkeypatch.setattr(
+        "physical_agent.api.watch_service._load_watch_runtime_class",
+        fail_loader,
+    )
+    controller = ApiController(config_path, embedded_watch_enabled=True)
+
+    first = controller.initialize_project()
+
+    assert first["ok"] is True
+    assert first["config_created"] is True
+    assert first["workspace_created"] is True
+    assert first["state"]["ready"] is True
+    assert first["state"]["executor"]["mode"] == "embedded"
+
+    config_text = config_path.read_text(encoding="utf-8")
+    store = open_state_store(config_path=config_path)
+    store.append_memory_note("preserve this", source="test")
+
+    second = controller.initialize_project()
+
+    assert second["config_created"] is False
+    assert second["workspace_created"] is False
+    assert second["message"] == "Project is already initialized."
+    assert config_path.read_text(encoding="utf-8") == config_text
+    assert store.read_memory()["notes"][0]["content"] == "preserve this"
+
+
+def test_api_project_initialize_serializes_concurrent_requests(tmp_path):
+    config_path = tmp_path / "physical-agent.yaml"
+    controller = ApiController(config_path, embedded_watch_enabled=True)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _index: controller.initialize_project(), range(8)))
+
+    assert sum(result["config_created"] for result in results) == 1
+    assert sum(result["workspace_created"] for result in results) == 1
+    assert all(result["state"]["ready"] is True for result in results)
+
+
+def test_api_project_initialize_fails_closed_for_invalid_existing_config(tmp_path):
+    config_path = tmp_path / "physical-agent.yaml"
+    invalid = b"workspace: [not, a, mapping]\n"
+    config_path.write_bytes(invalid)
+    controller = ApiController(config_path, embedded_watch_enabled=True)
+
+    with pytest.raises(api_server_module.ApiRequestError) as exc_info:
+        controller.initialize_project()
+
+    assert exc_info.value.status_code == 400
+    assert "nothing was overwritten" in str(exc_info.value)
+    assert config_path.read_bytes() == invalid
+    assert not (tmp_path / "workspace").exists()
+
+
+def test_api_project_initialize_endpoint_does_not_load_watch(tmp_path, monkeypatch):
+    TestClient = _client_or_skip()
+    config_path = tmp_path / "physical-agent.yaml"
+
+    def fail_loader():
+        raise AssertionError("initialize request handler must not load WatchRuntime")
+
+    monkeypatch.setattr(
+        "physical_agent.api.watch_service._load_watch_runtime_class",
+        fail_loader,
+    )
+    with TestClient(create_app(config_path, enable_watch=False)) as client:
+        response = client.post("/api/project/initialize")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["config_created"] is True
+    assert body["workspace_created"] is True
+    assert body["state"]["ready"] is True
+
+
+def test_api_executor_projection_distinguishes_external_watch(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    assert store.acquire_runtime_lease(
+        "watch-executor",
+        "external-watch-owner",
+        ttl_s=30,
+    )
+
+    controller = ApiController(config_path, embedded_watch_enabled=True)
+    executor = controller.health()["executor"]
+
+    assert executor["mode"] == "external"
+    assert executor["status"] == "active"
+    assert executor["embedded_enabled"] is True
+    assert executor["lease"]["active"] is True
+    assert executor["lease"]["owner"] == "external-watch-owner"
 
 
 def test_api_task_result_uses_shared_refusal_contract(tmp_path):

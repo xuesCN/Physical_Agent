@@ -21,7 +21,7 @@ test("StatusBar renders connection state", () => {
         mode: "sse",
         lastRefresh: "12:00:00",
         backend: "sqlite",
-        watch: "enabled",
+        executor: { mode: "embedded", status: "active", lease: { active: true } },
         llm: {
           state: "ok",
           model: "doubao-seed-2-1-pro-260628",
@@ -35,7 +35,7 @@ test("StatusBar renders connection state", () => {
   assert.match(view.lastFrame() ?? "", /Physical Agent TUI/);
   assert.match(view.lastFrame() ?? "", /sqlite/);
   assert.match(view.lastFrame() ?? "", /SSE/);
-  assert.match(view.lastFrame() ?? "", /Watch: enabled/);
+  assert.match(view.lastFrame() ?? "", /Executor: embedded \(active\)/);
   assert.match(view.lastFrame() ?? "", /doubao-seed-2-1-pro-260628/);
   assert.match(view.lastFrame() ?? "", /key set/);
   assert.match(view.lastFrame() ?? "", /LLM connected/);
@@ -50,7 +50,7 @@ test("StatusBar renders short LLM auth failure without exposing details", () => 
         mode: "sse",
         lastRefresh: "12:00:00",
         backend: "sqlite",
-        watch: "enabled",
+        executor: { mode: "embedded", status: "active" },
         llm: {
           state: "failed",
           model: "doubao",
@@ -65,7 +65,7 @@ test("StatusBar renders short LLM auth failure without exposing details", () => 
   assert.match(view.lastFrame() ?? "", /LLM failed: key inactive/);
 });
 
-test("StatusBar renders unknown and disabled watch states without snapshot wording", () => {
+test("StatusBar distinguishes unknown, waiting, and stopped executor states", () => {
   const unknown = render(
     <StatusBar
       status={{
@@ -74,7 +74,7 @@ test("StatusBar renders unknown and disabled watch states without snapshot wordi
         mode: "polling",
         lastRefresh: null,
         backend: "-",
-        watch: "unknown",
+        executor: null,
         llm: {
           state: "unknown",
           model: "-",
@@ -84,11 +84,11 @@ test("StatusBar renders unknown and disabled watch states without snapshot wordi
       }}
     />
   );
-  assert.match(unknown.lastFrame() ?? "", /Watch: unknown/);
+  assert.match(unknown.lastFrame() ?? "", /Executor: status unknown/);
   assert.doesNotMatch(unknown.lastFrame() ?? "", /snapshot/);
   unknown.unmount();
 
-  const disabled = render(
+  const waiting = render(
     <StatusBar
       status={{
         apiBase: "http://127.0.0.1:8766",
@@ -96,7 +96,7 @@ test("StatusBar renders unknown and disabled watch states without snapshot wordi
         mode: "sse",
         lastRefresh: "12:00:00",
         backend: "sqlite",
-        watch: "disabled",
+        executor: { mode: "waiting_for_init", status: "waiting" },
         llm: {
           state: "checking",
           model: "model-a",
@@ -106,7 +106,28 @@ test("StatusBar renders unknown and disabled watch states without snapshot wordi
       }}
     />
   );
-  assert.match(disabled.lastFrame() ?? "", /Watch: disabled/);
+  assert.match(waiting.lastFrame() ?? "", /Executor: waiting for initialization/);
+  waiting.unmount();
+
+  const stopped = render(
+    <StatusBar
+      status={{
+        apiBase: "http://127.0.0.1:8766",
+        connected: true,
+        mode: "sse",
+        lastRefresh: "12:00:00",
+        backend: "sqlite",
+        executor: { mode: "none", status: "stopped" },
+        llm: {
+          state: "checking",
+          model: "model-a",
+          hasApiKey: false
+        },
+        message: "Ready."
+      }}
+    />
+  );
+  assert.match(stopped.lastFrame() ?? "", /Executor: not running/);
 });
 
 test("Transcript content keeps long text and normalizes newlines", () => {

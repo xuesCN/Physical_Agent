@@ -85,7 +85,7 @@ This command will:
 If you already manage your own Python environment, you can run the manual path:
 
 ```bash
-pip install -e .[dev]
+pip install -e .[dev,server]
 physical-agent setup --smoke-test
 ```
 
@@ -106,13 +106,20 @@ The GUI is the easiest way to see the workspace state change:
 physical-agent gui
 ```
 
-The browser will open a local console. In the GUI you can:
+The command starts the official FastAPI + React Dashboard and an embedded watch
+service. In the Dashboard you can:
 
-1. click setup or reset to prepare the workspace
-2. click watch start to connect the mock robot
-3. click quick demo to submit the pick/place task
-4. click step or auto-step to let watch execute actions
-5. inspect robots, world, actions, and feedback
+1. safely initialize a missing config/workspace without overwriting an existing config
+2. see whether the executor is waiting, embedded, external, or not running
+3. chat or submit a task, review its draft, and add it to the pending Action Board
+4. approve or reject execution and inspect robots, world, feedback, safety, and events
+5. scaffold or generate a driver draft and register its robot configuration
+
+The browser no longer owns watch start/stop/step controls. Use
+`physical-agent watch` for a standalone executor, `physical-agent api --watch`
+for an API-hosted executor, or `physical-agent gui --no-watch` for a Dashboard
+process without an embedded executor. The deterministic demo is
+`physical-agent setup --smoke-test`.
 
 If the browser does not open automatically, visit:
 
@@ -246,21 +253,37 @@ After quickstart works:
 
 ## Local GUI
 
-`physical-agent gui` starts a dependency-free local web console backed by Python's standard library HTTP server.
+`physical-agent gui` is a thin launcher for the same FastAPI application and
+packaged React Dashboard used by `physical-agent api`. Install the server extra
+when working from source:
+
+```bash
+pip install -e .[server]
+```
+
+By default the launcher runs the embedded watch service. It does not implement
+a second controller or a second set of HTTP endpoints.
 
 The console provides:
 
-- project setup
+- safe first-time project initialization
 - workspace reset
-- watch runtime connection
-- one-step action execution
+- actual executor status (waiting, embedded, external, or stopped)
+- configured hardware/simulation execution mode
 - multi-turn chat
 - English and Chinese UI switching
 - hardware integration scaffold and LLM driver draft generation
 - task submission
-- pick/place quick demo
-- doctor checks
+- draft-to-pending and execution approval/rejection
+- upload, memory search, audit export, state-check, and LLM settings
 - robot, world, action board, and feedback views
+
+Watch lifecycle controls, manual stepping, the hard-coded demo, per-message
+planner selection, browser code-skill output, and the raw browser doctor are
+intentionally not duplicated in the Dashboard. Use, respectively,
+`physical-agent watch` / `physical-agent api --watch`,
+`physical-agent setup --smoke-test`, `physical-agent chat --planner ...`,
+`physical-agent chat --show-code-result`, and `physical-agent doctor`.
 
 The GUI remembers your language choice in the browser. Use the `English` / `中文` buttons in the top bar to switch modes.
 
@@ -274,6 +297,13 @@ Run without opening a browser automatically:
 
 ```bash
 physical-agent gui --no-open
+```
+
+Run the Dashboard without an embedded executor (for example when a standalone
+`physical-agent watch` already owns the workspace lease):
+
+```bash
+physical-agent gui --no-watch
 ```
 
 The Hardware integration panel accepts a local SDK path, a GitHub repository URL, or an importable Python package name. Choose `Scaffold` for a deterministic watch-side driver template, or `LLM draft` to let the configured OpenAI-compatible model read SDK context and update `driver.py`. Both modes keep hardware execution outside the browser; the LLM draft is validated in mock mode before it is written back.
@@ -550,7 +580,7 @@ Use `physical-agent llm-test --model <model-name>` to verify a candidate model. 
 
 If you want chat to behave like a code-first assistant inside the current repository, ask it to edit files or fix tests directly. The chat runtime will route those requests into the code skill, apply changes under the repository root, run tests, and report the changed files plus test output.
 
-By default, chat keeps code skill output conversational and stores the structured result in chat metadata and the GUI code result panel. For debugging, add `--show-code-result` to print the full structured code result after the natural reply.
+By default, chat keeps code skill output conversational and stores the structured result in chat metadata. The Dashboard deliberately does not expose the repository-editing code skill; for debugging, add `--show-code-result` to the CLI to print the full structured result after the natural reply.
 
 Execute the proposed actions by running watch in another terminal:
 
@@ -585,6 +615,6 @@ Run the full test suite:
 pytest -q
 ```
 
-Current coverage includes Markdown protocol parsing/rendering for SAFETY/LOG/audit/migration, SQLite workspace lifecycle, driver manifest and loader behavior, hardware onboarding scaffold generation, safety validation, mock drivers, rule-based planning, watch runtime stepping, the end-to-end SQLite loop, one-command setup, doctor checks, and GUI HTTP endpoints.
+Current coverage includes Markdown protocol parsing/rendering for SAFETY/LOG/audit/migration, SQLite workspace lifecycle, driver manifest and loader behavior, hardware onboarding scaffold generation, safety validation, mock drivers, rule-based planning, watch runtime stepping, the end-to-end SQLite loop, one-command setup, doctor checks, and FastAPI/Dashboard contracts.
 
 It also covers the chat protocol, chat memory, chat action proposals, chat auto-step execution, and the GUI chat endpoint.

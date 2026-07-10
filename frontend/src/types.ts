@@ -6,6 +6,35 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+export type ExecutorMode = "waiting_for_init" | "embedded" | "external" | "none";
+
+export interface ExecutorLease {
+  active?: boolean;
+  owner?: string | null;
+  expires_at?: string | null;
+  updated_at?: string | null;
+  [key: string]: unknown;
+}
+
+export interface ExecutorError {
+  message?: string;
+  error_type?: string;
+  phase?: string;
+  [key: string]: unknown;
+}
+
+/** Read-only projection of the process that may execute physical actions. */
+export interface ExecutorProjection {
+  mode: ExecutorMode;
+  status?: string;
+  embedded_enabled?: boolean;
+  lease?: ExecutorLease | null;
+  last_error?: ExecutorError | string | null;
+  /** Compatibility marker for pre-projection servers. It is not runtime proof. */
+  legacy_watch_configured?: boolean;
+  [key: string]: unknown;
+}
+
 export interface HealthState {
   ok: boolean;
   ready: boolean;
@@ -15,6 +44,7 @@ export interface HealthState {
   workspace_path?: string;
   config_exists?: boolean;
   workspace_exists?: boolean;
+  executor?: ExecutorProjection;
 }
 
 export interface StateCheckResult {
@@ -224,6 +254,7 @@ export interface AgentState {
   backend?: string;
   config_path?: string;
   workspace_path?: string;
+  executor?: ExecutorProjection;
   task?: Record<string, unknown>;
   capabilities?: {
     robots?: Record<string, RobotInfo>;
@@ -329,6 +360,14 @@ export interface WorkspaceResetResponse {
   message: string;
   workspace_path?: string;
   backend?: string;
+  state: AgentState;
+}
+
+export interface ProjectInitializeResponse {
+  ok: boolean;
+  message: string;
+  config_created?: boolean;
+  workspace_created?: boolean;
   state: AgentState;
 }
 

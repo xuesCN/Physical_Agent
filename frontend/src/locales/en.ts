@@ -22,9 +22,12 @@ export const en = {
     workspace: "workspace",
     ready: "ready",
     notReady: "not ready",
-    watch: "watch",
-    enabled: "enabled",
-    off: "off",
+    executor: "executor",
+    executorWaiting: "waiting for initialization",
+    executorEmbedded: "embedded",
+    executorExternal: "external",
+    executorNone: "not running",
+    executorUnknown: "status unknown",
     sseConnected: "SSE connected",
     sseDisconnected: "SSE disconnected; polling fallback active"
   },
@@ -38,7 +41,7 @@ export const en = {
     showTour: "Show tour again",
     dangerZone: "Danger zone",
     resetTitle: "Workspace reset",
-    resetDescription: "Clears world, actions, memory, chat, and uploads, and restores SAFETY to defaults. physical-agent.yaml and LLM settings are kept.",
+    resetDescription: "Clears world, actions, memory, chat, and uploads, and restores SAFETY to defaults. physical-agent.yaml and LLM settings are kept. To restore the default config too, run `physical-agent setup --force`.",
     resetConfirmTitle: "Reset the entire workspace?",
     resetConfirmDescription: "World, actions, memory, chat, and uploads will be cleared. This cannot be undone.",
     resetOk: "Reset workspace",
@@ -146,8 +149,15 @@ export const en = {
     watch: "Watch",
     robot: "Robot",
     driver: "Driver",
+    executionMode: "Execution mode",
     config: "Config",
     noConfig: "No config"
+  },
+  initialization: {
+    title: "Workspace is not ready",
+    description: "Create the missing project config and workspace before proposing work.",
+    action: "Initialize project",
+    success: "Project initialized"
   },
   drawer: {
     title: "Task / Action Proposal"

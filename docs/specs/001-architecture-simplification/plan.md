@@ -7,8 +7,8 @@
 | 步骤 | 内容 | 当前状态 | 进入下一步的硬门槛 |
 | --- | --- | --- | --- |
 | 1 | 冻结范围、建立规格与退役清单 | ✅ 第一轮完成 | spec/plan/tasks、三份 surface 审计、SPEC/PLAYBOOK 登记完成 |
-| 1.5 | legacy GUI parity + 缺口补齐 + launcher strangler cutover | ⚪ 已枚举，当前 No-Go | 所有保留能力已覆盖；有意退役项有替代说明；thin launcher/wheel smoke 通过 |
-| 2 | 验证 cutover 后删除 legacy GUI | ⚪ | React/FastAPI 成为唯一 GUI；安全/主路径回归通过 |
+| 1.5 | legacy GUI parity + 缺口补齐 + launcher strangler cutover | 🟡 cutover 已实现；浏览器实跑待补 | 所有保留能力已覆盖；有意退役项有替代说明；thin launcher/wheel smoke + 当前提交 Playwright 全绿 |
+| 2 | 验证 cutover 后删除 legacy GUI | ⛔ No-Go | React/FastAPI 成为唯一 GUI；安全/主路径回归通过 |
 | 3 | 退役 Markdown migration，缩成 safety/log sidecar | ⚪ | sidecar 行为等价；旧目录仍 fail closed；救援指针可执行 |
 | 4 | 删除 `auto_step` 与 embedded watch composition | ⚪ | 所有 proposal/chat 入口不拥有 watch；正式 watch 命令不受影响 |
 | 5 | 结构化 Chat Turn + `action-draft` 双轨 | ⚪ | 独立一轮验证 structured/fence 一致，F1 主链与旧 fallback 全绿 |
@@ -48,9 +48,11 @@ Rollback：仅回退文档提交，不涉及运行态。
    - streaming draft → Add to Actions → pending ActionBoard e2e。
 8. 在 README/CLI/Dashboard 明示有意退役项及替代：GUI watch controls/manual step、hard-coded Demo、planner selector（Dashboard 固定 auto，CLI `chat --planner` 调试）、browser code skill（CLI `chat --show-code-result`）、browser doctor。
 
-Go：`tasks.md` GUI parity 表的每一行只能是“覆盖并验证”或“有意退役且替代已验证”；thin launcher 已完成 strangler cutover，React wheel smoke 通过。
+Go：`tasks.md` GUI parity 表的每一行只能是“覆盖并验证”或“有意退役且替代已验证”；thin launcher 已完成 strangler cutover，React wheel smoke 与当前提交 Playwright 实际浏览器运行通过。
 
-No-Go：Setup 死胡同、watch 假健康、wheel 缺静态资源或任一 legacy-only 主路径测试尚未迁移。
+当前证据：实现、Python/TUI/frontend build、clean-wheel smoke 已通过，25 个 Playwright 用例可发现；本环境两次下载 Chromium（含放宽沙盒后重试）均得到 0 MiB 截断 zip，故真实浏览器运行尚缺。R2 在 pushed commit 的 CI/人工 Playwright 变绿前保持 No-Go。
+
+No-Go：Setup 死胡同、watch 假健康、wheel 缺静态资源、任一 legacy-only 主路径测试尚未迁移，或当前提交缺真实浏览器运行证据。
 
 Rollback：本步只加正式栈能力，不动 legacy GUI，可直接回退新增端点/UI。
 

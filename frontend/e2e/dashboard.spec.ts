@@ -642,6 +642,8 @@ test("hardware scaffold can register a robot and config panel refreshes", async 
     "Registered bench_arm_1",
   );
   await expect(page.getByTestId("config-panel")).toContainText("bench_arm_1");
+  await expect(page.getByTestId("config-panel")).toContainText("Execution mode");
+  await expect(page.getByTestId("config-panel")).toContainText("hardware");
   expectNoConsoleErrors(consoleErrors);
 });
 
@@ -1043,6 +1045,13 @@ async function mockReadyApiWithRobot(
     backend: "sqlite",
     config_path: "C:/tmp/physical-agent.yaml",
     workspace_path: "C:/tmp/physical-agent-workspace",
+    executor: {
+      mode: "embedded",
+      status: "active",
+      embedded_enabled: true,
+      lease: { active: true, expires_at: "2026-07-10T00:00:00Z" },
+      last_error: null,
+    },
     capabilities: {
       robots: {
         arm_1: {
@@ -1088,10 +1097,187 @@ test("config missing state renders a clear nonblank dashboard", async ({
   await expect(page.getByTestId("workspace-notice")).toContainText(
     "Config file is missing.",
   );
+  await expect(page.getByTestId("executor-status")).toContainText(
+    "waiting for initialization",
+  );
+  await expect(page.getByTestId("initialize-project-button")).toBeVisible();
   await expect(page.getByTestId("sse-status")).toContainText(
     "SSE disconnected",
   );
   await expect(page.getByTestId("action-board")).toBeVisible();
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("safe initialization creates the project then refreshes executor state", async ({
+  page,
+}) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await mockNotReadyApi(page, "Config file is missing.", {
+    config_exists: false,
+    workspace_exists: false,
+  });
+
+  await page.goto("/");
+  await page.getByTestId("initialize-project-button").click();
+  await expect(page.getByTestId("workspace-notice")).toHaveCount(0);
+  await expect(page.getByTestId("executor-status")).toContainText("embedded");
+  await expect(page.getByTestId("status-bar")).toContainText("workspace ready");
+  await page.getByTestId("nav-hardware").click();
+  await expect(page.getByTestId("config-panel")).toContainText(
+    "C:/tmp/physical-agent.yaml",
+  );
+  await expect(page.getByTestId("config-panel")).not.toContainText("Config unavailable");
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("executor status distinguishes an external lease from embedded configuration", async ({
+  page,
+}) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await mockReadyApiWithRobot(page, {
+    executor: {
+      mode: "none",
+      status: "stopped",
+      embedded_enabled: false,
+      lease: null,
+      last_error: null,
+    },
+  });
+  await page.route("**/api/events", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: [
+        sseEvent(1, "hello", {
+          version: "0.1.0",
+          watch_enabled: false,
+          executor: {
+            mode: "none",
+            status: "stopped",
+            embedded_enabled: false,
+            lease: null,
+            last_error: null,
+          },
+        }),
+        sseEvent(2, "executor", {
+          executor: {
+            mode: "external",
+            status: "active",
+            embedded_enabled: false,
+            lease: { active: true, expires_at: "2026-07-10T12:00:00Z" },
+            last_error: { message: "previous lease contention", phase: "acquire_lease" },
+          },
+        }),
+      ].join(""),
+    });
+  });
+
+  await page.goto("/");
+  await expect(page.getByTestId("executor-status")).toContainText(
+    "executor external · active",
+  );
+  await expect(page.getByTestId("executor-status")).toHaveAttribute(
+    "title",
+    /Lease active until 2026-07-10T12:00:00Z/,
+  );
+  await expect(page.getByTestId("executor-status")).toHaveAttribute(
+    "title",
+    /Last error: previous lease contention/,
+  );
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("streaming action draft can be persisted to pending Actions", async ({ page, request }) => {
+  const consoleErrors = collectConsoleErrors(page);
+  const actionId = `stream-draft-observe-${Date.now()}`;
+  const reply = [
+    "I drafted an observation for review.",
+    "```action-draft",
+    JSON.stringify({
+      id: actionId,
+      robot: "arm_1",
+      capability: "observe",
+      params: {},
+      reason: "Inspect the workspace before moving.",
+    }),
+    "```",
+  ].join("\n");
+  await installMockChatStream(page, [
+    sseEvent(30, "start", { stream_id: "draft-e2e", request_id: "draft-e2e" }),
+    sseEvent(31, "delta", {
+      stream_id: "draft-e2e",
+      request_id: "draft-e2e",
+      delta: reply,
+    }),
+    sseEvent(32, "done", {
+      stream_id: "draft-e2e",
+      request_id: "draft-e2e",
+      reply,
+      mode: "llm",
+    }),
+  ], 20);
+
+  await page.goto("/");
+  await page.getByPlaceholder("Message the agent").fill("observe the workspace");
+  await page.getByPlaceholder("Message the agent").press("Enter");
+  await expect(page.getByTestId("draft-action-card")).toContainText("arm_1.observe");
+  await page.getByTestId("add-draft-to-actions").click();
+  await expect(page.getByTestId("action-board")).toContainText(actionId);
+  await expect(page.getByTestId("action-board")).toContainText("observe");
+  await expect
+    .poll(async () => {
+      const response = await request.get("/api/state");
+      const state = (await response.json()) as {
+        actions?: { pending?: Array<{ id?: string }> };
+      };
+      return state.actions?.pending?.map((action) => action.id) ?? [];
+    })
+    .toContain(actionId);
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("Robots reads YAML execution mode while no executor is running", async ({ page }) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await mockNotReadyApi(page, "Workspace is not initialized.", {
+    config_exists: true,
+    workspace_exists: false,
+    executor: {
+      mode: "none",
+      status: "stopped",
+      embedded_enabled: false,
+      lease: null,
+      last_error: null,
+    },
+  });
+  await page.route("**/api/config", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        message: "Config loaded.",
+        config_path: "C:/tmp/physical-agent.yaml",
+        config: {
+          workspace: { path: "C:/tmp/physical-agent-workspace", backend: "sqlite" },
+          robots: {
+            yaml_arm: {
+              driver: "vendor_arm",
+              execution_mode: "hardware",
+              config: { port: "COM7" },
+            },
+          },
+        },
+      }),
+    });
+  });
+
+  await page.goto("/");
+  await expect(page.getByTestId("executor-status")).toContainText("not running");
+  await page.getByTestId("nav-robots").click();
+  await expect(page.getByTestId("robots-panel")).toContainText("yaml_arm");
+  await expect(page.getByTestId("robots-panel")).toContainText("vendor_arm");
+  await expect(page.getByTestId("robots-panel")).toContainText("hardware");
+  await expect(page.getByTestId("robots-panel")).toContainText("configured");
   expectNoConsoleErrors(consoleErrors);
 });
 
@@ -1129,6 +1315,13 @@ async function mockNotReadyApi(
     ready: false,
     message,
     config_path: "C:/tmp/missing-physical-agent.yaml",
+    executor: {
+      mode: "waiting_for_init",
+      status: "waiting",
+      embedded_enabled: true,
+      lease: null,
+      last_error: null,
+    },
     ...extras,
   };
 
@@ -1136,6 +1329,7 @@ async function mockNotReadyApi(
 }
 
 async function mockApiSnapshot(page: Page, snapshot: Record<string, unknown>) {
+  let currentSnapshot = snapshot;
   let llmSettings = {
     base_url: "http://mock-llm.test/v1",
     model: "mock-model",
@@ -1144,20 +1338,54 @@ async function mockApiSnapshot(page: Page, snapshot: Record<string, unknown>) {
     masked_api_key: "****7890",
     settings_path: "C:/tmp/workspace/.llm.json",
   };
-  const configRobots: Record<string, { driver: string; config: Record<string, unknown> }> = {};
+  const configRobots: Record<
+    string,
+    { driver: string; execution_mode: "simulation" | "hardware"; config: Record<string, unknown> }
+  > = {};
 
   await page.route("**/api/health", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(snapshot),
+      body: JSON.stringify(currentSnapshot),
     });
   });
   await page.route("**/api/state", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(snapshot),
+      body: JSON.stringify(currentSnapshot),
+    });
+  });
+  await page.route("**/api/project/initialize", async (route) => {
+    currentSnapshot = {
+      ...currentSnapshot,
+      ok: true,
+      ready: true,
+      message: "Ready.",
+      config_exists: true,
+      workspace_exists: true,
+      backend: currentSnapshot.backend ?? "sqlite",
+      workspace_path:
+        currentSnapshot.workspace_path ?? "C:/tmp/physical-agent-workspace",
+      executor: {
+        mode: "embedded",
+        status: "starting",
+        embedded_enabled: true,
+        lease: null,
+        last_error: null,
+      },
+    };
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        message: "Project initialized.",
+        config_created: true,
+        workspace_created: true,
+        state: currentSnapshot,
+      }),
     });
   });
   await page.route("**/api/state-check", async (route) => {
@@ -1266,6 +1494,8 @@ async function mockApiSnapshot(page: Page, snapshot: Record<string, unknown>) {
     };
     configRobots[body.robot_id] = {
       driver: body.driver,
+      execution_mode:
+        (body as { execution_mode?: "simulation" | "hardware" }).execution_mode ?? "simulation",
       config: body.config ?? {},
     };
     await route.fulfill({
@@ -1278,6 +1508,14 @@ async function mockApiSnapshot(page: Page, snapshot: Record<string, unknown>) {
     });
   });
   await page.route("**/api/config", async (route) => {
+    if (currentSnapshot.config_exists === false) {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ ok: false, message: "Config file is missing." }),
+      });
+      return;
+    }
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -1297,8 +1535,12 @@ async function mockApiSnapshot(page: Page, snapshot: Record<string, unknown>) {
       status: 200,
       contentType: "text/event-stream",
       body: [
-        sseEvent(1, "hello", { version: "0.1.0", watch_enabled: false }),
-        sseEvent(2, "state", { reason: "connect", state: snapshot }),
+        sseEvent(1, "hello", {
+          version: "0.1.0",
+          executor: currentSnapshot.executor,
+          watch_enabled: false,
+        }),
+        sseEvent(2, "state", { reason: "connect", state: currentSnapshot }),
       ].join(""),
     });
   });

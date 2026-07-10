@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import tempfile
 from typing import Any, Literal
 
 import yaml
@@ -171,11 +173,36 @@ def load_config(
 
 def write_default_config(path: str | Path = DEFAULT_CONFIG_NAME, *, overwrite: bool = False) -> Path:
     config_path = Path(path)
-    if config_path.exists() and not overwrite:
-        return config_path.resolve()
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    with config_path.open("w", encoding="utf-8") as handle:
-        yaml.safe_dump(default_config_dict(), handle, sort_keys=False)
+    rendered = yaml.safe_dump(default_config_dict(), sort_keys=False)
+    if overwrite:
+        with config_path.open("w", encoding="utf-8") as handle:
+            handle.write(rendered)
+        return config_path.resolve()
+
+    # Publish the complete file with an exclusive hard link. An ``exists``
+    # check followed by ``open('w')`` has a TOCTOU window that can truncate a
+    # valid config created by another initializer. The temporary file is fully
+    # flushed before the target name becomes visible, and ``os.link`` never
+    # replaces an existing path.
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=config_path.parent,
+        prefix=f".{config_path.name}.",
+        suffix=".tmp",
+        text=True,
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(rendered)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary_path, config_path)
+        except FileExistsError:
+            pass
+    finally:
+        temporary_path.unlink(missing_ok=True)
     return config_path.resolve()
 
 

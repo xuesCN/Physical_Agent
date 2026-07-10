@@ -74,7 +74,7 @@ python scripts/bootstrap.py
 如果你已经自己管理 Python 环境，也可以手动执行：
 
 ```bash
-pip install -e .[dev]
+pip install -e .[dev,server]
 physical-agent setup --smoke-test
 ```
 
@@ -101,23 +101,39 @@ physical-agent gui
 http://127.0.0.1:8765
 ```
 
-GUI 里可以做这些事：
+这个命令启动正式的 FastAPI + React Dashboard，并默认启动内嵌 watch
+service。Dashboard 可以：
 
-- setup / reset workspace
-- start watch
-- run step
-- run pick/place demo
-- 使用 chat agent 对话
-- 切换 English / 中文
-- 查看 robots、world、actions、feedback
-- 输入 SDK 路径、GitHub 仓库或 Python 包名生成硬件 driver
-- 选择“脚手架”或“LLM 草稿”硬件接入模式
+- 在不覆盖已有配置的前提下安全初始化缺失的 config/workspace
+- 区分执行器正在等待初始化、内嵌运行、外部运行或未运行
+- 使用 chat、task 和手工 proposal，并把 draft 加入 pending Action Board
+- 审批或拒绝执行，查看 robots、world、actions、feedback、safety 和 events
+- 输入 SDK 路径、GitHub 仓库或 Python 包名，生成 driver 并注册 robot
+
+浏览器不再拥有 watch start/stop/manual-step 控制。独立执行器使用
+`physical-agent watch`，API 内嵌执行器使用 `physical-agent api --watch`；已有
+外部 watch 时可用 `physical-agent gui --no-watch` 只启动观察面。确定性的
+pick/place 演示统一使用 `physical-agent setup --smoke-test`。
 
 如果不想自动打开浏览器：
 
 ```bash
 physical-agent gui --no-open
 ```
+
+`physical-agent gui` 与 `physical-agent api` 使用同一个 FastAPI app factory 和
+wheel 内的同一份 React Dashboard，不再维护第二套 controller/API。源码安装时
+需要 server extra：
+
+```bash
+pip install -e .[server]
+```
+
+Dashboard 有意不复制 GUI watch 控制、manual step、hard-coded Demo、逐消息
+planner selector、浏览器 code skill/raw doctor。对应入口分别是正式 watch
+生命周期、`setup --smoke-test`、`chat --planner ...`、
+`chat --show-code-result` 和 `physical-agent doctor`。需要恢复默认配置时使用
+`physical-agent setup --force`；Dashboard 的 reset 只清 workspace、保留 YAML。
 
 ### 3. 理解双终端 CLI 流程
 
@@ -417,7 +433,7 @@ v1 不把完整 MCP 依赖放进核心运行时，避免影响 watch / agent / M
 安装开发依赖：
 
 ```bash
-pip install -e .[dev]
+pip install -e .[dev,server]
 ```
 
 运行测试：
@@ -443,7 +459,7 @@ pytest -q
 - 端到端 SQLite loop
 - 一条命令 setup 和 smoke test
 - doctor 健康检查
-- GUI HTTP endpoints
+- FastAPI / Dashboard contracts
 - chat protocol、memory、action proposal 和 auto-step
 
 ## Clean-Room 声明

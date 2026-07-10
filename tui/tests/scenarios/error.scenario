@@ -31,7 +31,7 @@
         "behavior": "error",
         "error": "socket broke",
         "items": [
-          { "type": "hello", "payload": { "watch_enabled": true } }
+          { "type": "hello", "payload": { "executor": { "mode": "embedded", "status": "active", "lease": { "active": true } } } }
         ]
       },
       "initialExpectOutput": ["SSE disconnected; polling fallback active. socket broke", "degraded"],
@@ -51,10 +51,10 @@
       "events": {
         "behavior": "clean-eof",
         "items": [
-          { "type": "hello", "payload": { "watch_enabled": false } }
+          { "type": "hello", "payload": { "executor": { "mode": "none", "status": "stopped", "lease": null } } }
         ]
       },
-      "initialExpectOutput": ["SSE stream closed; using polling fallback.", "degraded", "Watch: disabled"],
+      "initialExpectOutput": ["SSE stream closed; using polling fallback.", "degraded", "Executor: not running"],
       "steps": [
         {
           "input": "/view status",

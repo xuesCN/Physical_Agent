@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyEvent,
+  executorFromEvent,
   runTuiChatStream,
   shouldRefreshFullStateFromEvent,
   shouldUpdateLastRefreshFromEvent,
   shouldFallbackAfterSseClose,
   sseClosedFallbackMessage,
-  sseErrorFallbackMessage,
-  watchStatusFromEvent
+  sseErrorFallbackMessage
 } from "./App.js";
 import type { AgentState } from "./types.js";
 
@@ -225,11 +225,38 @@ test("SSE thrown error fallback is readable", () => {
   );
 });
 
-test("watch_enabled hello event maps to real watch status", () => {
-  assert.equal(watchStatusFromEvent({ type: "hello", payload: { watch_enabled: true } }), "enabled");
-  assert.equal(watchStatusFromEvent({ type: "hello", payload: { watch_enabled: false } }), "disabled");
-  assert.equal(watchStatusFromEvent({ type: "hello", payload: { watch_enabled: "true" } }), null);
-  assert.equal(watchStatusFromEvent({ type: "state", payload: {} }), null);
+test("executor projection is authoritative and legacy watch flag stays unknown", () => {
+  assert.deepEqual(
+    executorFromEvent({
+      type: "hello",
+      payload: {
+        executor: {
+          mode: "external",
+          status: "active",
+          lease: { active: true, expires_at: "2026-07-10T00:00:00Z" }
+        }
+      }
+    }),
+    {
+      mode: "external",
+      status: "active",
+      lease: { active: true, expires_at: "2026-07-10T00:00:00Z" }
+    }
+  );
+  assert.deepEqual(executorFromEvent({ type: "hello", payload: { watch_enabled: true } }), {
+    mode: "none",
+    status: "unknown",
+    embedded_enabled: true,
+    legacy_watch_configured: true
+  });
+  assert.deepEqual(executorFromEvent({ type: "hello", payload: { watch_enabled: false } }), {
+    mode: "none",
+    status: "stopped",
+    embedded_enabled: false,
+    legacy_watch_configured: false
+  });
+  assert.equal(executorFromEvent({ type: "hello", payload: { watch_enabled: "true" } }), null);
+  assert.equal(executorFromEvent({ type: "state", payload: {} }), null);
 });
 
 function createChatCalls(options: { includeTranscript?: boolean } = {}) {

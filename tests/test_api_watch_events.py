@@ -9,7 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from physical_agent.api import watch_service
-from physical_agent.api.server import create_app
+import physical_agent.api.server as api_server_module
+from physical_agent.api.server import ApiController, create_app
 from physical_agent.config import write_default_config
 from physical_agent.protocol.schemas import Observation
 from physical_agent.state import open_state_store
@@ -130,14 +131,80 @@ def test_events_stream_returns_hello_and_state_without_watch(tmp_path, monkeypat
         events = _read_sse_events(client, limit=2)
 
     assert [item["event"] for item in events] == ["hello", "state"]
-    assert events[0]["data"]["payload"] == {
-        "version": "0.1.0",
-        "watch_enabled": False,
-    }
+    hello = events[0]["data"]["payload"]
+    assert hello["version"] == "0.1.0"
+    assert hello["watch_enabled"] is False
+    assert hello["executor"]["mode"] == "none"
+    assert hello["executor"]["status"] == "stopped"
     state_payload = events[1]["data"]["payload"]
     assert state_payload["reason"] == "connect"
     assert state_payload["state"]["ready"] is True
     assert state_payload["state"]["pending_actions"] == []
+
+
+def test_events_stream_emits_periodic_executor_projection_without_watch(
+    tmp_path,
+    monkeypatch,
+):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    assert store.acquire_runtime_lease(
+        "watch-executor",
+        "external-watch",
+        ttl_s=30,
+    )
+
+    monkeypatch.setattr(api_server_module, "EXECUTOR_EVENT_INTERVAL_S", 0.001)
+    with TestClient(create_app(config_path, enable_watch=False)) as client:
+        events = _read_sse_events(client, limit=3)
+
+    assert [item["event"] for item in events] == ["hello", "state", "executor"]
+    executor = events[2]["data"]["payload"]["executor"]
+    assert executor["mode"] == "external"
+    assert executor["status"] == "active"
+    assert executor["lease"]["active"] is True
+    assert executor["lease"]["owner"] == "external-watch"
+    assert executor["lease"]["expires_at"]
+
+
+def test_state_summary_ignores_lease_renewal_timestamps():
+    first = {
+        "ok": True,
+        "ready": True,
+        "watch_enabled": True,
+        "executor": {
+            "mode": "embedded",
+            "status": "active",
+            "embedded_enabled": True,
+            "lease": {
+                "name": "watch-executor",
+                "owner": "embedded-watch",
+                "active": True,
+                "expires_at": "2026-07-10T00:00:05Z",
+                "updated_at": "2026-07-10T00:00:00Z",
+            },
+            "last_error": None,
+        },
+    }
+    second = json.loads(json.dumps(first))
+    second["executor"]["lease"]["expires_at"] = "2026-07-10T00:00:10Z"
+    second["executor"]["lease"]["updated_at"] = "2026-07-10T00:00:05Z"
+
+    first_summary = watch_service.summarize_state(first)
+    second_summary = watch_service.summarize_state(second)
+
+    assert first_summary == second_summary
+    assert first_summary["executor"] == {
+        "mode": "embedded",
+        "status": "active",
+        "embedded_enabled": True,
+        "lease": {
+            "active": True,
+            "owner": "embedded-watch",
+        },
+        "last_error": None,
+    }
 
 
 def test_enable_watch_background_loop_publishes_step_and_error(tmp_path, monkeypatch):
@@ -205,6 +272,7 @@ def test_enable_watch_background_loop_publishes_step_and_error(tmp_path, monkeyp
 
 def test_api_watch_stops_after_fatal_executor_fencing_error(tmp_path, monkeypatch):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
 
     class FatalLeaseError(RuntimeError):
         fatal_watch_error = True
@@ -257,6 +325,236 @@ def test_api_watch_stops_after_fatal_executor_fencing_error(tmp_path, monkeypatc
     assert event is not None
     assert event["type"] == "error"
     assert event["payload"]["phase"] == "watch_step"
+
+
+def test_api_watch_waits_for_project_init_then_starts(tmp_path, monkeypatch):
+    config_path = tmp_path / "physical-agent.yaml"
+    loader_calls = 0
+
+    class FakeWatchRuntime:
+        instances = []
+
+        def __init__(self, config_path):
+            self.config_path = Path(config_path)
+            self.config = SimpleNamespace(watch=SimpleNamespace(tick_ms=1))
+            self.shutdown_called = False
+            self._watch_lease_owner = "embedded-test-owner"
+            FakeWatchRuntime.instances.append(self)
+
+        async def setup(self):
+            return None
+
+        async def step(self, *, setup=True):
+            assert setup is False
+            return 0
+
+        async def shutdown(self):
+            self.shutdown_called = True
+
+    def load_runtime():
+        nonlocal loader_calls
+        loader_calls += 1
+        return FakeWatchRuntime
+
+    monkeypatch.setattr(watch_service, "_load_watch_runtime_class", load_runtime)
+    service = watch_service.ApiWatchService(
+        config_path,
+        events=watch_service.ApiEventBroker(),
+        interval_s=0.001,
+    )
+
+    async def run_service():
+        await service.start()
+        for _ in range(100):
+            if service.status()["phase"] == "waiting_for_init":
+                break
+            await asyncio.sleep(0.001)
+        assert service.status()["phase"] == "waiting_for_init"
+        assert loader_calls == 0
+
+        write_default_config(config_path, overwrite=False)
+        open_state_store(config_path=config_path).initialize()
+        for _ in range(200):
+            if service.status()["phase"] == "active":
+                break
+            await asyncio.sleep(0.001)
+        assert service.status()["phase"] == "active"
+        assert loader_calls == 1
+        await service.stop()
+
+    asyncio.run(run_service())
+
+    assert FakeWatchRuntime.instances[0].shutdown_called is True
+
+
+def test_api_watch_quietly_stands_by_for_external_lease_then_takes_over(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    assert store.acquire_runtime_lease(
+        "watch-executor",
+        "external-watch",
+        ttl_s=30,
+    )
+    loader_calls = 0
+
+    class FakeWatchRuntime:
+        def __init__(self, config_path):
+            self.config = SimpleNamespace(watch=SimpleNamespace(tick_ms=1))
+            self.store = open_state_store(config_path=config_path)
+            self._watch_lease_owner = "embedded-watch"
+
+        async def setup(self):
+            assert self.store.acquire_runtime_lease(
+                "watch-executor",
+                self._watch_lease_owner,
+                ttl_s=30,
+            )
+
+        async def step(self, *, setup=True):
+            assert setup is False
+            return 0
+
+        async def shutdown(self):
+            self.store.release_runtime_lease(
+                "watch-executor",
+                self._watch_lease_owner,
+            )
+
+    def load_runtime():
+        nonlocal loader_calls
+        loader_calls += 1
+        return FakeWatchRuntime
+
+    monkeypatch.setattr(watch_service, "_load_watch_runtime_class", load_runtime)
+    events = watch_service.ApiEventBroker()
+    service = watch_service.ApiWatchService(
+        config_path,
+        events=events,
+        interval_s=0.001,
+    )
+    controller = ApiController(config_path, embedded_watch_enabled=True)
+    controller.bind_watch_service(service)
+
+    async def run_service():
+        await service.start()
+        for _ in range(100):
+            if service.status()["phase"] == "standby":
+                break
+            await asyncio.sleep(0.001)
+        assert service.status()["phase"] == "standby"
+        assert service.status()["last_error"] is None
+        assert loader_calls == 0
+        executor = controller.executor_status()
+        assert executor["mode"] == "external"
+        assert executor["status"] == "active"
+        subscription = events.subscribe(replay=True)
+        assert subscription.get(timeout_s=0.01) is None
+        subscription.close()
+
+        assert store.release_runtime_lease("watch-executor", "external-watch")
+        for _ in range(200):
+            if service.status()["phase"] == "active":
+                break
+            await asyncio.sleep(0.001)
+        assert service.status()["phase"] == "active"
+        assert loader_calls == 1
+        lease = store.read_runtime_lease("watch-executor")
+        assert lease is not None
+        assert lease["owner"] == "embedded-watch"
+        assert controller.executor_status()["mode"] == "embedded"
+        await service.stop()
+
+    asyncio.run(run_service())
+
+
+def test_api_watch_projects_invalid_config_as_error_state(tmp_path):
+    config_path = tmp_path / "physical-agent.yaml"
+    config_path.write_text("workspace: [invalid]\n", encoding="utf-8")
+    events = watch_service.ApiEventBroker()
+    service = watch_service.ApiWatchService(
+        config_path,
+        events=events,
+        interval_s=0.001,
+    )
+    controller = ApiController(config_path, embedded_watch_enabled=True)
+    controller.bind_watch_service(service)
+
+    async def run_service():
+        await service.start()
+        for _ in range(100):
+            if service.status()["phase"] == "invalid_config":
+                break
+            await asyncio.sleep(0.001)
+        executor = controller.executor_status()
+        assert executor["mode"] == "waiting_for_init"
+        assert executor["status"] == "invalid_config"
+        assert executor["last_error"]["phase"] == "configuration"
+        assert "validation error" in executor["last_error"]["message"].lower()
+        await service.stop()
+
+    asyncio.run(run_service())
+
+
+def test_api_watch_setup_failure_is_fail_stop_not_reconnect_loop(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    loader_calls = 0
+
+    class FailingWatchRuntime:
+        instances = []
+
+        def __init__(self, config_path):
+            self.shutdown_called = False
+            FailingWatchRuntime.instances.append(self)
+
+        async def setup(self):
+            raise RuntimeError("driver connect failed")
+
+        async def shutdown(self):
+            self.shutdown_called = True
+
+    def load_runtime():
+        nonlocal loader_calls
+        loader_calls += 1
+        return FailingWatchRuntime
+
+    monkeypatch.setattr(watch_service, "_load_watch_runtime_class", load_runtime)
+    events = watch_service.ApiEventBroker()
+    service = watch_service.ApiWatchService(
+        config_path,
+        events=events,
+        interval_s=0.001,
+    )
+
+    async def run_service():
+        await service.start()
+        assert service._task is not None
+        await asyncio.wait_for(service._task, timeout=0.2)
+        await asyncio.sleep(0.02)
+        status = service.status()
+        assert status["phase"] == "degraded"
+        assert status["task_running"] is False
+        assert status["last_error"]["phase"] == "setup"
+        assert loader_calls == 1
+
+        subscription = events.subscribe(replay=True)
+        event = subscription.get(timeout_s=0.05)
+        assert event is not None
+        assert event["type"] == "error"
+        assert event["payload"]["message"] == "driver connect failed"
+        assert subscription.get(timeout_s=0.02) is None
+        subscription.close()
+        await service.stop()
+
+    asyncio.run(run_service())
+
+    assert FailingWatchRuntime.instances[0].shutdown_called is True
 
 
 def test_http_auto_step_like_fields_do_not_start_watch(tmp_path, monkeypatch):

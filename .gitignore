@@ -4,6 +4,8 @@ __pycache__/
 .pytest_cache/
 .venv/
 dist/
+!physical_agent/dashboard/dist/
+!physical_agent/dashboard/dist/**
 build/
 workspace/
 .codex-artifacts/

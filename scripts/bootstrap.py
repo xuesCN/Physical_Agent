@@ -14,7 +14,10 @@ def main() -> int:
     if not python.exists():
         subprocess.check_call([sys.executable, "-m", "venv", str(venv)], cwd=root)
 
-    subprocess.check_call([str(python), "-m", "pip", "install", "-e", ".[dev]"], cwd=root)
+    subprocess.check_call(
+        [str(python), "-m", "pip", "install", "-e", ".[dev,server]"],
+        cwd=root,
+    )
     subprocess.check_call([str(python), "-m", "pytest", "-q"], cwd=root)
     subprocess.check_call([str(python), "-m", "physical_agent.cli", "setup", "--smoke-test"], cwd=root)
 
@@ -36,4 +39,3 @@ def _venv_python(venv: Path) -> Path:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

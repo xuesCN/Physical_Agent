@@ -54,10 +54,13 @@ jobs:
             tests/test_watch_runtime.py::test_watch_runtime_step_executes_action
 
   frontend:
-    name: Frontend build
+    name: Frontend build + packaged wheel smoke
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -69,6 +72,12 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         run: npm run build
+      - name: Verify committed Dashboard assets are current
+        run: git diff --exit-code -- physical_agent/dashboard/dist
+      - name: Install wheel builder
+        run: python -m pip install build
+      - name: Smoke base and server-extra wheels
+        run: python scripts/smoke_dashboard_wheel.py
 
   tui:
     name: Ink TUI contract

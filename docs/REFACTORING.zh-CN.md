@@ -41,6 +41,7 @@
 | VNext-2b | Proposal actions batch 单事务 all-or-nothing | 本轮完成 |
 | W6.1 | workspace watch runtime lease + unique claim-owner CAS/reset guard | 本轮完成 |
 | R0 | 架构减法规格 + GUI/Markdown/streaming 三份退役审计 | `e8750ca` |
+| R1.5 | 正式 Dashboard parity 补缺 + packaged wheel + thin `gui` strangler cutover | 本轮提交（R2 仍 No-Go） |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -253,6 +254,20 @@ streaming 审计进一步发现：当前 done item 虽已有 `agent_output`，�
 
 同时确认 `chat_runtime.py::_append_actions` 零调用，它重复了 ProposalService 已拥有的编号、dependency remap 和 batch append；已点名进入 R6，连同专属 `_normalize_depends_on` import 与 `_max_action_number()` 删除。`/api/state.actions` 明确保留为 Action Board 运行真值；只退役 task/chat/manual proposal response 的顶层 convenience `actions/action`。本轮边界保持：两条安全宪法、watch、SafetyGate、driver、SQLite schema 和运行 API 行为均未修改；当前仍是 GUI/迁移/fence 删除 No-Go。
 
+### R1.5：正式 Dashboard 补缺与 legacy launcher strangler cutover
+
+动机：R0 已证明不能直接删除 legacy GUI：正式 FastAPI/React 栈缺安全首次初始化、真实 executor health、watch 未运行时的 execution mode 和 wheel 内静态资源；LLM integration/model override 与 streaming draft → pending 也缺迁移证据。本轮只补正式栈并切入口，不删除 `physical_agent/gui/`，让下一轮仍有完整回退面。
+
+后端新增 proposal-only 的 `POST /api/project/initialize`：只创建缺失的默认 config/workspace，不加载 `WatchRuntime`，重复调用幂等，invalid config fail closed。`write_default_config(overwrite=False)` 从 exists→`open('w')` 改成“完整临时文件 + exclusive hard link”原子发布，避免并发初始化截断用户刚创建的 config；controller 内再串行同 app 的初始化请求。SQLite 增加只读 runtime lease projection，health/state/SSE 暴露 `executor={mode,status,embedded_enabled,lease,last_error}`，以进程内 service phase 与 active `watch-executor` lease共同区分 waiting/embedded/external/none，`watch_enabled` 只保留配置兼容语义。no-watch API 每 5 秒推送 executor heartbeat，使外部 watch 启停可见；watch-step 摘要剔除续租时间戳，避免 500ms 空闲轮询。external lease 存在时 embedded service 安静 standby，释放后接管；真实 driver setup/connect 失败则 degraded fail-stop，不再每 0.5 秒重连硬件刷错。
+
+入口侧把 `physical-agent gui` 改为正式 `create_app()` 的薄 launcher：默认 embedded watch，`--no-watch` 只关闭内嵌执行器，host/port/no-open 保留；CLI import 不再触碰 `physical_agent.gui`。自动开浏览器改为 daemon readiness waiter，只有 `/api/health` 2xx 后才打开，wildcard bind 地址映射到本机可访问 URL。`api` 与 `gui` 复用同一启动函数，缺 `[server]` 时给出可执行安装提示。
+
+发布侧选择 `physical_agent/dashboard/dist` 作为唯一正式 package resource，Vite 直接输出该目录；`pyproject.toml` 打包 React build，FastAPI 首选 package-local path，源码 `frontend/dist` 只作过渡 fallback。由于 setuptools 增量 `build/lib` 会把旧 hashed chunk 带回 wheel，新增最小 build hook 在 `build_py` 前只清理目标 Dashboard dist，并用“source resource members == wheel members”测试锁住。clean-wheel smoke 在两个全新 venv 分别验证 base wheel 的 server-extra 提示，以及 wheel + `[server]` 下 `gui`、`api`、`/`、hashed asset 和 `/api/health`。
+
+React/TUI 统一消费 executor projection，不再把 `watch_enabled` 染成“正在运行”。Config/Robots 从共享的 `/api/config` 读取 YAML，因此无 executor/capabilities 时仍显示 hardware/simulation；Dashboard 补首次初始化按钮，成功后并行刷新 state/config；Settings reset 明示清 workspace、保留 YAML/LLM、恢复 SAFETY，factory reset 指向 `physical-agent setup --force`。GUI watch start/stop/step、hard-coded Demo、逐消息 planner、browser code skill/raw doctor 不复制回正式栈，替代分别是正式 watch 生命周期、`setup --smoke-test`、CLI `chat --planner`、CLI `chat --show-code-result` 与 `doctor`；canonical routes 负用例固定旧控制面为 404。
+
+测试迁移包括 FastAPI LLM driver model override/生成结果、无 watch 的 execution mode、初始化/executor/external lease/standby/fail-stop、thin launcher/browser readiness、wheel exact contents，以及 Playwright 的 mock stream fence → draft card → 真实 `/api/actions/propose` → 独立 `/api/state` pending 主链。最终本地证据：Python 3.12 `419 passed`（1 个既有 Starlette/httpx 弃用 warning），frontend production build 通过，TUI typecheck/test/build 通过（59 tests），clean-wheel 双 venv smoke 通过，Playwright 可发现 25 项。真实 Playwright 尚未运行：普通与放宽沙盒两次从官方 CDN 都得到 0 MiB 截断 Chromium zip。因此 cutover 可以提交，legacy GUI 仍保留且 R2 删除继续 No-Go，需 pushed commit 的 CI/可用浏览器环境补绿后再进入下一步。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -316,6 +331,11 @@ streaming 审计进一步发现：当前 done item 虽已有 `agent_output`，�
 59. **structured output 必须独立于 fence 生产**（R5/R7）：从 `action-draft` 反向解析出的 AgentOutput 不是新通道；先建立 typed Chat Turn，以 structured actions 生成兼容 fence并双轨验证，后续提交才可删 fence。
 60. **Action Board truth 与 proposal action payload duplication 分开**（R6/R7）：`/api/state.actions`/SQLite board 永久保留；只删除已有 `agent_output.actions` 替代的 task/chat/manual proposal 顶层 `actions/action/draft_actions`，approve/reject mutation result、envelope/status/correlation 和内部 `ProposalResult.actions` 不在此列。
 61. **统一协议，不强行统一 presentation**（R6）：React 与 TUI 可以保留不同 formatter/viewmodel；只统一后端 `AgentOutput`、projection 和 owner/status/Gate 解释，避免跨浏览器/终端的伪共享抽象。
+62. **`watch_enabled` 不是 executor health**（R1.5）：真实执行者状态必须合成本进程 service phase 与 SQLite active lease；driver/hardware health 继续由 capabilities/runtime profile 单独表达。
+63. **安全初始化用原子发布且不拥有 watch**（R1.5）：首次初始化 handler 只能创建 config/workspace；已有 config 不覆盖，并发创建不能被 TOCTOU 截断；执行器由 lifespan 自行等待和接管。
+64. **保留 `gui` 命令，不保留第二 controller**（R1.5）：命令兼容通过正式 FastAPI app factory 实现；legacy 模块只在 R2 门禁通过前作为回退存在，不再是默认入口。
+65. **真实 setup 失败不自动高频重连硬件**（R1.5）：missing init/external lease 可以安全轮询；driver connect/setup 错误 degraded fail-stop，交给显式进程生命周期重试。
+66. **Dashboard 是 wheel package resource，hashed build 必须去陈旧化**（R1.5）：源码 cwd 只能做开发 fallback；增量 wheel 在复制前清目标 dist，并验证 wheel 资源集合与当前 Vite 输出严格相等。
 
 ## 4. 经验教训（流程侧）
 
@@ -339,5 +359,7 @@ streaming 审计进一步发现：当前 done item 虽已有 `agent_output`，�
 - **软件 ownership 与硬件 fencing 要分层命名**（W6 的教训）：workspace runtime lease 已覆盖单数据库内的执行者排他、claim CAS 和 reset guard；不能因此声称 in-flight command 或设备控制权已被 epoch fence。
 - **删除/迁移清单必须来自代码 surface，不只来自现有测试**（R0 的教训）：legacy GUI 的 setup/watch/doctor/task 多条路径没有直接测试，若只搬测试会再次漏功能；先枚举端点、用户任务、打包入口、文档和负用例，再决定覆盖或有意退役。
 - **兼容字段存在不代表已经有独立新通道**（R0 的教训）：stream done 内部已有 `agent_output`，但它仍由 fence 反解析且 API 丢弃；判断迁移完成要追 producer→transport→consumer→persistence 的事实来源，而不是只看 schema 名称。
+- **带 hash 的前端产物要防增量构建残留**（R1.5 的教训）：只让 Vite `emptyOutDir` 不够，setuptools 的 `build/lib` 仍可能保存旧 chunk；wheel 测试必须比较资源全集，而不是只断言“有 index 和任意 asset”。
+- **浏览器验收不可用 discovery 冒充 runtime**（R1.5 的教训）：`playwright --list` 能抓语法/发现问题，但不能证明 route handler、SSE 与 DOM 交互实际成立；浏览器二进制不可用时应保留删除 No-Go，而不是为了收工勾绿。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

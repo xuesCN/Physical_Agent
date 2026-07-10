@@ -9,7 +9,7 @@
       "events": {
         "behavior": "idle",
         "items": [
-          { "type": "hello", "payload": { "watch_enabled": true } }
+          { "type": "hello", "payload": { "executor": { "mode": "embedded", "status": "active", "lease": { "active": true } } } }
         ]
       },
       "responses": {

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
+import webbrowser
 from pathlib import Path
 from typing import Any, Optional
+from urllib.error import URLError
+from urllib.request import urlopen
 
 import typer
 import yaml
@@ -15,7 +20,6 @@ from physical_agent.agent.skills import SkillRouter
 from physical_agent.config import DEFAULT_CONFIG_NAME, load_config, write_default_config
 from physical_agent.doctor import doctor_ok, run_doctor
 from physical_agent.drivers.templates import create_driver_template
-from physical_agent.gui import run_gui
 from physical_agent.ingest.files import FileIngestionError, ingest_file as ingest_local_file
 from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
 from physical_agent.quickstart import setup_project
@@ -147,8 +151,20 @@ def gui(
     host: str = typer.Option("127.0.0.1", "--host", help="Host to bind."),
     port: int = typer.Option(8765, "--port", "-p", help="Port to bind."),
     no_open: bool = typer.Option(False, "--no-open", help="Do not open the browser automatically."),
+    no_watch: bool = typer.Option(
+        False,
+        "--no-watch",
+        help="Serve the Dashboard without an embedded watch executor.",
+    ),
 ) -> None:
-    run_gui(config, host=host, port=port, open_browser=not no_open)
+    _serve_api_app(
+        config,
+        host=host,
+        port=port,
+        enable_watch=not no_watch,
+        open_browser=not no_open,
+        announce_dashboard=True,
+    )
 
 
 @app.command("api")
@@ -163,21 +179,13 @@ def api(
         help="Override the API watch loop interval in seconds.",
     ),
 ) -> None:
-    try:
-        create_app, uvicorn = _load_api_server()
-        api_app = create_app(
-            config,
-            enable_watch=watch,
-            watch_interval_s=watch_interval_s,
-        )
-    except Exception as exc:
-        from physical_agent.api.server import MissingServerDependencyError
-
-        if isinstance(exc, MissingServerDependencyError):
-            typer.echo(str(exc), err=True)
-            raise typer.Exit(code=1) from exc
-        raise
-    uvicorn.run(api_app, host=host, port=port)
+    _serve_api_app(
+        config,
+        host=host,
+        port=port,
+        enable_watch=watch,
+        watch_interval_s=watch_interval_s,
+    )
 
 
 @app.command("watch")
@@ -421,6 +429,95 @@ def _load_api_server():
     except ImportError as exc:
         raise MissingServerDependencyError(SERVER_EXTRA_HINT) from exc
     return create_app, uvicorn
+
+
+def _serve_api_app(
+    config: Path,
+    *,
+    host: str,
+    port: int,
+    enable_watch: bool,
+    watch_interval_s: float | None = None,
+    open_browser: bool = False,
+    announce_dashboard: bool = False,
+) -> None:
+    """Run the canonical FastAPI application for both ``api`` and ``gui``."""
+
+    try:
+        create_app, uvicorn = _load_api_server()
+        api_app = create_app(
+            config,
+            enable_watch=enable_watch,
+            watch_interval_s=watch_interval_s,
+        )
+    except Exception as exc:
+        from physical_agent.api.server import MissingServerDependencyError
+
+        if isinstance(exc, MissingServerDependencyError):
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        raise
+
+    url = _dashboard_browser_url(host, port)
+    if open_browser:
+        _schedule_dashboard_browser(url)
+    if announce_dashboard:
+        typer.echo(f"Physical Agent Dashboard running at {url}")
+    uvicorn.run(api_app, host=host, port=port)
+
+
+def _dashboard_browser_url(bind_host: str, port: int) -> str:
+    """Map a bind address to a locally reachable browser URL."""
+
+    host = bind_host.strip()
+    unbracketed = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    if unbracketed == "0.0.0.0":
+        unbracketed = "127.0.0.1"
+    elif unbracketed == "::":
+        unbracketed = "::1"
+    if ":" in unbracketed:
+        unbracketed = f"[{unbracketed}]"
+    return f"http://{unbracketed}:{port}"
+
+
+def _schedule_dashboard_browser(url: str) -> threading.Thread:
+    """Open the Dashboard asynchronously after its health endpoint responds."""
+
+    thread = threading.Thread(
+        target=_wait_for_dashboard_and_open,
+        args=(url,),
+        name="physical-agent-dashboard-opener",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def _wait_for_dashboard_and_open(
+    url: str,
+    *,
+    timeout_s: float = 30.0,
+    poll_interval_s: float = 0.1,
+) -> bool:
+    deadline = time.monotonic() + max(0.0, timeout_s)
+    health_url = f"{url.rstrip('/')}/api/health"
+    while True:
+        if _dashboard_health_ready(health_url):
+            webbrowser.open(url)
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(max(0.01, poll_interval_s), remaining))
+
+
+def _dashboard_health_ready(health_url: str) -> bool:
+    try:
+        with urlopen(health_url, timeout=0.5) as response:
+            status = int(getattr(response, "status", 200))
+            return 200 <= status < 300
+    except (OSError, URLError):
+        return False
 
 
 @app.command("llm-test")

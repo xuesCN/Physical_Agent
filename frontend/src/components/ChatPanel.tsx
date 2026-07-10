@@ -234,7 +234,7 @@ function DraftActionCard({
   const expected = action.metadata?.expected;
   const expectedText = expectedSummary(expected);
   return (
-    <Card size="small" className="draft-action-card">
+    <Card size="small" className="draft-action-card" data-testid="draft-action-card">
       <Space direction="vertical" size={8} className="full-width">
         <Space wrap>
           <Tag color="blue">{labels.chat.draft}</Tag>
@@ -269,6 +269,7 @@ function DraftActionCard({
         </Descriptions>
         <Space wrap>
           <Button
+            data-testid="add-draft-to-actions"
             type="primary"
             size="small"
             icon={<PlusOutlined />}

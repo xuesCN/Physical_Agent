@@ -473,12 +473,19 @@ def test_sqlite_runtime_lease_has_single_owner_and_can_be_released(tmp_path):
     store = SqliteStateStore(tmp_path / "workspace")
     store.initialize()
 
+    assert store.read_runtime_lease("watch") is None
     assert store.acquire_runtime_lease("watch", "owner-a", ttl_s=30) is True
+    lease = store.read_runtime_lease("watch")
+    assert lease is not None
+    assert lease["name"] == "watch"
+    assert lease["owner"] == "owner-a"
+    assert lease["active"] is True
     assert store.acquire_runtime_lease("watch", "owner-b", ttl_s=30) is False
     assert store.renew_runtime_lease("watch", "owner-a", ttl_s=30) is True
     assert store.renew_runtime_lease("watch", "owner-b", ttl_s=30) is False
     assert store.release_runtime_lease("watch", "owner-b") is False
     assert store.release_runtime_lease("watch", "owner-a") is True
+    assert store.read_runtime_lease("watch") is None
     assert store.acquire_runtime_lease("watch", "owner-b", ttl_s=30) is True
 
 
@@ -493,6 +500,9 @@ def test_sqlite_expired_runtime_lease_cannot_be_renewed(tmp_path):
             ("2000-01-01T00:00:00.000000Z", "watch"),
         )
 
+    expired = store.read_runtime_lease("watch")
+    assert expired is not None
+    assert expired["active"] is False
     assert store.renew_runtime_lease("watch", "owner-a", ttl_s=30) is False
     assert store.acquire_runtime_lease("watch", "owner-b", ttl_s=30) is True
 

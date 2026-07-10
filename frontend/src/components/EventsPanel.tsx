@@ -74,12 +74,15 @@ function eventMessage(
     return formatPrimitive(payload.message, "API event error");
   }
   if (event.type === "hello") {
-    return `API stream connected; watch ${payload.watch_enabled ? "enabled" : "disabled"}.`;
+    const executor = asRecord(payload.executor);
+    const mode = formatPrimitive(executor.mode, "status unknown");
+    const status = formatPrimitive(executor.status, "unknown");
+    return `API stream connected; executor ${mode} (${status}).`;
   }
   if (event.type === "watch_step") {
     const executed = formatObjectValue(payload.executed, "0");
     const message = formatPrimitive(latestFeedback.message, "");
-    return message || `Watch step completed; executed ${executed} action(s).`;
+    return message || `Executor cycle completed; executed ${executed} action(s).`;
   }
   if (event.type === "state") {
     return `State snapshot refreshed${payload.reason ? `: ${formatObjectValue(payload.reason)}` : "."}`;

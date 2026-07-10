@@ -25,58 +25,63 @@
 
 ## R1.5 legacy GUI parity checklist
 
+当前状态：正式栈缺口和 thin-launcher cutover 已实现，legacy 实现仍完整保留。当前提交的 Python、TUI、frontend build 与 clean-wheel smoke 已通过；Playwright 用例已补齐且可发现，但本环境从官方 CDN 得到的是 0 MiB 截断 Chromium 包，尚无当前提交的真实浏览器运行证据。因此 R2 删除门禁继续 **No-Go**。
+
 ### 端点与用户能力矩阵
 
 | Legacy surface | 用户能力 | 正式栈现状 | 决定 | 删除前证据 |
 | --- | --- | --- | --- | --- |
-| `GET /`, `/static/*` | 打开本地 GUI | FastAPI `/` 可托管 `frontend/dist`，但 dist 不进 wheel | 保留并补齐 | [ ] wheel 安装后 `/` + assets smoke；[ ] `gui` 薄 launcher |
-| `GET /api/state` | 状态、world、actions、feedback、safety、chat、plan、memory | FastAPI 同名 API 字段更多 | 保留 | [ ] API state + Dashboard overview/actions/world 回归 |
-| `GET /api/doctor` | Python/config/workspace/driver 诊断 | `/api/state-check` 只覆盖 state backend | 有意退役 browser doctor | [ ] README/UI 指向 `physical-agent doctor`；[ ] CLI doctor 回归 |
-| `POST /api/setup` | 首次建 config/workspace、发布能力、连接 watch | 无 Dashboard 初始化入口 | 补安全初始化；不连接 watch | [ ] missing-config/empty-workspace 正反 API + e2e |
-| `POST /api/setup {force:true}` | 覆写 YAML、清 state、重连 watch | `/api/workspace/reset` 清 state、保留 YAML、active lease 拒绝 | 用安全 reset 替代 | [ ] UI 文案；[ ] 409 lease；[ ] CLI `setup --force` 替代说明 |
-| `POST /api/watch/start` | GUI 启动 watch | 只有进程级 `watch`/`api --watch` | 有意退役 UI 控制 | [ ] operator 命令说明；[ ] Dashboard 实际 health |
-| `POST /api/watch/stop` | GUI 停止 watch（旧页面无按钮） | 停止正式 watch/API 进程 | 有意退役 UI 控制 | [ ] operator 命令/停止语义说明 |
-| `POST /api/watch/step` | 手动执行一轮 | 无 | 有意退役 | [ ] proposal-only Dashboard 负用例；[ ] watch 命令回归 |
-| `POST /api/task` | task → pending proposal | `/api/tasks/submit` + ProposalPanel | 已覆盖 | [ ] canonical `agent_output.actions` API/UI 测试 |
-| `POST /api/chat` | chat | `/api/chat` + `/api/chat/stream` | 已覆盖，步骤 5 收口结构化 draft | [ ] streaming structured Add 主链 |
-| chat planner selector | 每条消息选 auto/llm/rules | API 参数仍在，React 固定 auto | 有意退役 UI selector | [ ] Dashboard 固定 auto；Settings 仅配 provider/model；CLI `chat --planner` 调试说明 |
-| chat auto-step | reply 后推进 watch | ChatRuntime 已 no-op；CLI/legacy 仍有残余 | 退役 | [ ] R4 清单全部完成 |
-| browser code skill | chat 改本地代码并展示 `code_result` | FastAPI 显式关闭 | 有意退役 | [ ] UI/README 指向 `physical-agent chat --show-code-result`；[ ] API 保持关闭测试 |
-| `POST /api/integrate` | scaffold/LLM driver 生成、model override | FastAPI + HardwarePanel 已覆盖并增强 | 保留 | [ ] 移植 LLM/model override HTTP 测试 |
-| `POST /api/demo` | hard-coded mock pick/place + 两步执行 | 无；CLI smoke-test 可替代 | 有意退役 | [ ] `setup --smoke-test` 文案和回归 |
-| language toggle | 中英文 | React i18n + AntD locale | 已覆盖 | [ ] i18n e2e |
-| runtime mode | mock/hardware/confirmation/driver mode | capability 发布后部分可见；config 视图不完整 | 补 config mode + health | [ ] watch 未运行时 hardware/simulation 可见性测试 |
-| world/timeline/system | world、robots、objects、actions/feedback、raw details | React 已产品化，信息架构不同 | 已覆盖/增强 | [ ] Overview/Actions/Events/Safety e2e |
-| hardware result | generated files、validation、next steps | React 展示更多且可注册 robot | 已覆盖/增强 | [ ] scaffold + LLM + register e2e/API |
-| refresh | 重读当前状态 | SSE + refresh/poll | 已覆盖/增强 | [ ] SSE EOF/fallback 既有测试继续通过 |
-| `/api/config`, `/api/config/robots` | 查看有效配置、注册 robot | ConfigPanel/HardwarePanel 正式能力 | 正式栈保留 | [ ] read/register/duplicate/invalid config API + e2e |
-| `/api/upload`, `/api/search-memory` | 上传不可信文本、检索 memory | UploadPanel/MemorySearchPanel 正式能力 | 正式栈保留 | [ ] upload limits/trust/search API + e2e |
-| `/api/export-audit`, `/api/state-check` | 审计导出、SQLite 诊断 | Settings/状态面板正式能力 | 正式栈保留 | [ ] export/state-check API + UI 回归 |
-| `/api/settings/llm*` | 保存 provider/model/key、连接测试 | Settings 正式能力 | 正式栈保留 | [ ] secret redaction/save/test API + e2e |
-| `/api/actions/{id}/approve|reject` | 执行审批/拒绝 | ActionBoard 正式能力 | 正式栈保留 | [ ] approval/reject/Gate 不绕过 e2e |
+| `GET /`, `/static/*` | 打开本地 GUI | FastAPI `/` 从 package resource 托管 React build | 保留并补齐 | [x] clean wheel `/` + hashed assets；[x] thin `gui` launcher |
+| `GET /api/state` | 状态、world、actions、feedback、safety、chat、plan、memory | FastAPI 同名 API 字段更多 | 保留 | [x] API state + Dashboard contracts；[ ] 当前提交浏览器全套 |
+| `GET /api/doctor` | Python/config/workspace/driver 诊断 | `/api/state-check` 只覆盖 state backend | 有意退役 browser doctor | [x] README/UI 指向 `physical-agent doctor`；[x] doctor 回归 |
+| `POST /api/setup` | 首次建 config/workspace、发布能力、连接 watch | 新 `/api/project/initialize` 只初始化，不连接 watch | 补安全初始化；不连接 watch | [x] missing/empty/invalid/并发 API；[x] Playwright case；[ ] 浏览器实跑 |
+| `POST /api/setup {force:true}` | 覆写 YAML、清 state、重连 watch | `/api/workspace/reset` 清 state、保留 YAML、active lease 拒绝 | 用安全 reset 替代 | [x] UI 文案；[x] 409 lease；[x] `setup --force` 指针 |
+| `POST /api/watch/start` | GUI 启动 watch | 正式进程生命周期 + executor projection | 有意退役 UI 控制 | [x] operator 命令；[x] embedded/external/none/waiting health |
+| `POST /api/watch/stop` | GUI 停止 watch（旧页面无按钮） | 停止正式 watch/API 进程 | 有意退役 UI 控制 | [x] operator 命令/停止语义 |
+| `POST /api/watch/step` | 手动执行一轮 | 无 | 有意退役 | [x] legacy routes 404 负用例；[x] watch 回归 |
+| `POST /api/task` | task → pending proposal | `/api/tasks/submit` + ProposalPanel | 已覆盖 | [x] canonical `agent_output.actions` API/UI contracts |
+| `POST /api/chat` | chat | `/api/chat` + `/api/chat/stream` | 已覆盖；步骤 5 才新增结构化通道 | [x] fence stream → card → real propose/state Playwright case；[ ] 浏览器实跑 |
+| chat planner selector | 每条消息选 auto/llm/rules | React 固定 auto | 有意退役 UI selector | [x] Settings 仅配 provider/model；[x] CLI `chat --planner` 文档 |
+| chat auto-step | reply 后推进 watch | Dashboard/API 不提供；CLI 兼容残余留到 R4 | Dashboard 侧退役 | [-] 正式 Dashboard 负用例；R4 仍按原顺序单独退役 CLI 形状 |
+| browser code skill | chat 改本地代码并展示 `code_result` | FastAPI 显式关闭 | 有意退役 | [x] `chat --show-code-result` 指针；[x] API-safe runtime 测试 |
+| `POST /api/integrate` | scaffold/LLM driver 生成、model override | FastAPI + HardwarePanel 已覆盖并增强 | 保留 | [x] FastAPI LLM/model override/生成结果测试 |
+| `POST /api/demo` | hard-coded mock pick/place + 两步执行 | 无；CLI smoke-test 替代 | 有意退役 | [x] `setup --smoke-test` 文案和回归；[x] `/api/demo` 404 |
+| language toggle | 中英文 | React i18n + AntD locale | 已覆盖 | [x] 既有 i18n Playwright contract；[ ] 当前提交浏览器全套 |
+| runtime mode | mock/hardware/confirmation/driver mode | config + executor/capability 分层展示 | 补 config mode + health | [x] watch 未运行时 hardware/simulation API + Playwright case |
+| world/timeline/system | world、robots、objects、actions/feedback、raw details | React 已产品化，信息架构不同 | 已覆盖/增强 | [x] 既有 Overview/Actions/Events/Safety cases；[ ] 当前提交浏览器全套 |
+| hardware result | generated files、validation、next steps | React 展示更多且可注册 robot | 已覆盖/增强 | [x] scaffold/register API/e2e contract；[x] LLM generation API |
+| refresh | 重读当前状态 | SSE + executor heartbeat + refresh/fallback | 已覆盖/增强 | [x] SSE EOF/fallback/TUI tests；[x] lease heartbeat event test |
+| `/api/config`, `/api/config/robots` | 查看有效配置、注册 robot | ConfigPanel/HardwarePanel 正式能力 | 正式栈保留 | [x] read/register/duplicate/invalid API + e2e contracts |
+| `/api/upload`, `/api/search-memory` | 上传不可信文本、检索 memory | UploadPanel/MemorySearchPanel 正式能力 | 正式栈保留 | [x] limits/trust/search API + e2e contracts |
+| `/api/export-audit`, `/api/state-check` | 审计导出、SQLite 诊断 | Settings/状态面板正式能力 | 正式栈保留 | [x] export/state-check API + UI contracts |
+| `/api/settings/llm*` | 保存 provider/model/key、连接测试 | Settings 正式能力 | 正式栈保留 | [x] secret redaction/save/test API + e2e contracts |
+| `/api/actions/{id}/approve|reject` | 执行审批/拒绝 | ActionBoard 正式能力 | 正式栈保留 | [x] approval/reject/Gate 不绕过 API/e2e contracts |
 
 ### R1.5 原子任务
 
-- [ ] 新增 proposal-only 的安全初始化 use case/API；handler 不 import watch/driver，已存在 config 绝不覆写，重复调用幂等，invalid config fail closed。
-- [ ] Dashboard 对 config missing/workspace missing 提供初始化按钮、处理中与错误态。
-- [ ] 定义 executor status schema：聚合进程内 ApiWatchService phase/error 与 SQLite active `watch-executor` lease/expiry，区分 waiting_for_init/embedded/external/none；硬件连接/driver health 单独表达。
-- [ ] SSE hello/state、React StatusBar 与 TUI status 使用新 schema；不得把 `watch_enabled`、单一进程内 service 或单一 lease 冒充完整 hardware health。
-- [ ] Config/Robots 在 watch 未启动时展示 YAML 中 `execution_mode`。
-- [ ] Reset 文案固定“清 workspace、保留 YAML、恢复默认 SAFETY”；active lease 409 可读。
-- [ ] README/GUI 提供 `physical-agent setup --force` factory-reset 指针。
-- [ ] 决定 packaged dist 目录与 build hook；使用 package resource 而非 cwd 猜测作为正式路径。
-- [ ] 更新 `pyproject.toml` package-data/build 配置，移除只打包 `gui/static/*` 的旧配置。
-- [ ] base wheel 缺 `[server]` 时给出可执行安装提示；空 venv 安装 wheel + server extra 后验证 `gui`、`api`、`/`、hashed assets 与 API fallback。
-- [ ] legacy 模块仍在树中时，先把 `physical-agent gui` 切到正式 app factory；默认使用同一 embedded watch service，提供 `--no-watch`，不 import/call legacy controller。
-- [ ] 默认 embedded 模式在 config/workspace 缺失时仍能打开 Dashboard 并显示 waiting-for-init；初始化完成后由 service 生命周期重试/接管，不由初始化 HTTP handler 直接实例化 WatchRuntime。
-- [ ] 为 thin launcher 补默认 embedded watch、`--no-watch/--host/--port/--no-open`、自动开浏览器、缺 server extra 的 CLI contract tests。
-- [ ] 移植 `test_gui_http_integrate_endpoint_can_use_llm` 到 FastAPI tests，覆盖 model override/生成结果。
-- [ ] 移植 hardware mode 证据，覆盖 config 与 Dashboard 可见性。
-- [ ] 增加 streaming draft → Add to Actions → pending ActionBoard Playwright 主链。
-- [ ] 为所有有意退役项补用户可执行的替代命令和负用例。
-- [ ] Dashboard planner 口径固定 auto；Settings 只配置 LLM provider/model；调试 override 文档使用 `physical-agent chat --planner auto|llm|rule_based`。
-- [ ] browser code skill 替代明确为 `physical-agent chat --show-code-result`，不暗示 Settings 能启用。
-- [ ] parity 表每行只剩“覆盖并验证”或“有意退役且替代已验证”。
+- [x] 新增 proposal-only 的安全初始化 use case/API；handler 不 import watch/driver，已有 config 原子 fail-safe 保留，重复调用幂等，invalid config fail closed。
+- [x] Dashboard 对 config missing/workspace missing 提供初始化按钮、处理中与错误态；成功后并行刷新 state/config。
+- [x] 定义 executor status schema：聚合进程内 ApiWatchService phase/error 与 SQLite active `watch-executor` lease/expiry，区分 waiting_for_init/embedded/external/none；硬件/driver health 仍单独表达。
+- [x] SSE hello/state/周期 executor event、React StatusBar 与 TUI status 使用新 schema；`watch_enabled` 只作配置兼容。
+- [x] Config/Robots 在 watch 未启动时从 YAML 展示 `execution_mode`。
+- [x] Reset 文案固定“清 workspace、保留 YAML、恢复默认 SAFETY”；active lease 409 可读。
+- [x] README/GUI 提供 `physical-agent setup --force` factory-reset 指针。
+- [x] React build 固定到 `physical_agent/dashboard/dist` package resource；build hook 清除增量 wheel 的旧 hash 资产。
+- [x] `pyproject.toml` package-data 同时覆盖正式 Dashboard；legacy static 条目仅为 R2 前回退保留，R2 随实现一起删除。
+- [x] base wheel 缺 `[server]` 时给出可执行提示；clean venv 的 wheel + server extra 已验证 `gui`、`api`、`/`、hashed assets 与 `/api/health`。
+- [x] `physical-agent gui` 已切正式 app factory；默认 embedded、支持 `--no-watch`，不 import/call legacy controller。
+- [x] missing config/workspace 时显示 waiting-for-init；初始化后 service 自行接管；external lease 时安静 standby；driver setup 失败 degraded fail-stop。
+- [x] thin launcher 覆盖 embedded/`--no-watch`/host/port/no-open/readiness browser opener/missing server extra contracts。
+- [x] FastAPI LLM integrate 覆盖 model override 与生成结果。
+- [x] hardware/simulation mode 覆盖 config/API 与无 executor 的 Dashboard case。
+- [x] 增加 streaming fence draft → card → real Add to Actions → pending state Playwright case。
+- [x] 所有有意退役项已有可执行替代命令和 canonical routes 负用例。
+- [x] Dashboard planner 固定 auto；Settings 只配置 provider/model；README 使用 `physical-agent chat --planner ...` 调试。
+- [x] browser code skill 替代为 `physical-agent chat --show-code-result`，不暗示 Settings 能启用。
+- [x] Python 全量、frontend build、TUI typecheck/test、wheel content/clean-venv smoke 已通过。
+- [x] Playwright 当前提交可发现 25 个用例。
+- [ ] 在可下载 Chromium 的环境实际运行当前提交 Playwright 全套并留 CI/人工证据。
+- [ ] 上述浏览器门禁通过后，才能把 parity 表视为最终全绿并进入 R2 删除。
 
 ## R2 验证 cutover 后删除 legacy GUI
 

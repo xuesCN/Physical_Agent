@@ -17,6 +17,7 @@ import type {
   ApiEvent,
   ChatMessage,
   ConfigResponse,
+  ExecutorProjection,
   HealthState,
   LLMSettingsResponse,
   LlmRuntimeStatus,
@@ -25,8 +26,7 @@ import type {
   RuntimeStatus,
   TranscriptEntry,
   TuiView,
-  UploadResponse,
-  WatchStatus
+  UploadResponse
 } from "./types.js";
 
 export interface TuiClient {
@@ -72,7 +72,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>("Type /help for commands. Enter text to chat.");
   const [error, setError] = useState<string | null>(null);
-  const [watchStatus, setWatchStatus] = useState<WatchStatus>("unknown");
+  const [executor, setExecutor] = useState<ExecutorProjection | null>(null);
   const [llmStatus, setLlmStatus] = useState<LlmRuntimeStatus>({
     state: "unknown",
     model: "-",
@@ -106,6 +106,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
       const [nextHealth, nextState] = await Promise.all([client.health(), client.state()]);
       setHealth(nextHealth);
       setState(nextState);
+      setExecutor(nextState.executor ?? nextHealth.executor ?? null);
       setConnected(true);
       setError(null);
       setLastRefresh(new Date().toLocaleTimeString());
@@ -223,9 +224,9 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
       .events((event) => {
         setConnected(true);
         setMode("sse");
-        const nextWatchStatus = watchStatusFromEvent(event);
-        if (nextWatchStatus) {
-          setWatchStatus(nextWatchStatus);
+        const nextExecutor = executorFromEvent(event);
+        if (nextExecutor) {
+          setExecutor(nextExecutor);
         }
         const applyResult = applyEvent(event, setState);
         if (applyResult === "summary" && shouldRefreshFullStateFromEvent(event)) {
@@ -254,7 +255,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
     mode,
     lastRefresh,
     backend: state?.backend ?? health?.backend ?? "-",
-    watch: watchStatus,
+    executor,
     llm: llmStatus,
     message: state?.message ?? health?.message ?? (error ? "API unavailable" : "Loading")
   };
@@ -456,15 +457,42 @@ export function applyEvent(event: ApiEvent, setState: (state: AgentState) => voi
   return "ignored";
 }
 
-export function watchStatusFromEvent(event: ApiEvent): WatchStatus | null {
-  const value = event.payload?.watch_enabled;
-  if (value === true) {
-    return "enabled";
+export function executorFromEvent(event: ApiEvent): ExecutorProjection | null {
+  const direct = asExecutorProjection(event.payload?.executor);
+  if (direct) {
+    return direct;
   }
-  if (value === false) {
-    return "disabled";
+  const nestedState = event.payload?.state;
+  if (nestedState && typeof nestedState === "object") {
+    const nested = asExecutorProjection((nestedState as Record<string, unknown>).executor);
+    if (nested) {
+      return nested;
+    }
+  }
+
+  // Compatibility only. watch_enabled says how the API was configured; it
+  // does not prove a process currently owns the executor lease.
+  const legacy = event.payload?.watch_enabled;
+  if (typeof legacy === "boolean") {
+    return {
+      mode: "none",
+      status: legacy ? "unknown" : "stopped",
+      embedded_enabled: legacy,
+      legacy_watch_configured: legacy
+    };
   }
   return null;
+}
+
+function asExecutorProjection(value: unknown): ExecutorProjection | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (!["waiting_for_init", "embedded", "external", "none"].includes(String(candidate.mode))) {
+    return null;
+  }
+  return candidate as unknown as ExecutorProjection;
 }
 
 export function shouldRefreshFullStateFromEvent(event: ApiEvent): boolean {

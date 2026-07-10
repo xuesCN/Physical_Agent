@@ -18,7 +18,11 @@ from physical_agent.protocol.schemas import Action, ChatPlan, Observation
 from physical_agent.protocol.workspace import Workspace
 from physical_agent.state.base import StateStore
 from physical_agent.state.legacy_markdown import LegacyMarkdownWorkspaceReader
-from physical_agent.state import SqliteStateStore, open_state_store
+from physical_agent.state import (
+    ActiveRuntimeLeaseError,
+    SqliteStateStore,
+    open_state_store,
+)
 from physical_agent.state import factory as state_factory
 from physical_agent.watch.runtime import WatchRuntime
 
@@ -222,6 +226,65 @@ def test_sqlite_append_pending_action_writes_pending(tmp_path):
     assert row == ("pending",)
 
 
+def test_sqlite_append_pending_actions_rolls_back_entire_batch_on_conflict(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.append_pending_action(
+        Action(id="act_existing", robot="arm_1", capability="observe")
+    )
+    revision_before = store.read_actions()["metadata"]["revision"]
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store.append_pending_actions(
+            [
+                Action(id="act_fresh", robot="arm_1", capability="observe"),
+                Action(id="act_existing", robot="arm_1", capability="observe"),
+            ]
+        )
+
+    actions = store.read_actions()
+    assert [action.id for action in actions["pending"]] == ["act_existing"]
+    assert actions["metadata"]["revision"] == revision_before
+
+
+def test_sqlite_append_pending_actions_normalizes_approval_for_every_action(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.write_capabilities(
+        {
+            "arm_1": {
+                "requires_approval": False,
+                "capabilities": [
+                    {"name": "observe", "requires_approval": True},
+                ],
+            }
+        }
+    )
+
+    appended = store.append_pending_actions(
+        [
+            Action(
+                id="act_a",
+                robot="arm_1",
+                capability="observe",
+                metadata={
+                    "approval": {
+                        "required": True,
+                        "status": "approved",
+                        "approved_by": "untrusted",
+                    }
+                },
+            ),
+            Action(id="act_b", robot="arm_1", capability="observe"),
+        ]
+    )
+
+    assert [action.metadata["approval"] for action in appended] == [
+        {"required": True, "status": "pending"},
+        {"required": True, "status": "pending"},
+    ]
+
+
 def test_sqlite_initialize_migrates_old_action_claim_schema(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -388,6 +451,88 @@ def test_sqlite_claim_next_ready_action_is_not_duplicated(tmp_path):
     assert [action.id for action in store.read_actions()["completed"]] == ["act_once"]
 
 
+def test_sqlite_feedback_event_append_is_atomic_across_writers(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+
+    def append(index):
+        SqliteStateStore(store.path).append_feedback_event(
+            {"event": "test", "sequence": index}
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(append, range(24)))
+
+    feedback = store.read_feedback()
+    assert len(feedback["history"]) == 24
+    assert {item["sequence"] for item in feedback["history"]} == set(range(24))
+    assert feedback["latest"] in feedback["history"]
+
+
+def test_sqlite_runtime_lease_has_single_owner_and_can_be_released(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+
+    assert store.acquire_runtime_lease("watch", "owner-a", ttl_s=30) is True
+    assert store.acquire_runtime_lease("watch", "owner-b", ttl_s=30) is False
+    assert store.renew_runtime_lease("watch", "owner-a", ttl_s=30) is True
+    assert store.renew_runtime_lease("watch", "owner-b", ttl_s=30) is False
+    assert store.release_runtime_lease("watch", "owner-b") is False
+    assert store.release_runtime_lease("watch", "owner-a") is True
+    assert store.acquire_runtime_lease("watch", "owner-b", ttl_s=30) is True
+
+
+def test_sqlite_expired_runtime_lease_cannot_be_renewed(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    assert store.acquire_runtime_lease("watch", "owner-a", ttl_s=30) is True
+
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "UPDATE runtime_leases SET expires_at = ? WHERE name = ?",
+            ("2000-01-01T00:00:00.000000Z", "watch"),
+        )
+
+    assert store.renew_runtime_lease("watch", "owner-a", ttl_s=30) is False
+    assert store.acquire_runtime_lease("watch", "owner-b", ttl_s=30) is True
+
+
+def test_sqlite_claim_owner_fences_stale_action_completion(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.append_pending_action(
+        Action(id="act_fenced", robot="arm_1", capability="observe")
+    )
+
+    stale = store.claim_next_ready_action(claim_owner="watch-a")
+    assert stale is not None
+    assert store.recover_stale_actions(0, claim_owner="watch-a") == 1
+    current = store.claim_next_ready_action(claim_owner="watch-b")
+    assert current is not None
+
+    assert store.mark_action_completed(stale, claim_owner="watch-a") is False
+    with sqlite3.connect(store.db_path) as conn:
+        row = conn.execute(
+            "SELECT status, claim_owner FROM actions WHERE id = ?",
+            ("act_fenced",),
+        ).fetchone()
+    assert row == ("in_progress", "watch-b")
+    assert store.mark_action_completed(current, claim_owner="watch-b") is True
+
+
+def test_sqlite_reset_refuses_to_erase_live_runtime_lease(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    assert store.acquire_runtime_lease("watch", "owner-a", ttl_s=30) is True
+
+    with pytest.raises(ActiveRuntimeLeaseError, match="Stop Watch first"):
+        store.initialize(overwrite=True)
+
+    assert store.release_runtime_lease("watch", "owner-a") is True
+    store.initialize(overwrite=True)
+    assert store.exists() is True
+
+
 def test_sqlite_claim_skips_unapproved_required_action_without_blocking_later_ready(
     tmp_path,
 ):
@@ -446,6 +591,113 @@ def test_sqlite_claim_skips_unapproved_required_action_without_blocking_later_re
     assert rows == {"act_needs_approval": "pending", "act_ready": "in_progress"}
 
 
+def test_sqlite_claim_waits_for_completed_dependencies(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.append_pending_action(
+        Action(id="act_a", robot="arm_1", capability="observe")
+    )
+    store.append_pending_action(
+        Action(
+            id="act_b",
+            robot="arm_1",
+            capability="observe",
+            depends_on=["act_a"],
+        )
+    )
+
+    first = store.claim_next_ready_action(claim_owner="test-watch")
+    blocked = store.claim_next_ready_action(claim_owner="test-watch")
+
+    assert first is not None
+    assert first.id == "act_a"
+    assert blocked is None
+    assert [action.id for action in store.read_actions()["pending"]] == ["act_b"]
+
+    store.mark_action_completed(first)
+    second = store.claim_next_ready_action(claim_owner="test-watch")
+
+    assert second is not None
+    assert second.id == "act_b"
+
+
+def test_sqlite_claim_serializes_actions_per_robot_but_not_across_robots(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.append_pending_action(
+        Action(id="act_arm_first", robot="arm_1", capability="observe")
+    )
+    store.append_pending_action(
+        Action(id="act_arm_second", robot="arm_1", capability="observe")
+    )
+    store.append_pending_action(
+        Action(id="act_rover", robot="rover_1", capability="observe")
+    )
+
+    arm = store.claim_next_ready_action(claim_owner="watch-a")
+    rover = store.claim_next_ready_action(claim_owner="watch-b")
+    blocked = store.claim_next_ready_action(claim_owner="watch-b")
+
+    assert arm is not None and arm.id == "act_arm_first"
+    assert rover is not None and rover.id == "act_rover"
+    assert blocked is None
+    assert [action.id for action in store.read_actions()["pending"]] == [
+        "act_arm_second"
+    ]
+
+    store.mark_action_completed(arm)
+    next_arm = store.claim_next_ready_action(claim_owner="watch-b")
+    assert next_arm is not None and next_arm.id == "act_arm_second"
+
+
+def test_sqlite_claim_skips_blocked_dependency_and_claims_later_ready_action(
+    tmp_path,
+):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.append_pending_action(
+        Action(
+            id="act_blocked",
+            robot="arm_1",
+            capability="observe",
+            depends_on=["act_unknown"],
+        )
+    )
+    store.append_pending_action(
+        Action(id="act_independent", robot="arm_1", capability="observe")
+    )
+
+    claimed = store.claim_next_ready_action(claim_owner="test-watch")
+
+    assert claimed is not None
+    assert claimed.id == "act_independent"
+    assert [action.id for action in store.read_actions()["pending"]] == [
+        "act_blocked"
+    ]
+
+
+def test_sqlite_claim_skips_actions_for_temporarily_blocked_robots(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.append_pending_action(
+        Action(id="act_unready", robot="arm_1", capability="observe")
+    )
+    store.append_pending_action(
+        Action(id="act_ready", robot="arm_2", capability="observe")
+    )
+
+    claimed = store.claim_next_ready_action(
+        claim_owner="test-watch",
+        blocked_robot_ids={"arm_1"},
+    )
+
+    assert claimed is not None
+    assert claimed.id == "act_ready"
+    assert [action.id for action in store.read_actions()["pending"]] == [
+        "act_unready"
+    ]
+
+
 def test_sqlite_approve_required_action_allows_claim_and_is_idempotent(tmp_path):
     store = SqliteStateStore(tmp_path / "workspace")
     store.initialize()
@@ -492,7 +744,7 @@ def test_sqlite_recover_stale_actions_releases_only_expired_claims(tmp_path):
     store = SqliteStateStore(tmp_path / "workspace")
     store.initialize()
     store.append_pending_action(Action(id="act_stale", robot="arm_1", capability="observe"))
-    store.append_pending_action(Action(id="act_fresh", robot="arm_1", capability="observe"))
+    store.append_pending_action(Action(id="act_fresh", robot="arm_2", capability="observe"))
 
     stale = store.claim_next_ready_action(claim_owner="watch-a")
     fresh = store.claim_next_ready_action(claim_owner="watch-a")

@@ -1,5 +1,9 @@
 import type { AgentState, HealthState } from "../types";
 import {
+  formatAgentOutput,
+  type AgentOutputOverview
+} from "./agentOutput";
+import {
   CAPABILITY_KNOWN_KEYS,
   formatCapabilities,
   type CapabilityOverview
@@ -39,6 +43,7 @@ export interface SystemStatusOverview {
 
 export interface StateOverviewViewModel {
   system: SystemStatusOverview;
+  agentOutput: AgentOutputOverview | null;
   robots: RobotOverview[];
   capabilities: CapabilityOverview[];
   environment: EnvironmentOverview;
@@ -86,6 +91,7 @@ export function formatStateOverview(
 ): StateOverviewViewModel {
   return {
     system: formatSystemStatus(state, health),
+    agentOutput: formatAgentOutput(state),
     robots: formatRobots(state),
     capabilities: formatCapabilities(state?.capabilities),
     environment: formatEnvironment(state?.world),

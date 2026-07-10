@@ -151,6 +151,56 @@ test("ActionsPanel renders approval status", () => {
   assert.match(view.lastFrame() ?? "", /approval required/);
 });
 
+test("ActionsPanel renders compiled mandatory SafetyGate tasks and feedback status", () => {
+  const view = render(
+    <ActionsPanel
+      force
+      state={{
+        ready: true,
+        plan: {
+          plan: {
+            agent_output: {
+              schema: "physical-agent/agent-output/v1",
+              status: "waiting_execution",
+              decision: "propose",
+              lifecycle: "submitted",
+              tasks: [
+                {
+                  id: "task:safety_gate:act_001",
+                  kind: "safety_gate",
+                  owner: "watch",
+                  status: "queued",
+                  action_id: "act_001",
+                  depends_on: [],
+                  mandatory: true,
+                  policy_source: "SAFETY.md",
+                  checks: [{ code: "safety.robot.known" }]
+                }
+              ]
+            }
+          }
+        },
+        feedback: {
+          history: [
+            {
+              event: "safety_gate",
+              task_id: "task:safety_gate:act_001",
+              action_id: "act_001",
+              status: "passed"
+            }
+          ]
+        },
+        actions: { pending: [], completed: [], cancelled: [] }
+      }}
+    />
+  );
+  const frame = view.lastFrame() ?? "";
+  assert.match(frame, /safety_gate/);
+  assert.match(frame, /mandatory watch gate/);
+  assert.match(frame, /SAFETY.md/);
+  assert.match(frame, /passed/);
+});
+
 test("ConfigPanel renders configured robots without exposing secrets", () => {
   const view = render(
     <ConfigPanel
@@ -163,6 +213,7 @@ test("ConfigPanel renders configured robots without exposing secrets", () => {
   assert.match(frame, /backend sqlite/);
   assert.match(frame, /arm_1/);
   assert.match(frame, /mock_arm/);
+  assert.match(frame, /mode simulation/);
   assert.match(frame, /capability schemas/);
   assert.doesNotMatch(frame, /super-secret/);
   assert.doesNotMatch(frame, /api_key/);
@@ -267,6 +318,7 @@ function sampleConfig(): ConfigResponse {
       robots: {
         arm_1: {
           driver: "mock_arm",
+          execution_mode: "simulation",
           config: {
             mode: "mock",
             endpoint: "loopback",
@@ -293,6 +345,7 @@ function sampleState(): AgentState {
         arm_1: {
           kind: "arm",
           driver: "mock_arm",
+          execution_mode: "simulation",
           status: "connected",
           capabilities: [
             {

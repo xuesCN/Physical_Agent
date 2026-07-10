@@ -17,6 +17,7 @@ agent:
 robots:
   momo_1:
     driver: .
+    execution_mode: simulation
     config:
       mode: mock
       sdk_repo: /home/houzhinan/MomoAgent

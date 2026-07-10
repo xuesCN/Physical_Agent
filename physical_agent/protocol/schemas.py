@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class StrictModel(BaseModel):
@@ -64,6 +64,7 @@ class RobotRuntimeProfile(StrictModel):
     robot_id: str
     kind: str
     driver: str
+    execution_mode: Literal["simulation", "hardware"] = "hardware"
     status: str = "disconnected"
     capabilities: list[Capability] = Field(default_factory=list)
     requires_approval: bool = False
@@ -76,6 +77,8 @@ class DriverEntrypoint(StrictModel):
 
 class DriverRobotInfo(StrictModel):
     kind: str
+    # Describes adapter support only. It must never be used to infer whether
+    # the current runtime is connected to a simulator or real hardware.
     supports_simulation: bool = True
 
 
@@ -152,3 +155,15 @@ class ChatPlan(StrictModel):
     steps: list[str] = Field(default_factory=list)
     actions: list[Action] = Field(default_factory=list)
     needs_watch: bool = False
+    agent_output: dict[str, Any] | None = None
+
+    @field_validator("agent_output", mode="before")
+    @classmethod
+    def validate_agent_output(cls, value: Any) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        # Lazy import avoids a protocol cycle: AgentOutput itself contains
+        # canonical Action models from this module.
+        from physical_agent.protocol.agent_output import AgentOutput
+
+        return AgentOutput.model_validate(value).model_dump(mode="json", by_alias=True)

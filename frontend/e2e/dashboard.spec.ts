@@ -800,6 +800,238 @@ test("chat stream unavailable falls back to regular chat", async ({ page }) => {
   expectNoConsoleErrors(consoleErrors);
 });
 
+test("overview exposes the compiled SafetyGate task in AgentOutput", async ({ page }) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await mockReadyApiWithRobot(page, {
+    plan: {
+      status: "needs_watch",
+      agent_output: {
+        schema: "physical-agent/agent-output/v1",
+        status: "waiting_execution",
+        decision: "propose",
+        lifecycle: "submitted",
+        message: "Move the arm after the execution-time safety check.",
+        proposal_id: "proposal-42",
+        tasks: [
+          {
+            id: "task:safety_gate:move-1",
+            kind: "safety_gate",
+            owner: "watch",
+            status: "queued",
+            label: "Safety gate for move-1",
+            action_id: "move-1",
+            depends_on: [],
+            origin: "plan_compiler",
+            mandatory: true,
+            policy_source: "SAFETY.md",
+            checks: [
+              { code: "safety.robot.known", description: "Robot must exist." },
+              {
+                code: "safety.approval.satisfied",
+                description: "Approval must be satisfied.",
+              },
+            ],
+            details: {},
+          },
+          {
+            id: "task:physical_action:move-1",
+            kind: "physical_action",
+            owner: "watch",
+            status: "waiting",
+            label: "Execute move-1",
+            action_id: "move-1",
+            depends_on: ["task:safety_gate:move-1"],
+            origin: "plan_compiler",
+            mandatory: false,
+            policy_source: null,
+            checks: [],
+            details: {},
+          },
+        ],
+        actions: [
+          {
+            id: "move-1",
+            robot: "arm_1",
+            capability: "move",
+            params: { x: 0.1 },
+          },
+        ],
+      },
+    },
+  });
+
+  await page.goto("/");
+  await expectHealthyShell(page);
+
+  const graph = page.getByTestId("agent-task-graph");
+  await expect(graph).toContainText("Agent output tasks");
+  await expect(graph).toContainText("proposal-42");
+  await expect(graph).toContainText(
+    "Safety gates are mandatory execution tasks compiled by the system and owned by watch.",
+  );
+
+  const safetyGate = graph.locator("tr.agent-task-row-safety");
+  await expect(safetyGate).toContainText("Safety gate for move-1");
+  await expect(safetyGate).toContainText("mandatory");
+  await expect(safetyGate).toContainText("watch");
+  await expect(safetyGate).toContainText("queued");
+  await expect(safetyGate).toContainText("SAFETY.md");
+  await expect(safetyGate).toContainText("2 checks");
+
+  const physicalAction = graph.locator("tr.agent-task-row-physical_action");
+  await expect(physicalAction).toContainText("task:safety_gate:move-1");
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("AgentOutput task statuses project the latest watch and action results", async ({ page }) => {
+  const consoleErrors = collectConsoleErrors(page);
+  const completedAction = {
+    ...mockAction("move-success"),
+    metadata: {
+      approval: { required: true, status: "approved" },
+    },
+  };
+  const cancelledAction = mockAction("move-denied");
+  await mockReadyApiWithRobot(page, {
+    plan: {
+      metadata: { revision: 7 },
+      plan: {
+        status: "needs_watch",
+        agent_output: {
+          schema: "physical-agent/agent-output/v1",
+          status: "waiting_execution",
+          decision: "propose",
+          lifecycle: "submitted",
+          message: "Run two compiled actions.",
+          proposal_id: "proposal-runtime-status",
+          tasks: [
+            mockApprovalTask(completedAction.id),
+            ...mockCompiledTaskPair(completedAction.id),
+            ...mockCompiledTaskPair(cancelledAction.id),
+          ],
+          actions: [completedAction, cancelledAction],
+        },
+      },
+    },
+    feedback: {
+      history: [
+        {
+          event: "safety_gate",
+          task_id: `task:safety_gate:${completedAction.id}`,
+          action_id: completedAction.id,
+          status: "rejected",
+        },
+        {
+          event: "safety_gate",
+          action_id: completedAction.id,
+          status: "passed",
+        },
+        {
+          event: "safety_gate",
+          task_id: `task:safety_gate:${cancelledAction.id}`,
+          action_id: cancelledAction.id,
+          status: "rejected",
+        },
+      ],
+    },
+    actions: {
+      pending: [],
+      completed: [completedAction],
+      cancelled: [cancelledAction],
+    },
+  });
+
+  await page.goto("/");
+  await expectHealthyShell(page);
+
+  const graph = page.getByTestId("agent-task-graph");
+  await expect(graph).toContainText("proposal-runtime-status");
+
+  const completedApproval = graph
+    .locator("tr.agent-task-row-approval")
+    .filter({ hasText: completedAction.id });
+  await expect(completedApproval).toContainText("completed");
+
+  const completedGate = graph
+    .locator("tr.agent-task-row-safety")
+    .filter({ hasText: completedAction.id });
+  await expect(completedGate).toContainText("passed");
+  await expect(completedGate).not.toContainText("rejected");
+  const completedTask = graph
+    .locator("tr.agent-task-row-physical_action")
+    .filter({ hasText: completedAction.id });
+  await expect(completedTask).toContainText("completed");
+
+  const rejectedGate = graph
+    .locator("tr.agent-task-row-safety")
+    .filter({ hasText: cancelledAction.id });
+  await expect(rejectedGate).toContainText("rejected");
+  const failedTask = graph
+    .locator("tr.agent-task-row-physical_action")
+    .filter({ hasText: cancelledAction.id });
+  await expect(failedTask).toContainText("failed");
+  expectNoConsoleErrors(consoleErrors);
+});
+
+function mockAction(id: string) {
+  return {
+    id,
+    robot: "arm_1",
+    capability: "move",
+    params: { x: 0.1 },
+  };
+}
+
+function mockApprovalTask(actionId: string) {
+  return {
+    id: `task:approval:${actionId}`,
+    kind: "approval",
+    owner: "human",
+    status: "requested",
+    label: `Approve ${actionId}`,
+    action_id: actionId,
+    depends_on: [],
+    origin: "plan_compiler",
+    mandatory: true,
+    policy_source: null,
+    checks: [],
+    details: {},
+  };
+}
+
+function mockCompiledTaskPair(actionId: string) {
+  return [
+    {
+      id: `task:safety_gate:${actionId}`,
+      kind: "safety_gate",
+      owner: "watch",
+      status: "queued",
+      label: `Safety gate for ${actionId}`,
+      action_id: actionId,
+      depends_on: [],
+      origin: "plan_compiler",
+      mandatory: true,
+      policy_source: "SAFETY.md",
+      checks: [],
+      details: {},
+    },
+    {
+      id: `task:physical_action:${actionId}`,
+      kind: "physical_action",
+      owner: "watch",
+      status: "waiting",
+      label: `Execute ${actionId}`,
+      action_id: actionId,
+      depends_on: [`task:safety_gate:${actionId}`],
+      origin: "plan_compiler",
+      mandatory: true,
+      policy_source: null,
+      checks: [],
+      details: {},
+    },
+  ];
+}
+
 async function mockReadyApiWithRobot(
   page: Page,
   overrides: Record<string, unknown> = {},

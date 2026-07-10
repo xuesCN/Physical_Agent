@@ -58,7 +58,23 @@ test("parses register robot JSON object", () => {
       payload: {
         robot_id: "arm_2",
         driver: "mock_arm",
+        execution_mode: "hardware",
         config: { mode: "mock" }
+      }
+    }
+  );
+
+  assert.deepEqual(
+    parseCommand(
+      '/register-robot {"robot_id":"sim_2","driver":"mock_arm","execution_mode":"simulation"}'
+    ),
+    {
+      type: "registerRobot",
+      payload: {
+        robot_id: "sim_2",
+        driver: "mock_arm",
+        execution_mode: "simulation",
+        config: {}
       }
     }
   );
@@ -72,6 +88,14 @@ test("rejects malformed JSON and unknown views", () => {
   const notObject = parseCommand("/register-robot []");
   assert.equal(notObject.type, "unknown");
   assert.match(notObject.message, /JSON object/);
+
+  const invalidExecutionMode =
+    '/register-robot {"robot_id":"arm_2","driver":"mock_arm","execution_mode":"mock"}';
+  assert.deepEqual(parseCommand(invalidExecutionMode), {
+    type: "unknown",
+    input: invalidExecutionMode,
+    message: "/register-robot execution_mode must be simulation or hardware."
+  });
 
   const unknownView = parseCommand("/view hardware");
   assert.equal(unknownView.type, "unknown");

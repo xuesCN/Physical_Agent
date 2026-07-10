@@ -14,16 +14,18 @@ import {
   formatObjectValue
 } from "./readableFormatters";
 
-type BoardKey = "pending" | "completed" | "cancelled";
+type BoardKey = "pending" | "in_progress" | "completed" | "cancelled";
 
 const STATUS_ICON = {
   pending: <ClockCircleOutlined />,
+  in_progress: <ClockCircleOutlined spin />,
   completed: <CheckCircleOutlined />,
   cancelled: <StopOutlined />
 };
 
 const STATUS_COLOR = {
   pending: "gold",
+  in_progress: "blue",
   completed: "green",
   cancelled: "red"
 };
@@ -68,6 +70,7 @@ export function ActionBoard({
           value={active}
           options={[
             { label: `${labels.actions.pending} ${actions?.pending?.length ?? 0}`, value: "pending" },
+            { label: `Running ${actions?.in_progress?.length ?? 0}`, value: "in_progress" },
             { label: `${labels.actions.completed} ${actions?.completed?.length ?? 0}`, value: "completed" },
             { label: `${labels.actions.cancelled} ${actions?.cancelled?.length ?? 0}`, value: "cancelled" }
           ]}
@@ -81,7 +84,12 @@ export function ActionBoard({
         dataSource={data}
         tableLayout="fixed"
         scroll={{ x: 1520, y: 260 }}
-        locale={{ emptyText: labels.actions.noActions.replace("{status}", labels.actions[active]) }}
+        locale={{
+          emptyText: labels.actions.noActions.replace(
+            "{status}",
+            active === "in_progress" ? "running" : labels.actions[active]
+          )
+        }}
         columns={[
           {
             title: labels.actions.id,

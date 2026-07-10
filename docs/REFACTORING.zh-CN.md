@@ -1,7 +1,7 @@
 # 重构过程
 
 > 本文浓缩自原 33 份 session-handoff 与 22 份 brief（已删除，git 历史可查）。姊妹文档：`SPEC.zh-CN.md`（目标与待办矩阵）。
-> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-08。
+> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-10。
 
 ## 0. 基线与纪律
 
@@ -35,6 +35,11 @@
 | F4 | 期望-比对-回灌：expected 确定性比对、feedback 回灌、前端可见性 | `b5be3b7` |
 | W2 | 观察并发化 + observe 频率与 tick 解耦 | `4e0f732` |
 | W3 | transport 断线重连：可选 policy、fail-fast、driver reinit hook | `1d9a812`, `7762c0f` |
+| VNext-0 | ProposalService + typed metadata + 执行边界 + execution_mode 地基 | 本轮提交 |
+| VNext-1 | AgentOutput task DAG + trusted PlanCompiler | 本轮完成 |
+| VNext-2 | materialized AgentOutput + structured feedback + 调度/上下文硬化 | 本轮完成 |
+| VNext-2b | Proposal actions batch 单事务 all-or-nothing | 本轮完成 |
+| W6.1 | workspace watch runtime lease + unique claim-owner CAS/reset guard | 本轮完成 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -205,6 +210,36 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 
 边界保持：没有修改 watch、driver、SafetyGate、API 行为或任何测试断言；默认 smoke 仍覆盖 `test_safety_boundaries`、`test_safety`、API 请求侧不得实例化 watch/driver、HTTP auto-step 不启动 watch、SQLite 默认后端与 watch 单步执行。新增 `docs/CI.zh-CN.md` 解释 CI 概念、本仓库分层策略、本地复现命令、失败判断与“测试行为契约而不是内部实现”的写测原则。后续修复 GitHub Actions workflow 解析失败：`env:` map 不能同时声明 `HTTP_PROXY`/`http_proxy` 这类大小写变体，保留大写代理变量并在文档中说明。验证：workflow YAML 解析与 env key 大小写折叠重复检查通过；`.\.venv\Scripts\python.exe -m pytest -q` 304 passed（1 个既有 StarletteDeprecationWarning）；新 CI safety smoke 15 passed；`cd frontend && npm run build` 通过；`cd tui && npm run build` 与 `npm test` 13 passed。
 
+### VNext-0：Proposal application layer、typed metadata 与执行边界
+
+动机：current architecture audit 证明系统虽然已有安全的 proposal → action board → watch 主链，但 API task、AgentRuntime、MCP 与 manual proposal 仍分别负责 planner 构造、action 编号和 provenance；`Action.metadata` 的 approval/source/expected 也主要靠各调用方约定。同时 `ChatRuntime.auto_step` 和 driver coding 的动态 validation 让 agent 侧仍能加载 watch/driver，违背“提案侧不拥有执行依赖”的结构目标。最后，driver manifest 的 simulation 支持能力与当前 robot 实际运行模式没有明确分开，旧/第三方配置可能被错误理解。
+
+过程分四部分：① 新增 `physical_agent/application/ports.py` 与 `proposals.py`，以 `PlannerPort`、`ProposalService`、`ProposalResult` 收拢主要 task/action 提案用例；统一完成 capability 可用性检查、planner 调用、action 重编号、组内 dependency 映射、pending 写入、refusal/unavailable/waiting 状态与 proposal correlation。`AgentRuntime`、API task/manual proposal、MCP task/action 已迁移，tool loop 继续通过 proposal-only MCP facade 复用；planner 构造集中到 `agent/planner_factory.py`。② 新增 `protocol/actions.py`：`ActionApproval`、`ActionCorrelation`、`ProposalContext`、`ActionMetadata` 与 `physical-agent/action-metadata/v1`。保持 `Action.metadata: dict` 和 SQLite JSON wire 兼容，但新入口经 typed view 写入可信 provenance；caller 提供的 approval/provenance 会被归一化，state store 仍是 approval authority。③ `ChatRuntime` 删除 `WatchRuntime` import，其 public `auto_step` 仅作兼容 no-op；tool loop 有 proposal 时只返回 `needs_watch=true`、`executed=0`，CLI `--auto-step` 则在 `cli.py` composition root 显式组合 watch step。`driver_coder` 改为 manifest/Python AST/接口表面静态校验，不再加载候选 driver 或调用 `execute()`，动态 conformance 留给未来 watch-side harness。安全扫描扩到 application/agent/llm/api/gui/mcp，对 API watch service 与 legacy GUI controller 只保留精确托管 allowlist。④ `RobotConfig` 与 `RobotRuntimeProfile` 增加显式 `execution_mode: simulation|hardware`；默认 `hardware`，模拟示例显式标注 simulation，hardware 实例不再因 manifest 支持 simulation 而绕过默认实机审批策略；manifest 的 `supports_simulation` 只表示 adapter 支持面，不再承担运行模式推断。
+
+边界保持：没有改变 SafetyGate、watch claim/execute、expected 或 reconnect 语义；`ProposalService` 不 import watch/driver，也不是自动 Agent loop。普通 Chat Action Draft 仍保留文本 fence + 人手 Add to Actions，legacy GUI 仍是 watch-owning composition root。相关 ProposalService、approval anti-forgery、auto_step no-op、execution_mode 与安全边界回归已新增/更新；最终合并结果以本轮 CI 为准。
+
+架构判断：VNext-0 只完成入口与边界地基，后续不能直接跳到 Run/Turn/Event；必须先把 SafetyGate 从 watch 内部的隐式步骤提升为 AgentOutput 中显式、不可删的系统义务。本轮随后完成的 VNext-1/VNext-2 已按这一 assurance-first 路线落地，但仍不是持久化 obligation engine 或统一 Agent runtime。
+
+### VNext-1/VNext-2：AgentOutput 安全义务图与结构化 Gate 闭环
+
+动机：VNext-0 虽然统一了 proposal 入口，却没有改变 `planner -> Action[] -> board` 的核心心智模型。SafetyGate 仍只在 watch 领取 action 后隐式出现，Agent 对外无法表达“执行前必须完成审批与 Gate、执行后才做 expected verification”，前端与下一轮模型也无法可靠判断当前义务的 owner/status。上一版方案把 Run/Turn/Event 排在最前，只会先统一账本，不能先修正这一领域模型。
+
+本轮修正为 `raw model decision -> trusted PlanCompiler -> AgentOutput task DAG -> watch final Gate/execute -> structured feedback -> next turn`。模型只可提供 action intent 与 advisory `SafetyIntent`；可信 compiler 为每个物理 Action 注入唯一 mandatory、watch-owned `SafetyGateTask`，按后端事实可选注入 `ApprovalTask`，让 `PhysicalActionTask` 依赖 Gate，并仅在存在 F4 expected 时注入 `VerificationTask`。`SafetyGateTask` 不是 Action、capability 或 tool，模型/caller 不能创建、删除、完成或伪造 pass；approval 和 expected 都不能替代它。
+
+实现分四部分：① `protocol/agent_output.py` 与 trusted `application/plan_compiler.py` 落地 AgentOutput/AgentTask、不变量和 DAG 编译；`protocol/actions.py` 增加 advisory `SafetyIntent`，LLM schema/prompt 明确 caller 不能伪造 Gate。② ProposalService、API、MCP、AgentRuntime、Chat draft/tool loop 与 ChatPlan 统一返回/保存 compiled AgentOutput；draft 使用 `not_scheduled`，submitted graph 表达真实等待义务。③ watch 对 SafetyGate pass/reject 写 `event=safety_gate` 的结构化 checks/code/evidence 与 action/policy digest；SQLite claim 先跳过未完成 dependency，Gate 继续二次防护；watch step 以 `processed/gate_decisions/state_changed` 暴露 Gate-only 变化，API 与 TUI 不再只看 executed 数。④ React/TUI 展示 task owner/status/dependency，并用 safety feedback 覆盖 Gate 的最新裁决；context_builder 注入 SAFETY 真源摘要、执行契约和结构化反馈供下一轮认知使用。定向测试覆盖 compiler 图不变量/伪造防护、各入口输出与 ChatPlan、Gate pass/reject、dependency scheduling、watch stats 及 Web/TUI 展示。
+
+后续硬化把“客户端 overlay”收回 application read model：新增 `application/output_projection.py`，以 compiled topology 为骨架，将 Action Board 与 `safety_gate`/`expectation_check` feedback materialize 为 current AgentOutput。pending/in-progress/completed/cancelled 和 approval 决定当前 task status；`in_progress` 映射为 checking；Gate reject 令 PhysicalAction/Verification skipped；有 expected 的 completed action 在 expectation event 到来前仍处于 verification checking。`current_agent_output()` 会从 active board actions 重建义务，因此 chat-only plan 覆盖 singleton ChatPlan 后不会隐藏仍在等待/执行的物理任务；API/MCP/legacy GUI 通过 `project_chat_plan()` 读取同一 projection。AgentRuntime 同样 materialize output，并等待 required verification 终态后才报告 task completed。
+
+认知闭环补了受控回灌：context-aware planner path 接收 live SAFETY、feedback 与 previous AgentOutput；`ContextBudget` 对 feedback 设事件数和字符上限，超限时保留近期 event/code/check 摘要，防止 watch history 无界挤占 prompt。普通 planner port 仍兼容旧 `plan()`，这不是自动 replan loop。
+
+watch/state 侧同步修了六类竞态与卡死：① effective timeout 固定为 capability override 或 watch default，Gate 与 execute 使用同一预算；② heartbeat 失败将本地 profile 标 degraded 并阻止该 robot 新 claim，恢复后放行；③ SQLite 在同一 claim transaction 内检查 busy robot，允许不同 robot 分别领取但禁止同 robot 重叠；④ impossible、unknown 或已 cancelled dependency 使下游 action 显式 terminalize，写 Gate/action，并在有 expected 时写 verification skipped；⑤ `append_feedback_event()` 用 `BEGIN IMMEDIATE` 原子 read-append-write，避免多 writer 丢 history；⑥ ProposalService 在写 board 前验证 graph/external dependency，再调用 `append_pending_actions()` 以一个 SQLite 事务写完整 actions batch；任一 id 冲突会回滚整批，不再逐条 append。定向测试覆盖 materializer/ChatPlan 重建、verification 等待、context budget、heartbeat block/recovery、effective timeout、per-robot serialization、dependency cascade、并发 feedback append 与 proposal batch all-or-nothing。
+
+执行者 ownership 随后由 W6.1 收口：SQLite 新增 named `runtime_leases`，Watch setup 在 connect driver 前竞争唯一 `watch-executor` lease，每次 setup 生成不可复用的 owner id。runtime 在 connect/heartbeat/claim/idle observe/halt 等关键阶段续租；失租抛带 `fatal_watch_error` 的 `WatchLeaseLostError`，API watch service 停止循环。action claim 写同一个 owner，completed/cancelled 通过 claim_owner CAS；旧 owner 的迟到结果不能覆盖已经 recovery/reclaim 的 action。失租后的 shutdown 仍断开本地 transport，但刻意不向继任者控制的硬件发送 stale halt。workspace reset 使用 exclusive transaction 检查 active lease 并 fail closed，HTTP 层返回 409。测试覆盖 lease acquire/renew/release/expiry、双 runtime 排他、stale completion、fatal service stop 与 reset guard。
+
+状态边界：本轮任务图仍是由 trusted compiler、Action Board 和 feedback materialize 的 current projection；Action Board/feedback 仍是运行事实。actions batch 已原子 all-or-nothing，但尚未增加独立 task table，也没有把持久化 task graph/obligation rows 与 actions 放进同一事务；server-side action id 仍在事务外按 snapshot 计算，并发冲突会安全回滚整批而不是自动重试。Run/Turn/Event 与完整 terminal task history 未实现。W6.1 解决的是 workspace/SQLite 级唯一执行者与 stale result fencing，不是 driver/hardware token：已经发出的命令无法由数据库撤销，设备也不会识别 owner epoch。因此不把本轮描述成完整 task runtime 或硬件级 HA fencing。
+
+边界保持：认知侧仍不 import watch/driver；compiler 只编译义务，不预判 Gate 通过；watch 保留最终裁决与唯一 execute 权；`SAFETY.md` 仍是文件真源；F4 expected 仍是执行后诊断。后续持久化、hardware fencing 与账本口径见 `SPEC.zh-CN.md` VNext-3/W6.2/VNext-4 和 `agent-architecture-vnext.zh-CN.md`。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -238,6 +273,30 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 29. **TUI 启动参数接受裸 API URL**（TUI-api-arg-fix）：Windows/npm/tsx 链路可能吞掉 `--api` flag；CLI 入口兼容 positional URL，保持文档命令和实际落地命令都能启动，不改变 TUI 的 API-only 边界。
 30. **TUI 命令验收以场景文件为真源**（TUI-command-acceptance）：命令级回归不只测 parser 或组件，而是用 `.scenario` 记录输入、mock API/SSE、输出与状态变化；新增命令必须更新场景和 `docs/tui-command-matrix.md`，避免 README/帮助与可测行为分叉。
 31. **audit 文档展示先落静态 docs 页**（Audit-doc-html）：这轮目标是把已有审计内容呈现出来，不是把 audit export 接入 Dashboard；选择 `docs/current-architecture-audit.html` 可直接打开、零运行态依赖、零 SafetyGate/watch/API 触碰，Dashboard 内页预览继续留作 F2 远期后续。
+32. **ProposalService 是 application use case，不是 Agent runtime**（VNext-0）：它只负责 task/action → proposal → pending board；Chat reply、审批、Gate、执行、观察与自动重规划不应继续塞入该类。
+33. **typed metadata 先兼容 wire，再逐步升级消费者**（VNext-0）：`Action.metadata` 暂时保持 dict/JSON，已知字段经 v1 Pydantic 模型解析且未知扩展保留；不能因为有强类型 view 就声称 frontend/TUI 契约已经统一。
+34. **execution_mode 以实例配置为真源，默认 hardware**（VNext-0）：manifest 只描述 driver 是否支持 simulation，不能替当前连接声明“这是模拟器”；新硬件注册默认 hardware，simulation 必须显式选择。
+35. **ChatRuntime 永不推进 watch**（VNext-0）：`auto_step` 只保留兼容形状，不再有执行语义；driver 动态验证也必须进入未来显式的 watch-side conformance，而不是在 driver coding agent 内 allowlist `execute()`。
+36. **AgentOutput 不是 raw model output**（VNext-1）：模型只能产生不可信 decision/action intent；只有 trusted `PlanCompiler` 可以注入系统任务、可信 owner/status 与 Gate 依赖。
+37. **每个物理 Action 必有唯一 GateTask**（VNext-1）：`SafetyGateTask` mandatory、watch-owned，既不是 Action 也不是 tool；caller 提供的 `safety_gate=passed` 或自定义 task graph 不具权威性。
+38. **approval、Gate 与 verification 是三个不同义务**（VNext-1）：approval 决定是否等人，Gate 在执行前裁决，F4 expected 在执行后诊断；三者不能合并成一个泛化 status。
+39. **Run/Turn/Event 是闭环账本，不是心智模型起点**（VNext-1）：先稳定 compiled task DAG 与结构化 Gate feedback，再建立生命周期、恢复和 timeline，避免给旧的 Action[] 模型只套一层事件外壳。
+40. **Gate pass 与 reject 都是 watch 事实**（VNext-2）：两者都写结构化 feedback/checks/digest；AgentOutput 只声明待履行的 Gate 义务，不能预填 outcome。
+41. **task status 是 application materialized projection，不是执行权威**（VNext-2）：服务端用 Action Board、approval metadata 与 watch feedback 覆盖 compiled 初始状态；客户端只消费结果，不能写回 Gate 完成，也不能把 projection 冒充持久化 obligation engine。
+42. **`executed=0` 不代表没有状态变化**（VNext-2）：Gate reject 会处理 action、写 feedback 和终态却不调用 driver；watch/API/TUI 以 `processed/gate_decisions/state_changed` 判断刷新。
+43. **compiled topology 与 materialized state 分离**（VNext-2）：PlanCompiler 决定不可绕过的节点/边；output_projection 只把 board/feedback 事实映射为当前 status，不得修改 topology 或制造 Gate pass。
+44. **ChatPlan 是 presentation singleton，不是 task truth**（VNext-2）：chat reply 可以覆盖 plan 文档，但 API/MCP/GUI 必须从 active Action Board 重建义务，不能让 pending action 因聊天消失。
+45. **driver completed 不等于 Verification completed**（VNext-2/F4）：有 expected 时，AgentRuntime 必须等 `expectation_check` 终态；materializer 在间隙显示 verification checking。
+46. **planner 回灌必须有事实优先级和预算**（VNext-2/F3）：contextual path 可见 SAFETY、feedback、previous output，但 feedback 只保留预算内近期结构化信息；这提供下一轮依据，不默认触发自动重试。
+47. **Gate 必须检查实际执行 timeout**（VNext-2）：capability override 与 watch default 先求 effective timeout，SafetyGate 的 max policy 和 `driver.execute()` 共同使用，避免“未配置 capability timeout 就漏检 default”的缝隙。
+48. **workspace runtime lease 是软件执行者真源**（W6.1）：per-robot busy check 只管 action overlap；Watch 必须先持有唯一 named lease 才可 connect/heartbeat/claim/observe/halt，第二实例 fail closed。
+49. **不可能依赖必须终态化**（VNext-2）：waiting dependency 保持 pending；unknown/cancelled 或级联 impossible dependency 则显式 rejected/cancelled，并写 verification skipped，避免永久等待。
+50. **feedback append 原子不等于 Event ledger**（VNext-2）：事务追加解决 lost update，但 history 仍是单文档列表，没有 sequence/cursor、独立事件表、保留策略或 Run correlation。
+51. **actions batch 原子不等于 task graph 原子**（VNext-2b/VNext-3）：`append_pending_actions()` 保证多 action 全有或全无；AgentOutput graph 仍是派生/plan 数据，尚无持久化 task rows 可与 action batch 同事务提交。
+52. **executor owner 必须贯穿 claim 与 terminal CAS**（W6.1）：每次 Watch setup 使用新 owner；过期 action 被 successor 重领后，旧 owner 的 completed/cancelled 写入必须返回失败并触发 fatal stop。
+53. **失租后的旧 owner 不得善意 halt**（W6.1）：halt 本身也是物理副作用；successor 接管后，stale shutdown 只能断开自己的 transport，不能发送可能干扰新 owner 的 halt。
+54. **reset 不能抹掉活跃 ownership**（W6.1）：workspace reset 与 lease acquire/renew 串行；active lease 时 fail closed，避免删表制造 split brain。
+55. **数据库 lease 不是设备 fencing token**（W6.2）：它能阻止下一次受检查的软件操作，却无法撤销 in-flight I/O 或让硬件拒绝旧 epoch；实机 HA 接管仍需 driver/transport/device 层协议。
 
 ## 4. 经验教训（流程侧）
 
@@ -255,5 +314,9 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 - **同一能力多入口要复用同一后端边界**（T3 的教训）：dashboard 已有 `/api/upload`、`/api/config`、`/api/config/robots` 时，TUI 只补客户端和展示，不应另开路径或把本地文件/配置写入规则复制到终端侧。
 - **Ink 交互测试要模拟 readable stdin，而不是只测组件快照**（TUI-command-acceptance 的教训）：Ink 5 通过 `stdin.read()` 和 `readable` 驱动输入，scenario runner 需要提供带 `ref/unref/read` 的测试流；命令粘贴与回车之间也要留给 React/Ink 一次状态更新，否则容易测到旧输入值。
 - **可读性验收要锁“不开 raw 能否回答问题”**（F2.5 的教训）：只断言 JSON tree 折叠不够；Playwright 应直接检查用户问题对应的表格、卡片、Descriptions 是否存在，并确认 raw 内容默认不可见。
+- **入口收敛不等于 Agent runtime 收口**（VNext-0 的教训）：共享 ProposalService 解决了重复用例，但没有自动产生安全义务图、统一 feedback 或闭环状态机；后续文档和产品文案必须区分“安全 proposal runtime”与“统一自主 Agent runtime”。
+- **先做账本会掩盖错误的领域模型**（VNext-1 的教训）：Run/Event 能统一 correlation，却不会自动让隐式 SafetyGate 成为 Agent 的公开义务；演进顺序应先 assurance loop，后 ledger envelope。
+- **把 status overlay 留在客户端会再次分叉**（VNext-2 的教训）：compiled graph、Action Board 与 feedback 的合成规则应集中在 application projection；Web/TUI 只渲染同一 materialized 输出。
+- **软件 ownership 与硬件 fencing 要分层命名**（W6 的教训）：workspace runtime lease 已覆盖单数据库内的执行者排他、claim CAS 和 reset guard；不能因此声称 in-flight command 或设备控制权已被 epoch fence。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

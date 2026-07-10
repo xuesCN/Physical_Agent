@@ -2,7 +2,7 @@
 
 > 本文合并了原 optimization-spec（安全不变量）、plan-f（当前目标）与 traceability-matrix（账本），原件已删除、git 历史可查。历史过程见 `REFACTORING.zh-CN.md`。
 > **维护规则**：每轮 session 收尾更新 §4 矩阵一行 → commit → push；里程碑拆分时拆行记录；状态以验收测试通过为准。
-> 最后更新：2026-07-08
+> 最后更新：2026-07-10
 
 ## 0. 安全边界（三层：宪法 / 授权策略 / 工程纪律）
 
@@ -26,11 +26,12 @@
 ## 1. 系统与产品框架
 
 ```
-入口(CLI/API/GUI/MCP) → 认知侧(只提案) → 状态黑板(SQLite默认) → watch(执行+看门狗) → driver+transport → 硬件
+入口(CLI/API/GUI/MCP) → raw model decision（不可信）→ PlanCompiler（可信）→ AgentOutput topology → Action Board(SQLite) → watch(Gate+执行+看门狗) → driver+transport → 硬件
+运行态投影：Action Board + structured feedback → output_projection → materialized current AgentOutput → 下一认知轮次
 ```
 
 三入口 = 同一提案管线的自主档位：**档位0** 手动表单（jog）· **档位1** Chat 起草→人批 · **档位2** Task 一次规划 · **档位3** 闭环自主（未建）。
-分工恒定：LLM 起草、人类批准、Gate 校验、watch 执行、规则判成败。
+分工恒定：LLM 只起草 action intent 与 advisory `SafetyIntent`；可信 application 层为每个物理 Action 注入唯一、mandatory、watch-owned `SafetyGateTask`；人类只完成审批义务；watch 最终校验并执行；F4 expected 只做执行后诊断。`SafetyGateTask` 不是 Action/tool，模型不能创建、删除、完成或绕过。
 
 ## 2. 当前目标（Phase F：LLM in the Loop）
 
@@ -42,6 +43,7 @@
 | F2 | 结构化信息可读化（全应用原则） | **通用原则：已知协议字段一律定制组件呈现，未知/raw 字段 JSON 树兜底（懒加载），`<pre>` 裸 JSON 逐步清零**。首批落地：feedback 时间线（status 灯/action 跳转/失败原因用 `message` 字段）、world objects 表格、capabilities/config/integration 结果的卡片化；协议 schema 由 pydantic 锁定，定制组件不会白写 |
 | F3 | context_builder 解耦（已完成） | `context_builder` 统一 reply/proposal/planner/tool_loop 上下文；ContextBudget 收拢魔法数字；world/capabilities 超限摘要化；memory 按 importance 排序注入；golden-file 测试 |
 | F4 | 闭环地基（已完成） | 提案带 expected 断言 → 执行后**确定性比对**（不用 LLM 当裁判）→ 写入 `expectation_check` feedback；violated/skipped 回灌 LLM 上下文，自动重试默认关 |
+| VNext | Assurance-first Agent runtime（可 materialize 的兼容闭环已落，持久化主体未完成） | 已完成 compiled topology/current projection、verification/dependency/timeout 调度、atomic feedback、proposal actions batch 单事务，以及 workspace singleton watch lease + unique claim-owner CAS/reset guard。仍无独立 task table、持久化 task graph 与 actions 的同一事务、Run/Turn/Event 或 driver/hardware-level fencing token；不得把 current projection 表述成持久化 obligation engine |
 | F5 | 硬件生态（条件触发） | F5.1 舵机臂到手→LeRobot motors 包 driver（D2b 销账）；F5.2 有 ROS 设备→ros_mcp driver（不绕 gate）；F5.3 小车+摄像头→YOLO/VLM 物体列表进 world |
 | **T（独立线：Ink 终端 UI）** | 第五入口 | Node/TS/Ink 5 交互式终端工作台（`tui/` 目录，纯 API 客户端零核心改动）；T1 只读（状态+流式 chat+actions 实时）→ T2 交互（提交/审批/重置，审批依赖 F1.3）→ T3 补齐。typer CLI 保留管脚本化，Ink 管交互；选 Ink 而非 Textual 是为复用 dashboard 的 React 技能。与 F 主线无依赖（除 T2 审批），可随时穿插 |
 | F6 | Demo Twin + BYO Simulator（**不做通用仿真**） | **统一技术路线：N 个 sim driver + 一个通用 SceneView 面板**（canvas 顶视图读 world.objects，按对象 type 绘制；新增 demo = driver+图标+场景 yaml，渲染零改动）。F6.0 场景规格先行：每个 demo 一份规格（能力 schema/初始对象/SAFETY 边界/演示任务集）；F6.1 **Hero：机械臂孪生（公司产品）**——能力词汇表继承 mock_arm，加运动插值与对象状态；F6.1b 智能小车第二示例（使用指南性质，能力词汇表从零设计：move_to/stop/dock/patrol）；F6.2 **remote_sim driver + BYO 协议**——WebSocket+JSON 镜像 driver 契约，**必须含 capabilities 发现**（无 params_schema 则 Gate 无从校验，拒连），CoppeliaSim 作参考适配器（高保真 3D 需求者自接）；F6.3 conformance 套件（`sim-verify` CLI）；F6.4 远期：真臂 URDF 数字孪生 + 预演 Gate |
@@ -50,8 +52,8 @@
 
 ## 3. 已完成里程碑（速查）
 
-P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态存储全套（SQLite 默认/原子动作/lease/审计）· B4a-c 记忆摄入检索地基 · C1-C3.2 FastAPI+SSE+React 仪表盘 · D1-D3.1 传输层+心跳看门狗 · D4 实机文档 · A1.0-A1.6a 官方 SDK/流式/abort/设置/深思考 · B5 后端口径收口 · E0.1-E0.3 GUI 对齐（重置/硬件面板/配置注册）· W1 驱动调用超时保护 · B6 退役 MarkdownStateStore 后端 · F1 提案卡片与 action 级审批流 · F2 结构化信息可读化 · F3 context_builder 解耦 · F4 expected 确定性比对 · W2 观察并发化与 observe 分频 · W3 transport 断线重连。
-逐项提交号与决策见 `REFACTORING.zh-CN.md` §1-§2。测试基线 294 用例。
+P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态存储全套（SQLite 默认/原子动作/lease/审计）· B4a-c 记忆摄入检索地基 · C1-C3.2 FastAPI+SSE+React 仪表盘 · D1-D3.1 传输层+心跳看门狗 · D4 实机文档 · A1.0-A1.6a 官方 SDK/流式/abort/设置/深思考 · B5 后端口径收口 · E0.1-E0.3 GUI 对齐（重置/硬件面板/配置注册）· W1 驱动调用超时保护 · B6 退役 MarkdownStateStore 后端 · F1 提案卡片与 action 级审批流 · F2 结构化信息可读化 · F3 context_builder 解耦/feedback budget · F4 expected 确定性比对与 AgentRuntime verification 等待 · W2 观察并发化与 observe 分频 · W3 transport 断线重连 · VNext-0 ProposalService/typed metadata/执行边界/execution_mode 地基 · VNext-1 AgentOutput/PlanCompiler 安全义务图 · VNext-2 materialized output/structured feedback/调度硬化 · VNext-2b atomic action batch · W6.1 workspace watch lease/claim-owner fencing。
+逐项提交号与决策见 `REFACTORING.zh-CN.md` §1-§2。测试状态以本轮 CI/提交记录为准，不在此手工维护易过期的用例总数。
 
 ## 4. 待办矩阵（backlog，活账本）
 
@@ -65,12 +67,20 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | F1 | 提案卡片 + Add to Actions + 审批流 | §2 | ✅ 2026-07-07 完成：Chat draft 卡片只提交动作板；Actions 板审批才放行 `requires_approval`；approval required 后端计算，SQLite 原子 claim 跳过未批准动作；拒绝/审批元数据进 LOG/audit |
 | F2 | feedback 时间线 + world 视图 + JSON 树 | §2 | ✅ 2026-07-07 完成：feedback/action approval/refusal_reason 时间线可读，world objects 表格化，capabilities/config/integration 轻量可读；raw JSON 改懒加载树兜底。提交 `58a75b0`。2026-07-08 补 `docs/current-architecture-audit.html` 静态审计阅读页，展示 `docs/current-architecture-audit.md` 内容 |
 | F2.5 | State Overview 产品化收口 | §2/F2 后续收口 | ✅ 2026-07-08 完成：新增 `frontend/src/viewmodels/` formatter 层；Overview 首屏用 AntD Card/Statistic/Table/Descriptions/Tag/List 展示 system/robots/capabilities/environment/world objects；`RawDebug` 仅折叠展示 unknown/raw/backend private 字段。follow-up：非 RawDebug 的 params/schema/raw 展示统一为 Overview capability 风格的轻量摘要；RawDebug 也改为 AntD Collapse/Tree，移除 `react18-json-view` 依赖与 `json-view` chunk |
-| F3 | context_builder 解耦 | §2 | ✅ 2026-07-07 完成 `9cbb540`：新增只读 `context_builder`，统一 chat reply/proposal/tool_loop 与 LLM planner payload；planner 使用独立 purpose；golden snapshot 覆盖四路；memory 改按 importance/created_at 注入 |
-| F4 | 期望-比对-回灌 | §2 | ✅ 2026-07-07 完成：action metadata 接收 `expected`；watch 在动作完成并刷新 world 后写 `expectation_check`；多 check 状态按 violated > skipped > verified 聚合；坏 expected 不影响 action 合法性；Chat/Actions 可见 expected 摘要 |
+| F3 | context_builder 解耦 | §2 | ✅ 2026-07-07 完成 `9cbb540`：统一 chat reply/proposal/tool_loop 与 planner payload；2026-07-10 contextual planner path 补 SAFETY、feedback、previous AgentOutput，feedback 按事件数/字符预算裁剪并保留近期结构化摘要 |
+| F4 | 期望-比对-回灌 | §2 | ✅ 2026-07-07 完成 expected 确定性比对；2026-07-10 materializer 将 verification 映射为 checking/passed/failed/skipped，Gate reject 时跳过 PhysicalAction/Verification，AgentRuntime 等 required `expectation_check` 后才判完整完成 |
+| VNext-0 | Proposal application layer + typed metadata + execution boundary + execution_mode | §2/VNext | ✅ 2026-07-10 本轮完成：主要 task/action 入口复用 `ProposalService` 与统一 planner factory；metadata 增加 v1 typed view/correlation 且不能伪造审批；Chat auto_step 成为兼容 no-op，driver coding 改静态校验；robot 显式区分 simulation/hardware，默认 hardware，hardware 按默认 SAFETY 策略要求审批。**尚不包含统一 Agent loop** |
+| VNext-1 | AgentOutput + trusted PlanCompiler + assurance task DAG | `agent-architecture-vnext.zh-CN.md` | ✅ 2026-07-10 本轮完成：每个 Action 编译出唯一 mandatory、watch-owned Gate；Approval?/PhysicalAction/Verification? 形成无环依赖；advisory SafetyIntent 进入 schema/prompt；ProposalService、API、MCP、AgentRuntime、Chat draft/tool loop 与 ChatPlan 已接线，定向测试覆盖图不变量与伪造防护 |
+| VNext-2 | materialized AgentOutput + structured feedback + scheduler hardening | `agent-architecture-vnext.zh-CN.md` | ✅ 2026-07-10 本轮完成：`output_projection` 合成当前状态并重建 active tasks；feedback 原子追加；dependency、heartbeat、effective timeout、per-robot claim 已硬化；AgentRuntime 等 verification；Web/TUI 展示 current projection。**这仍不是持久化 obligation engine** |
+| VNext-2b | atomic proposal actions batch | `agent-architecture-vnext.zh-CN.md` | ✅ 2026-07-10 完成：StateStore 增加 `append_pending_actions()`，SQLite 用一个事务归一化并插入整个 batch；ProposalService 只调用 batch API；任一冲突回滚全部 actions，测试覆盖 all-or-nothing |
+| VNext-3 | persistent task/obligation state + persisted graph/action transaction | `agent-architecture-vnext.zh-CN.md` | ⚪ 下一阶段：独立 task table 或等价持久化模型；把 task graph/obligation rows 与已原子化的 actions batch 放入同一事务，并把 server-side id allocation 移入事务；跨重启恢复完整 terminal task history。当前 Action Board/feedback 是运行事实，output projection 是 current read model |
+| VNext-4 | Run/Turn/Event ledger + typed stream + registry/read model | `agent-architecture-vnext.zh-CN.md` | ⚪ 后置：用 additive 账本包装 compiled output、task/Gate/action/observation/verification；不做一次性重写 |
 | W2 | 观察并发化（gather）+ 频率与 tick 解耦 | W1 欠账 | ✅ 2026-07-07 完成 `4e0f732`：`update_world()` 按 robot 并发 observe、按 `robot_id` 稳定 merge；`observe_interval_ms` 未配置时等价 `tick_ms`；长跑 watch/API watch 中 claim 仍按 tick，idle observe 分频，动作后 world refresh 仍立即服务 F4 expectation_check |
 | W3 | transport 断线重连（backoff） | W1 欠账 | ✅ 2026-07-07 完成 `1d9a812`, `7762c0f`：`ReconnectPolicy` 默认关闭；Loopback/WebSocket/Serial 支持 connect retry 与运行中断连后台 backoff；reconnecting/disconnected execute fail-fast、不排队、不重放旧动作；driver 预留 reconnect hook，xiaozhi_mcp 重连后刷新 handshake/tool cache；关闭/取消中的迟到 open 会清理资源且不触发 hook；未做 W4 并行 execute/observed_at |
-| W4 | 多机器人并行执行 + world 带 observed_at | W1 欠账 | ⚪ 接实机/多机前；F4 当前使用执行后 `update_world()` 的新鲜观测，未扩 `observed_at` |
+| W4 | world freshness + 多机器人并行执行 | W1 欠账 | ⚪ 拆分实施：per-robot claim guard 只防同 robot action overlap，**不代表 W4 完成**；先落 `observed_at/revision/stale`，再评审单 watch 跨 robot 并行 execute；workspace 多 watch 已由 W6.1 singleton lease 阻止，实机 failover 仍需 W6.2 hardware fencing |
 | W5 | driver 编写守则：阻塞调用须带超时或走 to_thread（写进 driver 模板与生成规则） | 讨论产出 | ⚪ 轻 |
+| W6.1 | workspace watch runtime lease + unique executor/claim-owner CAS | VNext 执行协调风险 | ✅ 2026-07-10 完成：active `watch-executor` lease 阻止第二 runtime；关键阶段续租，失租 fatal stop；action terminal mutation 校验 unique claim_owner；stale shutdown 不 halt；active lease 阻止 workspace reset |
+| W6.2 | driver/transport/hardware-level fencing token | VNext 执行协调风险 | ⚪ 实机高可用接管前置：数据库 lease 不能撤销 in-flight command，设备也不会拒绝旧 epoch I/O；需 fencing token/独占代理与明确的分区、接管、fresh observe/fail-safe 语义 |
 | F5.1-F5.3 | LeRobot motors / ros_mcp / 感知语义层 | §2 | ⏸ 条件触发 |
 | F6.0 | 场景规格设计（arm 继承 mock_arm；car 能力词汇表从零定） | §2 | ⚪ F6.1 前置 |
 | F6.1 | Hero Demo Twin：机械臂（公司产品）+ 通用 SceneView 面板 | §2 | ⚪ F0 之后 |

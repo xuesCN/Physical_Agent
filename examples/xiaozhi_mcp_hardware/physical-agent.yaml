@@ -17,6 +17,7 @@ agent:
 robots:
   xiaozhi_1:
     driver: .
+    execution_mode: hardware
     config:
       mode: ws
       wait_for_responses: false

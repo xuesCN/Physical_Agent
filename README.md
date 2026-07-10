@@ -208,6 +208,7 @@ The default `physical-agent.yaml` configures one mock arm:
 robots:
   arm_1:
     driver: mock_arm
+    execution_mode: simulation
     config:
       objects:
         red_block:
@@ -392,7 +393,7 @@ physical-agent chat --planner llm --message "帮我接入这个 SDK ./vendor_sdk
 physical-agent chat --message "帮我接入 ./vendor_sdk --llm"
 ```
 
-LLM driver coding uses the same `.env` settings as chat and planning. It first creates the safe scaffold, then sends SDK snippets plus the scaffold to the model, accepts only a small allowlist of generated files, validates the candidate in mock mode, and writes `llm-coding-report.md`. If the API fails or the draft does not validate, the safe scaffold remains in place.
+LLM driver coding uses the same `.env` settings as chat and planning. It first creates the safe scaffold, then sends SDK snippets plus the scaffold to the model, accepts only a small allowlist of generated files, performs static manifest/Python/interface validation, and writes `llm-coding-report.md`. Request-side validation never imports, connects, or executes generated driver code; dynamic conformance belongs in an explicit watch-side workflow. If the API fails or the draft does not validate, the safe scaffold remains in place.
 
 The generated driver stays in mock mode first. When LLM coding is enabled, Physical Agent can draft the SDK calls, but the runtime boundary stays the same: the generated driver is loaded only by watch, and actions still go through StateStore, safety validation, and `driver.execute(action)`. The LLM does not execute hardware.
 
@@ -408,8 +409,11 @@ Use it from `physical-agent.yaml`:
 robots:
   arm_1:
     driver: ./my_arm_driver
+    execution_mode: hardware
     config: {}
 ```
+
+`execution_mode` describes the current robot instance, not what the driver could support. It defaults to `hardware` for fail-safe compatibility; simulated instances must opt in to `simulation` explicitly.
 
 The example shows a safe path from `mode: mock` to `mode: http`, with a `.env.example` file for `XIAOZHI_MCP_ENDPOINT` and optional `XIAOZHI_MCP_TOKEN`.
 

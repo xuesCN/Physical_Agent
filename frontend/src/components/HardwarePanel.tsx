@@ -134,6 +134,7 @@ export function HardwarePanel({ onStateChange, onError, onRobotRegistered }: Har
       const response = await registerRobot({
         robot_id: values.robot_id.trim(),
         driver: values.driver.trim(),
+        execution_mode: "hardware",
         config
       });
       setRegisterFeedback({ type: "success", text: response.message });

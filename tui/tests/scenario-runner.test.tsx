@@ -634,6 +634,7 @@ const configFixtures: Record<string, ConfigResponse> = {
       robots: {
         arm_1: {
           driver: "mock_arm",
+          execution_mode: "simulation",
           config: {
             mode: "mock",
             endpoint: "loopback",
@@ -655,10 +656,12 @@ const configFixtures: Record<string, ConfigResponse> = {
       robots: {
         arm_1: {
           driver: "mock_arm",
+          execution_mode: "simulation",
           config: { mode: "mock", endpoint: "loopback", token: "super-secret-token" }
         },
         sim_1: {
           driver: "mock_arm",
+          execution_mode: "simulation",
           config: { mode: "sim" }
         }
       }
@@ -683,6 +686,7 @@ const baseActionState: AgentState = {
       arm_1: {
         kind: "arm",
         driver: "mock_arm",
+        execution_mode: "simulation",
         status: "idle",
         capabilities: [
           {

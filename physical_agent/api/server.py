@@ -8,11 +8,16 @@ from pathlib import Path
 import re
 import tempfile
 import threading
-from typing import Any, Iterator
+from typing import Any, Iterator, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from physical_agent.application.plan_compiler import task_graph_steps
+from physical_agent.application.output_projection import project_chat_plan
+from physical_agent.application.proposals import ProposalService
+from physical_agent.application.ports import PlannerPort
+from physical_agent.agent.planner_factory import create_planner
 from physical_agent.api.watch_service import (
     ApiEventBroker,
     ApiWatchService,
@@ -36,8 +41,9 @@ from physical_agent.llm import (
     resolve_llm_settings_values,
     write_llm_settings_file,
 )
+from physical_agent.protocol.agent_output import AgentOutput
 from physical_agent.protocol.schemas import Action, ChatPlan
-from physical_agent.state import StateStore, open_state_store
+from physical_agent.state import ActiveRuntimeLeaseError, StateStore, open_state_store
 from physical_agent.state.check import run_state_check, state_check_ok
 
 
@@ -148,6 +154,7 @@ class IntegrateRequest(BaseModel):
 class RegisterRobotRequest(BaseModel):
     robot_id: str
     driver: str
+    execution_mode: Literal["simulation", "hardware"] = "hardware"
     config: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -503,11 +510,12 @@ class ApiController:
         config_path: str | Path = DEFAULT_CONFIG_NAME,
         *,
         events: ApiEventBroker | None = None,
+        planner: PlannerPort | None = None,
     ):
         self.config_path = Path(config_path).resolve()
         self.base_dir = self.config_path.parent
         self.events = events
-        self.planner = SafeProposalPlanner()
+        self._planner_override = planner
         self._chat_streams: dict[str, ChatStreamState] = {}
         self._chat_stream_lock = threading.Lock()
 
@@ -582,21 +590,47 @@ class ApiController:
 
     def propose_action(self, payload: ActionProposalRequest) -> dict[str, Any]:
         _, store = self._store(initialize=True)
-        action = _validate_action(
-            _with_proposal_metadata(
-                payload.action_payload(),
-                source="manual",
-                proposed_by="api",
-            )
+        action_payload = payload.action_payload()
+        client_metadata = action_payload.get("metadata")
+        client_source = (
+            client_metadata.get("source")
+            if isinstance(client_metadata, dict)
+            else None
         )
-        appended = store.append_pending_action(action)
+        user_message = _metadata_text(client_metadata, "user_message")
+        draft_reason = _metadata_text(client_metadata, "draft_reason")
+        source = "chat_draft" if client_source == "chat_draft" else "manual"
+        action = _validate_action(action_payload)
+        try:
+            proposal = ProposalService(store).propose_action_result(
+                action,
+                source=source,
+                proposed_by="api",
+                user_message=user_message,
+                draft_reason=draft_reason,
+            )
+        except ValueError as exc:
+            raise ApiRequestError(
+                f"Invalid action proposal: {exc}",
+                status_code=422,
+            ) from exc
+        appended = proposal.actions[0]
+        agent_output = proposal.agent_output
+        _write_plan(
+            store,
+            appended.reason or f"Propose {appended.id}",
+            [appended],
+            intent="act",
+            agent_output=agent_output,
+        )
         store.append_log(f"API proposed action `{appended.id}`.", actor="api")
         state = self.state()
         self._publish_state("action_proposed", state)
         return {
             "ok": True,
-            "message": "Action proposed in the action board; watch must validate before execution.",
+            "message": proposal.message,
             "action": _json_safe(appended),
+            "agent_output": agent_output.model_dump(mode="json", by_alias=True),
             "state": state,
         }
 
@@ -677,9 +711,27 @@ class ApiController:
         if not task:
             raise ApiRequestError("Task cannot be empty.")
         config, store = self._store(initialize=True)
-        store.write_task(task, owner="human")
-        actions = self._plan_actions(task, store)
-        _write_plan(store, task, actions, intent="act" if actions else "task")
+        try:
+            proposal = ProposalService(
+                store,
+                planner_factory=lambda: self._task_planner(config),
+            ).submit_task(
+                task,
+                proposed_by="api",
+            )
+        except ValueError as exc:
+            raise ApiRequestError(
+                f"Task produced an invalid action proposal: {exc}",
+                status_code=422,
+            ) from exc
+        actions = proposal.actions
+        _write_plan(
+            store,
+            task,
+            actions,
+            intent="act" if actions else "task",
+            agent_output=proposal.agent_output,
+        )
         if actions:
             store.append_log(
                 f"API submitted task `{task}` as {len(actions)} pending action(s).",
@@ -687,18 +739,18 @@ class ApiController:
             )
         else:
             store.append_log(f"API submitted task `{task}` with no action proposal.", actor="api")
-        refusal_reason = getattr(self.planner, "last_refusal_reason", None)
         state = self._state(config, store)
         self._publish_state("task_submitted", state)
         return {
-            "ok": True,
-            "message": (
-                "Task recorded and actions proposed; watch must validate before execution."
-                if actions
-                else "Task recorded. No action proposal was created from current capabilities."
-            ),
+            "ok": proposal.ok,
+            "message": proposal.message,
             "actions": _json_safe(actions),
-            "refusal_reason": refusal_reason,
+            "agent_output": proposal.agent_output.model_dump(
+                mode="json", by_alias=True
+            ),
+            "refusal_reason": proposal.refusal_reason,
+            "proposal_status": proposal.status,
+            "proposal_id": proposal.correlation.proposal_id,
             "state": state,
         }
 
@@ -723,6 +775,7 @@ class ApiController:
             "mode": response.get("mode", "rule_based"),
             "reply": response.get("reply", ""),
             "actions": _json_safe(response.get("actions", [])),
+            "agent_output": _json_safe(response.get("agent_output")),
             "memory": _json_safe(response.get("memory", [])),
             "plan": _json_safe(response.get("plan")),
             "executed": 0,
@@ -1085,7 +1138,10 @@ class ApiController:
                 status_code=400,
             )
         config, store = self._store()
-        store.initialize(overwrite=True)
+        try:
+            store.initialize(overwrite=True)
+        except ActiveRuntimeLeaseError as exc:
+            raise ApiRequestError(str(exc), status_code=409) from exc
         store.append_log(
             "API reset the workspace (full state re-init; config file untouched).",
             actor="api",
@@ -1211,7 +1267,11 @@ class ApiController:
                 "Editing existing robots from the GUI is not supported; edit the file manually.",
                 status_code=409,
             )
-        robots[robot_id] = {"driver": driver, "config": dict(payload.config)}
+        robots[robot_id] = {
+            "driver": driver,
+            "execution_mode": payload.execution_mode,
+            "config": dict(payload.config),
+        }
         try:
             PhysicalAgentConfig.model_validate(data)
         except Exception as exc:
@@ -1288,6 +1348,12 @@ class ApiController:
 
     def _state(self, config: PhysicalAgentConfig, store: StateStore) -> dict[str, Any]:
         actions = store.read_actions()
+        feedback = store.read_feedback()
+        plan = project_chat_plan(
+            store.read_plan(),
+            actions=actions,
+            feedback=feedback,
+        )
         return {
             "ok": True,
             "ready": True,
@@ -1300,13 +1366,14 @@ class ApiController:
             "world": store.read_world(),
             "actions": {
                 "pending": _json_safe(actions["pending"]),
+                "in_progress": _json_safe(actions.get("in_progress", [])),
                 "completed": _json_safe(actions["completed"]),
                 "cancelled": _json_safe(actions["cancelled"]),
             },
-            "feedback": store.read_feedback(),
+            "feedback": feedback,
             "safety": store.read_safety(),
             "chat": _json_safe(store.read_chat()),
-            "plan": _json_safe(store.read_plan()),
+            "plan": _json_safe(plan),
             "memory": _json_safe(store.read_memory()),
             "uploads": _json_safe(store.read_uploads()),
             "chunks": _json_safe(store.read_memory_chunks()),
@@ -1330,286 +1397,14 @@ class ApiController:
             except Exception:
                 pass
 
-    def _plan_actions(self, task: str, store: StateStore) -> list[Action]:
-        actions = self.planner.plan(
-            task=task,
-            capabilities=store.read_capabilities(),
-            world=store.read_world(),
-        )
-        return self._append_planned_actions(actions, store, original_task=task)
+    def _task_planner(self, config: PhysicalAgentConfig) -> PlannerPort:
+        if self._planner_override is not None:
+            return self._planner_override
+        # LLM settings live in the workspace and can change at runtime. A fresh
+        # planner avoids stale clients and mutable refusal state leaking across
+        # concurrent API requests.
+        return create_planner(config, base_dir=self.base_dir)
 
-    def _append_planned_actions(
-        self,
-        actions: list[Action],
-        store: StateStore,
-        *,
-        original_task: str,
-    ) -> list[Action]:
-        if not actions:
-            return []
-        renumbered = _renumber_actions(actions, store)
-        renumbered = [
-            _validate_action(
-                _with_proposal_metadata(
-                    action.model_dump(mode="json"),
-                    source="planner",
-                    proposed_by="api",
-                    original_task=original_task,
-                    planner_reason=action.reason,
-                )
-            )
-            for action in renumbered
-        ]
-        return [store.append_pending_action(action) for action in renumbered]
-
-    def _rule_chat(self, message: str, store: StateStore) -> dict[str, Any]:
-        remember_match = re.search(r"\bremember(?: that)?\s+(.+)", message, re.IGNORECASE)
-        if remember_match:
-            note = remember_match.group(1).strip()
-            return {
-                "reply": f"I will remember: {note}",
-                "intent": "remember",
-                "steps": [],
-                "actions": [],
-                "memory": [note],
-            }
-
-        actions = self.planner.plan(
-            task=message,
-            capabilities=store.read_capabilities(),
-            world=store.read_world(),
-        )
-        if actions:
-            names = ", ".join(f"{action.robot}.{action.capability}" for action in actions)
-            return {
-                "reply": (
-                    f"I proposed {len(actions)} action(s): {names}. "
-                    "Watch will validate them before anything touches the physical world."
-                ),
-                "intent": "act",
-                "steps": ["Interpret the message.", "Write proposed actions to the action board."],
-                "actions": actions,
-                "memory": [],
-            }
-
-        text = message.lower().strip()
-        if "status" in text or "world" in text or "see" in text:
-            latest = store.read_feedback().get("latest", {})
-            world = store.read_world()
-            reply = world.get("summary") or "No world state has been published yet."
-            if latest:
-                reply += f" Latest feedback: {latest.get('status')} - {latest.get('message')}"
-            return {
-                "reply": reply,
-                "intent": "inspect",
-                "steps": [],
-                "actions": [],
-                "memory": [],
-            }
-
-        if "memory" in text or "remember" in text:
-            notes = store.read_memory().get("notes", [])
-            notes_text = "; ".join(note.get("content", "") for note in notes[-5:])
-            return {
-                "reply": notes_text or "I do not have saved memory notes yet.",
-                "intent": "inspect",
-                "steps": [],
-                "actions": [],
-                "memory": [],
-            }
-
-        return {
-            "reply": (
-                "I can chat about the workspace, remember short notes, or propose actions like "
-                "`look around` and `pick the red block and place it on the tray`."
-            ),
-            "intent": "chat",
-            "steps": [],
-            "actions": [],
-            "memory": [],
-        }
-
-
-class SafeProposalPlanner:
-    """Small request-side planner that only returns pending Action intents."""
-
-    def __init__(self) -> None:
-        self.last_refusal_reason: str | None = None
-
-    def plan(
-        self,
-        *,
-        task: str,
-        capabilities: dict[str, Any],
-        world: dict[str, Any],
-    ) -> list[Action]:
-        self.last_refusal_reason = None
-        text = task.lower()
-        robots = capabilities.get("robots", {})
-        actions: list[Action] = []
-
-        if any(word in text for word in ("observe", "look", "scan")):
-            robot_id = self._choose_robot(robots, ["observe"])
-            if robot_id:
-                actions.append(
-                    Action(
-                        id=self._action_id(len(actions) + 1),
-                        robot=robot_id,
-                        capability="observe",
-                        params={},
-                        reason="The request asks for an observation.",
-                    )
-                )
-
-        if re.search(r"\b(move|go)\b", text):
-            robot_id = self._choose_robot(robots, ["move_to"])
-            if robot_id:
-                actions.append(
-                    Action(
-                        id=self._action_id(len(actions) + 1),
-                        robot=robot_id,
-                        capability="move_to",
-                        params=self._move_params(text, robots[robot_id]),
-                        reason="The request asks for movement.",
-                    )
-                )
-
-        if any(word in text for word in ("pick", "grasp")):
-            robot_id = self._choose_robot(robots, ["pick"])
-            if robot_id:
-                actions.append(
-                    Action(
-                        id=self._action_id(len(actions) + 1),
-                        robot=robot_id,
-                        capability="pick",
-                        params={"object_id": self._object_id(text, world)},
-                        reason="The request asks to pick an object.",
-                    )
-                )
-
-        if any(word in text for word in ("place", "drop")):
-            robot_id = self._choose_robot(robots, ["place"])
-            if robot_id:
-                depends_on = [actions[-1].id] if actions and actions[-1].capability == "pick" else []
-                actions.append(
-                    Action(
-                        id=self._action_id(len(actions) + 1),
-                        robot=robot_id,
-                        capability="place",
-                        params={"target": self._target_id(text, world)},
-                        reason="The request asks to place or drop an object.",
-                        depends_on=depends_on,
-                    )
-                )
-
-        if "open gripper" in text:
-            robot_id = self._choose_robot(robots, ["open_gripper"])
-            if robot_id:
-                actions.append(
-                    Action(
-                        id=self._action_id(len(actions) + 1),
-                        robot=robot_id,
-                        capability="open_gripper",
-                        params={},
-                        reason="The request asks to open the gripper.",
-                    )
-                )
-
-        if "close gripper" in text:
-            robot_id = self._choose_robot(robots, ["close_gripper"])
-            if robot_id:
-                actions.append(
-                    Action(
-                        id=self._action_id(len(actions) + 1),
-                        robot=robot_id,
-                        capability="close_gripper",
-                        params={},
-                        reason="The request asks to close the gripper.",
-                    )
-                )
-
-        if any(word in text for word in ("home", "reset")):
-            robot_id = self._choose_robot(robots, ["home"])
-            if robot_id:
-                actions.append(
-                    Action(
-                        id=self._action_id(len(actions) + 1),
-                        robot=robot_id,
-                        capability="home",
-                        params={},
-                        reason="The request asks the robot to return home.",
-                    )
-                )
-
-        if any(word in text for word in ("stop", "halt")):
-            robot_id = self._choose_robot(robots, ["stop"])
-            if robot_id:
-                actions.append(
-                    Action(
-                        id=self._action_id(len(actions) + 1),
-                        robot=robot_id,
-                        capability="stop",
-                        params={},
-                        reason="The request asks the robot to stop.",
-                    )
-                )
-
-        if not actions:
-            self.last_refusal_reason = (
-                "No supported robot capability matched the submitted task."
-            )
-        return actions
-
-    def _choose_robot(self, robots: dict[str, Any], required: list[str]) -> str | None:
-        for robot_id, robot in robots.items():
-            names = {capability.get("name") for capability in robot.get("capabilities", [])}
-            if all(name in names for name in required):
-                return robot_id
-        return None
-
-    def _action_id(self, number: int) -> str:
-        return f"act_{number:03d}"
-
-    def _object_id(self, text: str, world: dict[str, Any]) -> str:
-        objects = world.get("state", {}).get("objects", {})
-        if "red block" in text:
-            for object_id, item in objects.items():
-                if item.get("color") == "red" and item.get("type") == "block":
-                    return object_id
-            return "red_block"
-        match = re.search(r"(?:pick|grasp)\s+(?:the\s+)?([a-z0-9_ -]+?)(?:\s+and|\s+then|$)", text)
-        if match:
-            candidate = match.group(1).strip().replace(" ", "_").replace("-", "_")
-            if candidate:
-                return candidate
-        return "red_block"
-
-    def _target_id(self, text: str, world: dict[str, Any]) -> str:
-        objects = world.get("state", {}).get("objects", {})
-        for object_id in objects:
-            if object_id.lower() in text:
-                return object_id
-        if "tray" in text:
-            return "tray"
-        match = re.search(r"(?:on|in|at|to)\s+(?:the\s+)?([a-z0-9_ -]+?)(?:\.|$)", text)
-        if match:
-            candidate = match.group(1).strip().replace(" ", "_").replace("-", "_")
-            if candidate:
-                return candidate
-        return "tray"
-
-    def _move_params(self, text: str, robot: dict[str, Any]) -> dict[str, Any]:
-        numbers = [float(value) for value in re.findall(r"-?\d+(?:\.\d+)?", text)]
-        move_schema = {}
-        for capability in robot.get("capabilities", []):
-            if capability.get("name") == "move_to":
-                move_schema = capability.get("params_schema", {})
-                break
-        required = move_schema.get("required", ["x", "y", "z"])
-        return {
-            name: numbers[index] if index < len(numbers) else 0.0
-            for index, name in enumerate(required)
-        }
 
 
 def _load_fastapi() -> dict[str, Any]:
@@ -1706,30 +1501,16 @@ def _validate_action(payload: dict[str, Any]) -> Action:
         raise ApiRequestError(f"Invalid action proposal: {exc}") from exc
 
 
-def _with_proposal_metadata(
-    payload: dict[str, Any],
-    *,
-    source: str,
-    proposed_by: str,
-    original_task: str | None = None,
-    user_message: str | None = None,
-    draft_reason: str | None = None,
-    planner_reason: str | None = None,
-) -> dict[str, Any]:
-    data = dict(payload)
-    metadata = dict(data.get("metadata") or {})
-    metadata.setdefault("source", source)
-    metadata.setdefault("proposed_by", proposed_by)
-    if original_task:
-        metadata.setdefault("original_task", original_task)
-    if user_message:
-        metadata.setdefault("user_message", user_message)
-    if draft_reason:
-        metadata.setdefault("draft_reason", draft_reason)
-    if planner_reason:
-        metadata.setdefault("planner_reason", planner_reason)
-    data["metadata"] = metadata
-    return data
+def _metadata_text(metadata: Any, key: str, *, max_chars: int = 4000) -> str | None:
+    if not isinstance(metadata, dict):
+        return None
+    value = metadata.get(key)
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized[:max_chars] if normalized else None
+
+
 
 
 def _new_chat_runtime(
@@ -1778,39 +1559,36 @@ def _sanitize_api_message(message: str, settings: dict[str, str]) -> str:
     return sanitized
 
 
-def _write_plan(store: StateStore, summary: str, actions: list[Action], *, intent: str) -> None:
+def _write_plan(
+    store: StateStore,
+    summary: str,
+    actions: list[Action],
+    *,
+    intent: str,
+    agent_output: AgentOutput | None = None,
+) -> None:
+    steps = (
+        task_graph_steps(agent_output)
+        if agent_output is not None and agent_output.tasks
+        else (
+            ["Record task.", "Compile mandatory assurance and execution tasks."]
+            if actions
+            else ["Record task."]
+        )
+    )
     store.write_plan(
         ChatPlan(
             status="proposed_actions" if actions else "answered",
             intent=intent,
             summary=summary,
-            steps=["Record task.", "Write proposed actions to the action board."] if actions else ["Record task."],
+            steps=steps,
             actions=actions,
             needs_watch=bool(actions),
+            agent_output=agent_output,
         )
     )
 
 
-def _renumber_actions(actions: list[Action], store: StateStore) -> list[Action]:
-    start = _max_action_number(_known_action_ids(store)) + 1
-    old_to_new: dict[str, str] = {}
-    items: list[dict[str, Any]] = []
-    for offset, action in enumerate(actions):
-        data = action.model_dump(mode="json")
-        old_id = data["id"]
-        new_id = f"act_{start + offset:03d}"
-        old_to_new[old_id] = new_id
-        data["id"] = new_id
-        items.append(data)
-
-    result = []
-    for data in items:
-        data["depends_on"] = [
-            old_to_new.get(str(dependency), str(dependency))
-            for dependency in data.get("depends_on", [])
-        ]
-        result.append(Action.model_validate(data))
-    return result
 
 
 async def _write_browser_upload(upload: Any, destination: Path) -> int:
@@ -1852,33 +1630,13 @@ def _parse_upload_tags(tags: str | None) -> list[str]:
     ]
 
 
-def _known_action_ids(store: StateStore) -> set[str]:
-    board = store.read_actions()
-    ids = {
-        action.id
-        for action in board["pending"] + board["completed"] + board["cancelled"]
-    }
-    for item in store.read_feedback().get("history", []):
-        action_id = item.get("action_id")
-        if action_id:
-            ids.add(str(action_id))
-    return ids
 
 
-def _max_action_number(action_ids: set[str]) -> int:
-    maximum = 0
-    for action_id in action_ids:
-        if action_id.startswith("act_"):
-            try:
-                maximum = max(maximum, int(action_id.removeprefix("act_")))
-            except ValueError:
-                continue
-    return maximum
 
 
 def _json_safe(value: Any) -> Any:
     if hasattr(value, "model_dump"):
-        return value.model_dump(mode="json")
+        return value.model_dump(mode="json", by_alias=True)
     if isinstance(value, dict):
         return {key: _json_safe(item) for key, item in value.items()}
     if isinstance(value, list):

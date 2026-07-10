@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 import yaml
 
 from physical_agent.config import write_default_config
+from physical_agent.drivers.mock_arm import MockArmDriver
 from physical_agent.protocol.schemas import Action
 from physical_agent.state import open_state_store
-from physical_agent.watch.runtime import WatchRuntime
+from physical_agent.watch.runtime import DriverCallTimeout, WatchRuntime
 
 
 def _write_config(tmp_path: Path, **watch_overrides: object) -> Path:
@@ -34,6 +36,21 @@ def _propose_observe(config_path: Path, action_id: str) -> None:
             reason="timeout regression test",
         )
     )
+
+
+def test_connect_timeout_bounds_setup(tmp_path, monkeypatch):
+    config_path = _write_config(tmp_path, connect_timeout_s=0.1)
+    monkeypatch.setattr(MockArmDriver, "connect", _hang)
+    watch = WatchRuntime(config_path)
+
+    with pytest.raises(
+        DriverCallTimeout,
+        match=r"Driver connect for robot `arm_1` timed out after 0\.1s",
+    ):
+        asyncio.run(watch.setup())
+
+    assert watch.started is False
+    assert watch.loaded_drivers == {}
 
 
 def test_execute_timeout_fails_action_and_keeps_loop_alive(tmp_path):
@@ -114,6 +131,36 @@ def test_heartbeat_timeout_counts_toward_watchdog_halt(tmp_path):
     ]
     assert "driver_heartbeat" in events
     assert "driver_watchdog_halt" in events
+
+
+def test_watchdog_halt_is_bounded_by_halt_timeout(tmp_path):
+    config_path = _write_config(
+        tmp_path,
+        heartbeat_failure_threshold=1,
+        halt_on_heartbeat_failure=True,
+        halt_timeout_s=0.1,
+    )
+    watch = WatchRuntime(config_path)
+    asyncio.run(watch.setup())
+    driver = watch.loaded_drivers["arm_1"].driver
+
+    async def fail_heartbeat():
+        raise RuntimeError("pulse lost")
+
+    driver.heartbeat = fail_heartbeat
+    driver.halt = _hang
+
+    asyncio.run(watch.step(setup=False))  # must return instead of hanging in halt
+
+    store = open_state_store(config_path=config_path)
+    watchdog_events = [
+        item
+        for item in store.read_feedback()["history"]
+        if item.get("event") == "driver_watchdog_halt"
+    ]
+    assert watchdog_events[-1]["halt_status"] == "failed"
+    assert watchdog_events[-1]["result"]["error_type"] == "DriverCallTimeout"
+    assert "timed out" in watchdog_events[-1]["result"]["error_message"]
 
 
 def test_shutdown_survives_hung_halt_and_disconnect(tmp_path):

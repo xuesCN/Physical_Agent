@@ -9,6 +9,12 @@ export interface HealthState {
 
 export interface AgentState extends HealthState {
   actions?: ActionBoardState;
+  feedback?: {
+    latest?: Record<string, unknown>;
+    history?: Array<Record<string, unknown>>;
+    [key: string]: unknown;
+  };
+  plan?: AgentPlanDocument | AgentPlan;
   chat?: { messages?: ChatMessage[] };
   capabilities?: {
     robots?: Record<string, RobotInfo>;
@@ -19,6 +25,42 @@ export interface AgentState extends HealthState {
     uploads?: UploadMetadata[];
     [key: string]: unknown;
   };
+}
+
+export interface AgentTask {
+  id: string;
+  kind: "approval" | "safety_gate" | "physical_action" | "verification" | string;
+  owner: "human" | "watch" | string;
+  status: string;
+  label?: string;
+  action_id: string;
+  depends_on?: string[];
+  mandatory?: boolean;
+  policy_source?: string | null;
+  checks?: Array<Record<string, unknown>>;
+}
+
+export interface AgentOutput {
+  schema?: string;
+  status?: string;
+  decision?: string;
+  lifecycle?: string;
+  proposal_id?: string | null;
+  tasks?: AgentTask[];
+}
+
+export interface AgentPlan {
+  status?: string;
+  intent?: string;
+  summary?: string;
+  agent_output?: AgentOutput | null;
+  [key: string]: unknown;
+}
+
+export interface AgentPlanDocument {
+  metadata?: Record<string, unknown>;
+  plan?: AgentPlan;
+  [key: string]: unknown;
 }
 
 export interface ActionItem {
@@ -33,6 +75,7 @@ export interface ActionItem {
 
 export interface ActionBoardState {
   pending?: ActionItem[];
+  in_progress?: ActionItem[];
   completed?: ActionItem[];
   cancelled?: ActionItem[];
 }
@@ -58,6 +101,7 @@ export interface RobotCapability {
 export interface RobotInfo {
   kind?: string;
   driver?: string;
+  execution_mode?: "simulation" | "hardware";
   status?: string;
   requires_approval?: boolean;
   capabilities?: RobotCapability[];
@@ -66,6 +110,7 @@ export interface RobotInfo {
 
 export interface EffectiveRobotConfig {
   driver?: string;
+  execution_mode?: "simulation" | "hardware";
   config?: Record<string, unknown>;
   [key: string]: unknown;
 }
@@ -90,6 +135,7 @@ export interface ConfigResponse {
 export interface RegisterRobotPayload {
   robot_id: string;
   driver: string;
+  execution_mode?: "simulation" | "hardware";
   config?: Record<string, unknown>;
 }
 

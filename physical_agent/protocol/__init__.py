@@ -11,6 +11,7 @@ from physical_agent.protocol.schemas import (
     RobotRuntimeProfile,
     WorkspaceDocument,
 )
+from physical_agent.protocol.agent_output import AgentOutput, AgentTask
 from physical_agent.protocol.workspace import Workspace
 
 __all__ = [
@@ -18,6 +19,8 @@ __all__ = [
     "ActionResult",
     "ChatMessage",
     "ChatPlan",
+    "AgentOutput",
+    "AgentTask",
     "Capability",
     "DriverContext",
     "DriverManifest",

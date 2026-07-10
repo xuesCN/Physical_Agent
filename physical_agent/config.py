@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -46,6 +46,7 @@ class WatchConfig(BaseModel):
     heartbeat_failure_threshold: int = Field(default=3, ge=1)
     halt_on_heartbeat_failure: bool = True
     action_timeout_s: float = Field(default=30.0, gt=0)
+    connect_timeout_s: float = Field(default=10.0, gt=0)
     observe_timeout_s: float = Field(default=10.0, gt=0)
     heartbeat_timeout_s: float = Field(default=5.0, gt=0)
     halt_timeout_s: float = Field(default=5.0, gt=0)
@@ -70,6 +71,9 @@ class MemoryConfig(BaseModel):
 
 class RobotConfig(BaseModel):
     driver: str
+    # Fail-safe default for legacy or third-party configs. Simulation must be
+    # selected explicitly; driver manifests no longer imply the active mode.
+    execution_mode: Literal["simulation", "hardware"] = "hardware"
     config: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -101,6 +105,7 @@ def default_config_dict() -> dict[str, Any]:
             "heartbeat_failure_threshold": 3,
             "halt_on_heartbeat_failure": True,
             "action_timeout_s": 30.0,
+            "connect_timeout_s": 10.0,
             "observe_timeout_s": 10.0,
             "heartbeat_timeout_s": 5.0,
             "halt_timeout_s": 5.0,
@@ -121,6 +126,7 @@ def default_config_dict() -> dict[str, Any]:
         "robots": {
             "arm_1": {
                 "driver": "mock_arm",
+                "execution_mode": "simulation",
                 "config": {
                     "bounds": {
                         "x": [-1.0, 1.0],

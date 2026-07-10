@@ -6,13 +6,14 @@ CI（Continuous Integration，持续集成）是在每次 push 或 pull request 
 
 ## 当前策略：宽松但守底线
 
-Physical Agent 连接真实物理执行链路，CI 必须守住安全宪法；同时项目仍在快速重构，CI 不能把每一次内部拆分都卡成重活。因此当前采用三层策略：
+Physical Agent 连接真实物理执行链路，CI 必须守住安全宪法；同时项目仍在快速重构，CI 不能把每一次内部拆分都卡成重活。因此当前采用以下分层策略：
 
 | 层级 | 默认阻塞 | 作用 |
 | --- | --- | --- |
-| 必跑 smoke | 是 | 快速守住安全边界和前端可构建性 |
-| 建议性检查 | 否 | 跑 TUI 与浏览器 e2e，失败会提示但不直接阻塞 |
-| 手动 full run | 手动触发 | 需要收口、发版或大重构后再跑完整 pytest 矩阵 |
+| 必跑检查 | 是 | 守住安全边界、前端构建与 TUI 跨客户端契约 |
+| PR 完整后端 | 是（仅 PR） | 用 Python 3.12 跑完整 pytest，防止跨层回归 |
+| 建议性检查 | 否 | 跑浏览器 e2e，失败会提示但不直接阻塞 |
+| 手动 full run | 手动触发 | 收口、发版或大重构后再跑 Python 3.11/3.12 完整矩阵 |
 
 ## 自动检查
 
@@ -34,7 +35,15 @@ push 和 pull request 默认会跑：
    - `cd frontend && npm ci`
    - `npm run build`，实际包含 `tsc -b && vite build`
 
-这两项失败时，一般应该先修。它们代表“安全底线”和“主 GUI 至少能构建”。
+3. `Ink TUI contract`
+   - Node 20
+   - `cd tui && npm ci`
+   - 依次运行 `npm run typecheck`、`npm test`、`npm run build`
+   - TUI 是 API-only 客户端；命令 parser、场景验收和请求 payload 属于跨客户端合同，失败会阻塞合入
+
+这三项失败时，一般应该先修。它们分别代表安全底线、主 GUI 可构建性和 TUI/API 合同仍一致。
+
+pull request 还会额外运行 `Python 3.12 full pytest (PR)`，执行完整 `python -m pytest -q`。push 继续只跑快速 smoke，避免每次分支保存都重复完整后端测试；Python 3.11 兼容性仍留在手动矩阵中验证。
 
 注意：GitHub Actions 的 workflow `env:` map 会把变量名按大小写不敏感处理。因此不能同时写 `HTTP_PROXY` 和 `http_proxy`、`NO_PROXY` 和 `no_proxy`。CI 里只保留一套大写代理变量；如果需要在测试进程内处理更多宿主环境差异，应放到测试 fixture 或命令步骤里，而不是在同一个 `env:` map 中重复声明。
 
@@ -42,12 +51,7 @@ push 和 pull request 默认会跑：
 
 这些检查默认会显示结果，但 workflow 标记为 `continue-on-error`，失败时不直接阻塞：
 
-1. `Ink TUI advisory`
-   - `cd tui && npm ci`
-   - `npm run build`
-   - `npm test`
-
-2. `Playwright dashboard advisory`
+1. `Playwright dashboard advisory`
    - PR 和手动运行时触发
    - 启动临时 API 与 Vite dev server
    - 跑 `cd frontend && npm run test:e2e`
@@ -97,8 +101,9 @@ TUI：
 ```bash
 cd tui
 npm ci
-npm run build
+npm run typecheck
 npm test
+npm run build
 ```
 
 浏览器 e2e：

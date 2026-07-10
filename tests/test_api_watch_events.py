@@ -196,9 +196,67 @@ def test_enable_watch_background_loop_publishes_step_and_error(tmp_path, monkeyp
     watch_step = next(item for item in events if item["event"] == "watch_step")
     error = next(item for item in events if item["event"] == "error")
     assert watch_step["data"]["payload"]["executed"] == 1
+    assert watch_step["data"]["payload"]["state_changed"] is True
+    assert watch_step["data"]["payload"]["stats"]["gate_decisions"] == 1
     assert watch_step["data"]["payload"]["state"]["ready"] is True
     assert error["data"]["payload"]["phase"] == "watch_step"
     assert error["data"]["payload"]["error_type"] == "RuntimeError"
+
+
+def test_api_watch_stops_after_fatal_executor_fencing_error(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+
+    class FatalLeaseError(RuntimeError):
+        fatal_watch_error = True
+
+    class FakeWatchRuntime:
+        instances = []
+
+        def __init__(self, config_path):
+            self.config = SimpleNamespace(watch=SimpleNamespace(tick_ms=1))
+            self.steps = 0
+            self.shutdown_called = False
+            FakeWatchRuntime.instances.append(self)
+
+        async def setup(self):
+            return None
+
+        async def step(self, *, setup=True):
+            self.steps += 1
+            raise FatalLeaseError("executor lease lost")
+
+        async def shutdown(self):
+            self.shutdown_called = True
+
+    monkeypatch.setattr(
+        watch_service,
+        "_load_watch_runtime_class",
+        lambda: FakeWatchRuntime,
+    )
+    events = watch_service.ApiEventBroker()
+    service = watch_service.ApiWatchService(
+        config_path,
+        events=events,
+        interval_s=0.001,
+    )
+
+    async def run_service():
+        await service.start()
+        assert service._task is not None
+        await asyncio.wait_for(service._task, timeout=0.2)
+        await service.stop()
+
+    asyncio.run(run_service())
+
+    runtime = FakeWatchRuntime.instances[0]
+    assert runtime.steps == 1
+    assert runtime.shutdown_called is True
+    subscription = events.subscribe()
+    event = subscription.get(timeout_s=0.1)
+    subscription.close()
+    assert event is not None
+    assert event["type"] == "error"
+    assert event["payload"]["phase"] == "watch_step"
 
 
 def test_http_auto_step_like_fields_do_not_start_watch(tmp_path, monkeypatch):

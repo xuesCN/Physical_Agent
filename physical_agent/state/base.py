@@ -49,6 +49,11 @@ class StateStore(Protocol):
 
     def append_pending_action(self, action: Action | dict[str, Any]) -> Action: ...
 
+    def append_pending_actions(
+        self,
+        actions: list[Action | dict[str, Any]],
+    ) -> list[Action]: ...
+
     def approve_action(
         self,
         action_id: str,
@@ -65,7 +70,12 @@ class StateStore(Protocol):
         reason: str | None = None,
     ) -> Action: ...
 
-    def claim_next_ready_action(self, *, claim_owner: str = "watch") -> Action | None: ...
+    def claim_next_ready_action(
+        self,
+        *,
+        claim_owner: str = "watch",
+        blocked_robot_ids: set[str] | None = None,
+    ) -> Action | None: ...
 
     def recover_stale_actions(
         self,
@@ -74,15 +84,45 @@ class StateStore(Protocol):
         claim_owner: str | None = None,
     ) -> int: ...
 
-    def mark_action_completed(self, action: Action | dict[str, Any]) -> None: ...
+    def acquire_runtime_lease(
+        self,
+        name: str,
+        owner: str,
+        *,
+        ttl_s: float,
+    ) -> bool: ...
 
-    def mark_action_cancelled(self, action: Action | dict[str, Any]) -> None: ...
+    def renew_runtime_lease(
+        self,
+        name: str,
+        owner: str,
+        *,
+        ttl_s: float,
+    ) -> bool: ...
+
+    def release_runtime_lease(self, name: str, owner: str) -> bool: ...
+
+    def mark_action_completed(
+        self,
+        action: Action | dict[str, Any],
+        *,
+        claim_owner: str | None = None,
+    ) -> bool: ...
+
+    def mark_action_cancelled(
+        self,
+        action: Action | dict[str, Any],
+        *,
+        claim_owner: str | None = None,
+    ) -> bool: ...
 
     def write_feedback(
         self,
         latest: dict[str, Any] | None = None,
         history: list[dict[str, Any]] | None = None,
     ) -> None: ...
+
+    def append_feedback_event(self, event: dict[str, Any]) -> None: ...
 
     def read_feedback(self) -> dict[str, Any]: ...
 

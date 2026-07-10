@@ -59,7 +59,11 @@ REQUIRED_TABLES = {
     "memory_notes",
 }
 
-SQLITE_SCHEMA_TABLES = REQUIRED_TABLES | {"upload_metadata", "memory_chunks"}
+SQLITE_SCHEMA_TABLES = REQUIRED_TABLES | {
+    "upload_metadata",
+    "memory_chunks",
+    "runtime_leases",
+}
 
 DEFAULT_ACTION_LEASE_SECONDS = 300
 DEFAULT_CLAIM_OWNER = "watch"
@@ -109,6 +113,10 @@ MEMORY_CHUNK_COLUMNS = {
     "trust_level": "TEXT DEFAULT 'untrusted'",
     "created_at": "TEXT",
 }
+
+
+class ActiveRuntimeLeaseError(RuntimeError):
+    """Raised when destructive workspace reset would erase a live executor lease."""
 
 
 class SqliteStateStore:
@@ -270,6 +278,12 @@ class SqliteStateStore:
                     capabilities=capabilities,
                     safety_rules=safety_rules,
                 ),
+                "in_progress": self._read_actions_by_status(
+                    conn,
+                    "in_progress",
+                    capabilities=capabilities,
+                    safety_rules=safety_rules,
+                ),
                 "completed": self._read_actions_by_status(
                     conn,
                     "completed",
@@ -285,52 +299,74 @@ class SqliteStateStore:
             }
 
     def append_pending_action(self, action: Action | dict[str, Any]) -> Action:
+        return self.append_pending_actions([action])[0]
+
+    def append_pending_actions(
+        self,
+        actions: list[Action | dict[str, Any]],
+    ) -> list[Action]:
+        if not actions:
+            return []
+
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             capabilities = self._read_document_conn(conn, "capabilities")
             safety_rules = self.read_safety().get("rules", {})
-            parsed = _with_backend_approval_metadata(
-                _coerce_action(action),
-                capabilities=capabilities,
-                safety_rules=safety_rules,
-            )
+            parsed_actions: list[Action] = []
+            for action in actions:
+                submitted = _coerce_action(action)
+                submitted_metadata = dict(submitted.metadata or {})
+                # Proposal ingress is not an approval authority. Approval
+                # decisions can only be written by the atomic
+                # approve_action/reject_action mutations below.
+                submitted_metadata.pop("approval", None)
+                submitted = _replace_action_metadata(submitted, submitted_metadata)
+                parsed_actions.append(
+                    _with_backend_approval_metadata(
+                        submitted,
+                        capabilities=capabilities,
+                        safety_rules=safety_rules,
+                    )
+                )
+
             revision = self._next_revision_conn(conn, "actions")
             seq = self._next_action_seq_conn(conn)
             timestamp = _now()
-            conn.execute(
-                """
-                INSERT INTO actions(
-                    id, robot, capability, params, reason, depends_on,
-                    metadata, status, result, seq, created_at, updated_at,
-                    claimed_at, claim_owner, attempts
+            for offset, parsed in enumerate(parsed_actions):
+                conn.execute(
+                    """
+                    INSERT INTO actions(
+                        id, robot, capability, params, reason, depends_on,
+                        metadata, status, result, seq, created_at, updated_at,
+                        claimed_at, claim_owner, attempts
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        parsed.id,
+                        parsed.robot,
+                        parsed.capability,
+                        _json_dumps(parsed.params),
+                        parsed.reason,
+                        _json_dumps(parsed.depends_on),
+                        _json_dumps(parsed.metadata),
+                        "pending",
+                        _json_dumps({}),
+                        seq + offset,
+                        timestamp,
+                        timestamp,
+                        None,
+                        None,
+                        0,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    parsed.id,
-                    parsed.robot,
-                    parsed.capability,
-                    _json_dumps(parsed.params),
-                    parsed.reason,
-                    _json_dumps(parsed.depends_on),
-                    _json_dumps(parsed.metadata),
-                    "pending",
-                    _json_dumps({}),
-                    seq,
-                    timestamp,
-                    timestamp,
-                    None,
-                    None,
-                    0,
-                ),
-            )
             self._upsert_document_conn(
                 conn,
                 "actions",
                 {"metadata": self._metadata("actions", revision)},
                 revision,
             )
-        return parsed
+        return parsed_actions
 
     def approve_action(
         self,
@@ -468,7 +504,12 @@ class SqliteStateStore:
             )
             return action
 
-    def claim_next_ready_action(self, *, claim_owner: str = DEFAULT_CLAIM_OWNER) -> Action | None:
+    def claim_next_ready_action(
+        self,
+        *,
+        claim_owner: str = DEFAULT_CLAIM_OWNER,
+        blocked_robot_ids: set[str] | None = None,
+    ) -> Action | None:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             self._recover_stale_actions_conn(
@@ -488,6 +529,18 @@ class SqliteStateStore:
 
             capabilities = self._read_document_conn(conn, "capabilities")
             safety_rules = self.read_safety().get("rules", {})
+            completed_action_ids = {
+                str(item["id"])
+                for item in conn.execute(
+                    "SELECT id FROM actions WHERE status = 'completed'"
+                ).fetchall()
+            }
+            busy_robot_ids = {
+                str(item["robot"])
+                for item in conn.execute(
+                    "SELECT DISTINCT robot FROM actions WHERE status = 'in_progress'"
+                ).fetchall()
+            }
             timestamp = _now()
             row = None
             action = None
@@ -508,6 +561,24 @@ class SqliteStateStore:
                     )
                     metadata_changed = True
                 if _approval_required(candidate_action) and not _approval_approved(candidate_action):
+                    continue
+                if (
+                    blocked_robot_ids is not None
+                    and candidate_action.robot in blocked_robot_ids
+                ):
+                    continue
+                if candidate_action.robot in busy_robot_ids:
+                    # The SQLite transaction serializes this check with claim.
+                    # Different watch processes may run, but one robot must
+                    # never receive overlapping physical actions.
+                    continue
+                if any(
+                    dependency not in completed_action_ids
+                    for dependency in candidate_action.depends_on
+                ):
+                    # Dependencies are a scheduling prerequisite. SafetyGate
+                    # checks them again after claim as defense in depth, but a
+                    # merely waiting action must never be cancelled as unsafe.
                     continue
                 row = candidate
                 action = candidate_action
@@ -561,11 +632,94 @@ class SqliteStateStore:
                 claim_owner=claim_owner,
             )
 
-    def mark_action_completed(self, action: Action | dict[str, Any]) -> None:
-        self._mark_action_status(action, "completed")
+    def acquire_runtime_lease(
+        self,
+        name: str,
+        owner: str,
+        *,
+        ttl_s: float,
+    ) -> bool:
+        if ttl_s <= 0:
+            raise ValueError("ttl_s must be positive")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            now = _lease_timestamp()
+            expires_at = _lease_timestamp(seconds=ttl_s)
+            cursor = conn.execute(
+                """
+                INSERT INTO runtime_leases(name, owner, expires_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    owner = excluded.owner,
+                    expires_at = excluded.expires_at,
+                    updated_at = excluded.updated_at
+                WHERE runtime_leases.owner = excluded.owner
+                   OR runtime_leases.expires_at <= ?
+                """,
+                (name, owner, expires_at, now, now),
+            )
+            return cursor.rowcount == 1
 
-    def mark_action_cancelled(self, action: Action | dict[str, Any]) -> None:
-        self._mark_action_status(action, "cancelled")
+    def renew_runtime_lease(
+        self,
+        name: str,
+        owner: str,
+        *,
+        ttl_s: float,
+    ) -> bool:
+        if ttl_s <= 0:
+            raise ValueError("ttl_s must be positive")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            now = _lease_timestamp()
+            cursor = conn.execute(
+                """
+                UPDATE runtime_leases
+                SET expires_at = ?, updated_at = ?
+                WHERE name = ? AND owner = ? AND expires_at > ?
+                """,
+                (
+                    _lease_timestamp(seconds=ttl_s),
+                    now,
+                    name,
+                    owner,
+                    now,
+                ),
+            )
+            return cursor.rowcount == 1
+
+    def release_runtime_lease(self, name: str, owner: str) -> bool:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                "DELETE FROM runtime_leases WHERE name = ? AND owner = ?",
+                (name, owner),
+            )
+            return cursor.rowcount == 1
+
+    def mark_action_completed(
+        self,
+        action: Action | dict[str, Any],
+        *,
+        claim_owner: str | None = None,
+    ) -> bool:
+        return self._mark_action_status(
+            action,
+            "completed",
+            claim_owner=claim_owner,
+        )
+
+    def mark_action_cancelled(
+        self,
+        action: Action | dict[str, Any],
+        *,
+        claim_owner: str | None = None,
+    ) -> bool:
+        return self._mark_action_status(
+            action,
+            "cancelled",
+            claim_owner=claim_owner,
+        )
 
     def write_feedback(
         self,
@@ -582,6 +736,25 @@ class SqliteStateStore:
             },
             revision=revision,
         )
+
+    def append_feedback_event(self, event: dict[str, Any]) -> None:
+        latest = _as_plain(event)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = self._read_document_conn(conn, "feedback")
+            history = list(current.get("history") or [])
+            history.append(latest)
+            revision = self._next_revision_conn(conn, "feedback")
+            self._upsert_document_conn(
+                conn,
+                "feedback",
+                {
+                    "metadata": self._metadata("feedback", revision),
+                    "latest": latest,
+                    "history": history,
+                },
+                revision,
+            )
 
     def read_feedback(self) -> dict[str, Any]:
         payload = self._read_document("feedback")
@@ -958,6 +1131,16 @@ class SqliteStateStore:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS runtime_leases (
+                name TEXT PRIMARY KEY,
+                owner TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS log_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts TEXT,
@@ -1053,6 +1236,25 @@ class SqliteStateStore:
             return
         try:
             with self._connect() as conn:
+                # Serialize reset with lease acquire/renew and fail closed. A
+                # reset that drops runtime_leases while Watch is connected
+                # would erase executor ownership and permit split brain.
+                conn.execute("BEGIN EXCLUSIVE")
+                lease_table_exists = conn.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'runtime_leases'"
+                ).fetchone()
+                if lease_table_exists is not None:
+                    live_lease = conn.execute(
+                        "SELECT name, owner FROM runtime_leases "
+                        "WHERE expires_at > ? LIMIT 1",
+                        (_lease_timestamp(),),
+                    ).fetchone()
+                    if live_lease is not None:
+                        raise ActiveRuntimeLeaseError(
+                            "Workspace reset refused while runtime lease "
+                            f"`{live_lease['name']}` is active. Stop Watch first."
+                        )
                 names = [
                     str(row["name"])
                     for row in conn.execute(
@@ -1062,6 +1264,12 @@ class SqliteStateStore:
                 ]
                 for name in names:
                     conn.execute(f'DROP TABLE IF EXISTS "{name}"')
+        except ActiveRuntimeLeaseError:
+            raise
+        except sqlite3.OperationalError:
+            # A busy/locked live database must never be unlinked as a reset
+            # fallback. Surface the error so the caller can retry safely.
+            raise
         except sqlite3.Error:
             self._unlink_database_files()
 
@@ -1163,8 +1371,16 @@ class SqliteStateStore:
         ):
             for item in items:
                 seq += 1
+                submitted = _coerce_action(item)
+                if status == "pending":
+                    submitted_metadata = dict(submitted.metadata or {})
+                    submitted_metadata.pop("approval", None)
+                    submitted = _replace_action_metadata(
+                        submitted,
+                        submitted_metadata,
+                    )
                 action = _with_backend_approval_metadata(
-                    _coerce_action(item),
+                    submitted,
                     capabilities=capabilities,
                     safety_rules=safety_rules,
                 )
@@ -1200,7 +1416,13 @@ class SqliteStateStore:
         row = conn.execute("SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM actions").fetchone()
         return int(row["next_seq"] or 1)
 
-    def _mark_action_status(self, action: Action | dict[str, Any], status: str) -> None:
+    def _mark_action_status(
+        self,
+        action: Action | dict[str, Any],
+        status: str,
+        *,
+        claim_owner: str | None = None,
+    ) -> bool:
         if status not in {"completed", "cancelled"}:
             raise ValueError(f"Unsupported action status: {status}")
         parsed = _coerce_action(action)
@@ -1214,11 +1436,20 @@ class SqliteStateStore:
                 capabilities=capabilities,
                 safety_rules=safety_rules,
             )
-            revision = self._next_revision_conn(conn, "actions")
             existing = conn.execute(
-                "SELECT seq, created_at FROM actions WHERE id = ?",
+                "SELECT seq, created_at, status, claim_owner FROM actions WHERE id = ?",
                 (parsed.id,),
             ).fetchone()
+            if claim_owner is not None and (
+                existing is None
+                or existing["status"] != "in_progress"
+                or existing["claim_owner"] != claim_owner
+            ):
+                # Executor fencing: a stale Watch must not overwrite an action
+                # recovered or reclaimed by a newer lease owner.
+                return False
+
+            revision = self._next_revision_conn(conn, "actions")
             if existing is None:
                 conn.execute(
                     """
@@ -1248,8 +1479,25 @@ class SqliteStateStore:
                     ),
                 )
             else:
-                conn.execute(
-                    """
+                owner_predicate = ""
+                values: list[Any] = [
+                    parsed.robot,
+                    parsed.capability,
+                    _json_dumps(parsed.params),
+                    parsed.reason,
+                    _json_dumps(parsed.depends_on),
+                    _json_dumps(parsed.metadata),
+                    status,
+                    timestamp,
+                    parsed.id,
+                ]
+                if claim_owner is not None:
+                    owner_predicate = (
+                        " AND status = 'in_progress' AND claim_owner = ?"
+                    )
+                    values.append(claim_owner)
+                cursor = conn.execute(
+                    f"""
                     UPDATE actions
                     SET robot = ?,
                         capability = ?,
@@ -1262,25 +1510,19 @@ class SqliteStateStore:
                         claim_owner = NULL,
                         updated_at = ?
                     WHERE id = ?
+                    {owner_predicate}
                     """,
-                    (
-                        parsed.robot,
-                        parsed.capability,
-                        _json_dumps(parsed.params),
-                        parsed.reason,
-                        _json_dumps(parsed.depends_on),
-                        _json_dumps(parsed.metadata),
-                        status,
-                        timestamp,
-                        parsed.id,
-                    ),
+                    values,
                 )
+                if cursor.rowcount != 1:
+                    return False
             self._upsert_document_conn(
                 conn,
                 "actions",
                 {"metadata": self._metadata("actions", revision)},
                 revision,
             )
+            return True
 
     def _ensure_action_claim_columns(self, conn: sqlite3.Connection) -> None:
         existing = {
@@ -2097,6 +2339,13 @@ def _now() -> str:
 def _seconds_ago(seconds: float) -> str:
     value = datetime.now(UTC) - timedelta(seconds=seconds)
     return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _lease_timestamp(*, seconds: float = 0.0) -> str:
+    """Microsecond-resolution UTC timestamp used for executor lease fencing."""
+
+    value = datetime.now(UTC) + timedelta(seconds=seconds)
+    return value.isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _render_log_file() -> str:

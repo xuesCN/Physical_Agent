@@ -251,7 +251,8 @@ def chat(
     runtime = ChatRuntime(config, planner_name=planner, model=model)
     one_shot = message if message is not None else prompt
     if one_shot is not None:
-        result = runtime.respond(one_shot, auto_step=auto_step)
+        result = runtime.respond(one_shot, auto_step=False)
+        _run_chat_auto_step(result, config=config, enabled=auto_step)
         typer.echo(result["reply"])
         if show_code_result and result.get("code_result"):
             _echo_code_result(dict(result["code_result"]))
@@ -269,7 +270,8 @@ def chat(
         if not text:
             return
         try:
-            result = runtime.respond(text, auto_step=auto_step)
+            result = runtime.respond(text, auto_step=False)
+            _run_chat_auto_step(result, config=config, enabled=auto_step)
         except Exception as exc:
             typer.echo(f"agent> Chat failed: {exc}")
             continue
@@ -282,6 +284,25 @@ def chat(
                 typer.echo(f"  - {action['id']}: {action['robot']}.{action['capability']}")
         if result["executed"]:
             typer.echo(f"agent> Watch step executed {result['executed']} action(s).")
+
+
+def _run_chat_auto_step(
+    result: dict[str, Any],
+    *,
+    config: Path,
+    enabled: bool,
+) -> None:
+    """CLI-only composition of proposal and one explicit watch step."""
+
+    if not enabled or not result.get("actions"):
+        return
+    watch_runtime = WatchRuntime(config)
+    try:
+        asyncio.run(watch_runtime.setup())
+        result["executed"] = asyncio.run(watch_runtime.step(setup=False))
+        result["feedback"] = open_state_store(config_path=config).read_feedback()
+    finally:
+        asyncio.run(watch_runtime.shutdown())
 
 
 @app.command("ingest-file")

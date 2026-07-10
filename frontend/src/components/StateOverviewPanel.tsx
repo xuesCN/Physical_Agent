@@ -15,6 +15,7 @@ import type { CapabilityOverview } from "../viewmodels/capability";
 import type { EnvironmentOverview } from "../viewmodels/environment";
 import type { RobotOverview } from "../viewmodels/robot";
 import type { WorldObjectOverview } from "../viewmodels/world";
+import { AgentTaskGraphCard } from "./AgentTaskGraphCard";
 import { RawDebug } from "./RawDebug";
 
 interface StateOverviewPanelProps {
@@ -28,6 +29,7 @@ export function StateOverviewPanel({ state, health }: StateOverviewPanelProps) {
   return (
     <section className="state-overview-panel" data-testid="state-overview-panel">
       <SystemStatusCard system={viewModel.system} />
+      <AgentTaskGraphCard output={viewModel.agentOutput} />
       <RobotsTable robots={viewModel.robots} />
       <CapabilityCards capabilities={viewModel.capabilities} />
       <EnvironmentDescriptions environment={viewModel.environment} />

@@ -132,6 +132,40 @@ def test_context_builder_summarizes_world_and_capabilities_deterministically(tmp
     assert first["capabilities"]["robots"]["arm_1"]["capabilities"][0]["name"] == "observe"
 
 
+def test_context_builder_bounds_structured_feedback_history(tmp_path):
+    store = _seed_store(tmp_path)
+    events = [
+        {
+            "event": "safety_gate",
+            "action_id": f"act_{index:03d}",
+            "status": "passed",
+            "message": "gate passed " + ("evidence " * 40),
+            "checks": [
+                {
+                    "code": "safety.robot.known",
+                    "status": "passed",
+                    "message": "known " + ("detail " * 20),
+                    "evidence": {"index": index},
+                }
+            ],
+        }
+        for index in range(80)
+    ]
+    store.write_feedback(events[-1], events)
+    budget = ContextBudget(feedback_max_events=10, feedback_max_chars=3000)
+
+    payload = build_context(
+        store,
+        "what happened?",
+        purpose="proposal",
+        budget=budget,
+    ).payload
+
+    assert len(payload["feedback"]["history"]) <= 10
+    assert payload["feedback"]["history"][-1]["action_id"] == "act_079"
+    assert len(json.dumps(payload["feedback"], ensure_ascii=True)) <= 3300
+
+
 def _seed_store(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     store = open_state_store(config_path=config_path)

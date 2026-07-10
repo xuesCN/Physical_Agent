@@ -4,6 +4,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Callable, Iterator
+from uuid import uuid4
 
 from physical_agent.agent.code_runtime import CodeSkillRuntime
 from physical_agent.agent.code_router import CodeIntentRouter
@@ -14,13 +15,18 @@ from physical_agent.agent.onboarding import HardwareIntegrationAssistant
 from physical_agent.agent.rule_based import RuleBasedPlanner
 from physical_agent.agent.skills import SkillRouter
 from physical_agent.agent.tool_loop import OpenAIToolLoop
+from physical_agent.application.plan_compiler import compile_agent_output, task_graph_steps
+from physical_agent.application.output_projection import materialize_agent_output
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config, write_default_config
 from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
 from physical_agent.protocol.expectations import EXPECTED_JSON_SCHEMA
+from physical_agent.protocol.actions import (
+    SAFETY_INTENT_JSON_SCHEMA,
+    parse_action_metadata,
+)
 from physical_agent.protocol.retrieval import retrieved_context_payload
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, CodeTaskResult
 from physical_agent.state import StateStore, open_state_store
-from physical_agent.watch.runtime import WatchRuntime
 
 
 CHAT_RESPONSE_SCHEMA: dict[str, Any] = {
@@ -52,6 +58,7 @@ CHAT_RESPONSE_SCHEMA: dict[str, Any] = {
                         "additionalProperties": True,
                         "properties": {
                             "expected": EXPECTED_JSON_SCHEMA,
+                            "safety_intent": SAFETY_INTENT_JSON_SCHEMA,
                         },
                     },
                 },
@@ -93,6 +100,9 @@ class ChatRuntime:
         self.workspace.initialize()
 
     def respond(self, message: str, *, auto_step: bool = False) -> dict[str, Any]:
+        # Kept for callers that still send the legacy option. ChatRuntime is a
+        # proposal-side component and must never start the watch execution side.
+        _ = auto_step
         self.setup()
         workspace = self._workspace()
         continuation_message = self._code_continuation_message(message)
@@ -222,7 +232,6 @@ class ChatRuntime:
                 feedback=feedback,
                 memory=memory,
                 retrieved_context=self._retrieved_context(message),
-                auto_step=auto_step,
             )
         if mode == "llm":
             try:
@@ -261,7 +270,23 @@ class ChatRuntime:
                 memory=memory,
             )
 
-        draft_actions = _normalize_action_drafts(response.get("actions", []))
+        draft_actions = _assign_unique_draft_ids(
+            _normalize_action_drafts(response.get("actions", []))
+        )
+        draft_models = _draft_action_models(draft_actions)
+        agent_output = (
+            compile_agent_output(
+                draft_models,
+                status="draft",
+                decision="propose",
+                lifecycle="draft",
+                message=response.get("reply", "Prepared action draft."),
+                capabilities=capabilities,
+                safety_rules=workspace.read_safety().get("rules", {}),
+            )
+            if draft_models
+            else None
+        )
         if draft_actions:
             response["reply"] = _reply_with_action_draft(
                 response.get("reply", ""),
@@ -283,9 +308,13 @@ class ChatRuntime:
             status="answered",
             intent=response.get("intent", "chat"),
             summary=response["reply"],
-            steps=response.get("steps", []),
+            steps=[
+                *response.get("steps", []),
+                *(task_graph_steps(agent_output) if agent_output is not None else []),
+            ],
             actions=actions,
             needs_watch=False,
+            agent_output=agent_output,
         )
         workspace.write_plan(plan)
         assistant = workspace.append_chat_message(
@@ -295,6 +324,11 @@ class ChatRuntime:
                 "intent": plan.intent,
                 "actions": [action.model_dump(mode="json") for action in actions],
                 "draft_actions": draft_actions,
+                "agent_output": (
+                    agent_output.model_dump(mode="json", by_alias=True)
+                    if agent_output is not None
+                    else None
+                ),
                 "refusal_reason": response.get("refusal_reason"),
                 "needs_watch": plan.needs_watch,
                 "executed": executed,
@@ -308,10 +342,15 @@ class ChatRuntime:
             "reply": assistant.content,
             "actions": [action.model_dump(mode="json") for action in actions],
             "draft_actions": draft_actions,
+            "agent_output": (
+                agent_output.model_dump(mode="json", by_alias=True)
+                if agent_output is not None
+                else None
+            ),
             "memory": notes,
             "plan": plan.model_dump(mode="json"),
             "executed": executed,
-            "feedback": feedback if auto_step else workspace.read_feedback(),
+            "feedback": workspace.read_feedback(),
             "code_result": None,
             "refusal_reason": response.get("refusal_reason"),
             "skills": self._skills_summary(),
@@ -530,7 +569,9 @@ class ChatRuntime:
             memory=memory,
         )
         if response.get("actions"):
-            drafts = _normalize_action_drafts(response["actions"])
+            drafts = _assign_unique_draft_ids(
+                _normalize_action_drafts(response["actions"])
+            )
             return {
                 "reply": (
                     "Copy this Action Draft into the proposal form; streaming chat "
@@ -571,6 +612,26 @@ class ChatRuntime:
 
         notes: list[Any] = []
 
+        draft_actions = (
+            _extract_action_drafts_from_reply(content)
+            if status == "completed"
+            else []
+        )
+        draft_models = _draft_action_models(draft_actions)
+        agent_output = (
+            compile_agent_output(
+                draft_models,
+                status="draft",
+                decision="propose",
+                lifecycle="draft",
+                message=content,
+                capabilities=workspace.read_capabilities(),
+                safety_rules=workspace.read_safety().get("rules", {}),
+            )
+            if draft_models
+            else None
+        )
+
         plan = ChatPlan(
             status=(
                 "error"
@@ -581,14 +642,24 @@ class ChatRuntime:
             ),
             intent=intent or "chat",
             summary=content,
-            steps=[str(step) for step in steps],
+            steps=[
+                *[str(step) for step in steps],
+                *(task_graph_steps(agent_output) if agent_output is not None else []),
+            ],
             actions=[],
             needs_watch=False,
+            agent_output=agent_output,
         )
         workspace.write_plan(plan)
         metadata: dict[str, Any] = {
             "intent": plan.intent,
             "actions": [],
+            "draft_actions": draft_actions,
+            "agent_output": (
+                agent_output.model_dump(mode="json", by_alias=True)
+                if agent_output is not None
+                else None
+            ),
             "needs_watch": False,
             "executed": 0,
             "streamed": True,
@@ -608,6 +679,12 @@ class ChatRuntime:
             "mode": mode,
             "reply": assistant.content,
             "actions": [],
+            "draft_actions": draft_actions,
+            "agent_output": (
+                agent_output.model_dump(mode="json", by_alias=True)
+                if agent_output is not None
+                else None
+            ),
             "memory": notes,
             "plan": plan.model_dump(mode="json"),
             "executed": 0,
@@ -749,13 +826,17 @@ class ChatRuntime:
         feedback: dict[str, Any],
         memory: dict[str, Any],
         retrieved_context: dict[str, Any] | None,
-        auto_step: bool,
     ) -> dict[str, Any]:
         workspace = self._workspace()
         before = workspace.read_actions()
         known_ids = {
             action.id
-            for action in before["pending"] + before["completed"] + before["cancelled"]
+            for action in (
+                before["pending"]
+                + before.get("in_progress", [])
+                + before["completed"]
+                + before["cancelled"]
+            )
         }
         loop = OpenAIToolLoop(self.config_path)
 
@@ -784,27 +865,84 @@ class ChatRuntime:
 
         after = workspace.read_actions()
         proposed_actions = [
-            action for action in after["pending"] if action.id not in known_ids
+            action
+            for action in (
+                after["pending"]
+                + after.get("in_progress", [])
+                + after["completed"]
+                + after["cancelled"]
+            )
+            if action.id not in known_ids
         ]
         executed = 0
-        if auto_step and proposed_actions:
-            watch = WatchRuntime(self.config_path)
-            asyncio.run(watch.setup())
-            executed = asyncio.run(watch.step(setup=False))
-            asyncio.run(watch.shutdown())
-            feedback = workspace.read_feedback()
 
         step_summaries = [f"Called {step.name}." for step in result.steps]
         reply = result.content.strip() or (
             f"Tool loop completed with {len(result.steps)} tool call(s)."
         )
+        agent_output = None
+        if proposed_actions:
+            metadata_items = [
+                parse_action_metadata(action.metadata) for action in proposed_actions
+            ]
+            waiting_approval = any(
+                metadata.approval is not None
+                and metadata.approval.status == "pending"
+                for metadata in metadata_items
+            )
+            proposal_ids = {
+                metadata.correlation.proposal_id
+                for metadata in metadata_items
+                if metadata.correlation is not None
+            }
+            agent_output = compile_agent_output(
+                proposed_actions,
+                status=(
+                    "waiting_approval"
+                    if waiting_approval
+                    else "waiting_execution"
+                ),
+                decision="propose",
+                lifecycle="submitted",
+                message=reply,
+                proposal_id=(
+                    next(iter(proposal_ids)) if len(proposal_ids) == 1 else None
+                ),
+                capabilities=capabilities,
+                safety_rules=workspace.read_safety().get("rules", {}),
+            )
+            agent_output = materialize_agent_output(
+                agent_output,
+                actions=after,
+                feedback=workspace.read_feedback(),
+            )
+        active_action_ids = {
+            action.id
+            for action in after["pending"] + after.get("in_progress", [])
+        }
+        needs_watch = any(
+            action.id in active_action_ids for action in proposed_actions
+        )
+        plan_status = (
+            "error"
+            if agent_output is not None and agent_output.status == "failed"
+            else "answered"
+            if agent_output is not None and agent_output.status == "completed"
+            else "proposed_actions"
+            if proposed_actions
+            else "answered"
+        )
         plan = ChatPlan(
-            status="proposed_actions" if proposed_actions else "answered",
+            status=plan_status,
             intent="act" if proposed_actions else "inspect",
             summary=reply,
-            steps=step_summaries,
+            steps=[
+                *step_summaries,
+                *(task_graph_steps(agent_output) if agent_output is not None else []),
+            ],
             actions=proposed_actions,
-            needs_watch=bool(proposed_actions and not auto_step),
+            needs_watch=needs_watch,
+            agent_output=agent_output,
         )
         workspace.write_plan(plan)
         assistant = workspace.append_chat_message(
@@ -823,6 +961,11 @@ class ChatRuntime:
                     for step in result.steps
                 ],
                 "needs_watch": plan.needs_watch,
+                "agent_output": (
+                    agent_output.model_dump(mode="json", by_alias=True)
+                    if agent_output is not None
+                    else None
+                ),
                 "executed": executed,
             },
         )
@@ -834,9 +977,14 @@ class ChatRuntime:
             "reply": assistant.content,
             "actions": [action.model_dump(mode="json") for action in proposed_actions],
             "memory": [],
+            "agent_output": (
+                agent_output.model_dump(mode="json", by_alias=True)
+                if agent_output is not None
+                else None
+            ),
             "plan": plan.model_dump(mode="json"),
             "executed": executed,
-            "feedback": feedback if auto_step else workspace.read_feedback(),
+            "feedback": workspace.read_feedback(),
             "code_result": None,
             "skills": self._skills_summary(),
             "tool_steps": [
@@ -961,7 +1109,12 @@ class ChatRuntime:
             return []
         workspace = self._workspace()
         board = workspace.read_actions()
-        existing = board["pending"] + board["completed"] + board["cancelled"]
+        existing = (
+            board["pending"]
+            + board.get("in_progress", [])
+            + board["completed"]
+            + board["cancelled"]
+        )
         used_ids = {action.id for action in existing}
         for item in workspace.read_feedback().get("history", []):
             action_id = item.get("action_id")
@@ -1006,72 +1159,6 @@ class ChatRuntime:
         config = self._config()
         mode = (self.planner_name or config.agent.planner or "rule_based").lower()
         return mode == "auto"
-
-    def _looks_like_integration_request(self, message: str) -> bool:
-        text = message.lower()
-        has_source = bool(self._extract_integration_source(message))
-        direct_phrases = (
-            "integrate",
-            "onboard",
-            "connect this hardware",
-            "hardware repo",
-            "github",
-            "sdk",
-            "接入",
-            "适配",
-            "仓库",
-            "驱动",
-            "硬件",
-        )
-        if has_source and any(phrase in text for phrase in direct_phrases):
-            return True
-        return any(
-            phrase in text
-            for phrase in (
-                "generate a driver",
-                "create a driver",
-                "new hardware driver",
-                "帮我接入",
-                "帮我适配",
-                "生成驱动",
-                "接入硬件",
-            )
-        )
-
-    def _integration_request_wants_llm(self, message: str) -> bool:
-        text = message.lower()
-        return any(
-            phrase in text
-            for phrase in (
-                "--llm",
-                "llm",
-                "write the driver",
-                "implement the driver",
-                "real sdk",
-                "complete driver",
-                "自动实现",
-                "真实sdk",
-                "真实 sdk",
-                "实现driver",
-                "实现 driver",
-                "写完整",
-                "生成完整",
-                "接入sdk",
-                "接入 sdk",
-            )
-        )
-
-    def _extract_integration_source(self, message: str) -> str | None:
-        url_match = re.search(r"(https?://[^\s]+github\.com/[^\s]+|git@github\.com:[^\s]+)", message, re.IGNORECASE)
-        if url_match:
-            return url_match.group(1).rstrip(".,)")
-        path_match = re.search(r"(?:(?:[A-Za-z]:[\\/])|(?:\./)|(?:\.\\/)|(?:~/)|(?:/))[^\s]+", message)
-        if path_match:
-            return path_match.group(0).rstrip(".,)")
-        package_match = re.search(r"(?:package|sdk|repo|仓库|项目|路径)\s*[:：]?\s*([A-Za-z0-9_.-]+)", message, re.IGNORECASE)
-        if package_match:
-            return package_match.group(1).strip()
-        return None
 
     def _retrieved_context(self, message: str) -> dict[str, Any] | None:
         config = self._config()
@@ -1130,67 +1217,6 @@ class ChatRuntime:
         if not self.enable_code_skills:
             return []
         return [skill.as_dict() for skill in self._skill_router().list_skills()]
-
-    def _format_code_result(self, result: Any, *, user_message: str = "") -> str:
-        zh = _looks_like_chinese(user_message)
-        changed = ", ".join(result.changed_files) or "none"
-        tests = ", ".join(result.tests_run) or "none"
-        artifacts = ", ".join(getattr(result, "run_artifacts", []) or []) or "none"
-        summary = result.summary or "Updated the repository."
-        if getattr(result, "intent_kind", "") == "sdk_integration":
-            status = "finished" if result.ok else "could not finish"
-            integration = getattr(result, "integration", {}) or {}
-            output_path = integration.get("output_path")
-            if zh:
-                head = "我把这条请求识别成硬件接入任务，已经完成。" if result.ok else "我把这条请求识别成硬件接入任务，但还没有完成。"
-                lines = [head]
-            else:
-                lines = [f"I treated that as a hardware integration task and {status}: {summary}"]
-            if output_path:
-                lines.append(f"生成位置: {output_path}" if zh else f"Generated scaffold: {output_path}")
-            if changed != "none":
-                lines.append(f"改动文件: {changed}." if zh else f"Files touched: {changed}.")
-            if tests != "none":
-                lines.append(f"验证: {tests}." if zh else f"Validation: {tests}.")
-            if not output_path and changed == "none" and tests == "none":
-                lines.append(summary)
-            return "\n".join(lines)
-        if getattr(result, "intent_kind", "") == "code_run":
-            status = "succeeded" if result.ok else "failed"
-            if zh:
-                lines = [
-                    "可以。我把这条请求识别成代码执行任务，已经运行了，结果成功。"
-                    if result.ok
-                    else "可以。我把这条请求识别成代码执行任务并尝试运行了，但这次失败了。"
-                ]
-            else:
-                lines = [f"Yes. I treated that as a code execution task, ran it, and it {status}."]
-            if artifacts != "none":
-                lines.append(f"产物: {artifacts}." if zh else f"Artifact: {artifacts}.")
-            elif tests != "none":
-                lines.append(f"命令: {tests}." if zh else f"Command: {tests}.")
-            if not result.ok and summary:
-                lines.append(summary)
-            return "\n".join(lines)
-        status = "succeeded" if result.ok else "needs another round"
-        if zh:
-            lines = [
-                "可以。我把这条请求识别成代码任务，已经处理完成。"
-                if result.ok
-                else "可以。我把这条请求识别成代码任务，但还需要再处理一轮。"
-            ]
-        else:
-            lines = [f"Yes. I treated that as a code task and it {status}."]
-        if summary:
-            lines.append(summary)
-        if changed != "none":
-            lines.append(f"改动文件: {changed}." if zh else f"Changed files: {changed}.")
-        if tests != "none":
-            lines.append(f"检查: {tests}." if zh else f"Checks run: {tests}.")
-        if not result.ok and result.test_output.strip():
-            label = "关键输出" if zh else "Most relevant output"
-            lines.append(f"{label}: {_summarize_text(result.test_output)}")
-        return "\n".join(lines)
 
     def _looks_like_integration_request(self, message: str) -> bool:
         text = message.lower()
@@ -1426,6 +1452,68 @@ def _normalize_action_drafts(actions: list[Any]) -> list[dict[str, Any]]:
     return drafts
 
 
+def _draft_action_models(drafts: list[dict[str, Any]]) -> list[Action]:
+    ids = [
+        str(draft.get("id") or f"draft_{index:03d}")
+        for index, draft in enumerate(drafts, start=1)
+    ]
+    old_to_new = {
+        str(draft["id"]): ids[index]
+        for index, draft in enumerate(drafts)
+        if draft.get("id")
+    }
+    actions: list[Action] = []
+    for index, draft in enumerate(drafts):
+        item = dict(draft)
+        item["id"] = ids[index]
+        item["depends_on"] = [
+            old_to_new.get(str(dependency), str(dependency))
+            for dependency in item.get("depends_on", [])
+        ]
+        actions.append(Action.model_validate(item))
+    return actions
+
+
+def _assign_unique_draft_ids(
+    drafts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not drafts:
+        return []
+    prefix = f"draft_{uuid4().hex[:12]}"
+    assigned_ids = [f"{prefix}_{index:03d}" for index in range(1, len(drafts) + 1)]
+    old_to_new = {
+        str(draft["id"]): assigned_ids[index]
+        for index, draft in enumerate(drafts)
+        if draft.get("id")
+    }
+    result: list[dict[str, Any]] = []
+    for index, draft in enumerate(drafts):
+        item = dict(draft)
+        item["id"] = assigned_ids[index]
+        item["depends_on"] = [
+            old_to_new.get(str(dependency), str(dependency))
+            for dependency in item.get("depends_on", [])
+        ]
+        result.append(item)
+    return result
+
+
+def _extract_action_drafts_from_reply(reply: str) -> list[dict[str, Any]]:
+    match = re.search(
+        r"```action-draft\s*(.*?)\s*```",
+        reply,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if match is None:
+        return []
+    try:
+        value = json.loads(match.group(1))
+    except (TypeError, json.JSONDecodeError):
+        return []
+    items = value if isinstance(value, list) else [value]
+    return _normalize_action_drafts(items)
+
+
 def _reply_with_action_draft(reply: str, drafts: list[dict[str, Any]]) -> str:
     intro = (reply or "I prepared an action draft for review.").strip()
     return (
@@ -1488,46 +1576,6 @@ def _looks_like_chinese(text: str) -> bool:
     return bool(re.search(r"[\u4e00-\u9fff]", text))
 
 
-def _looks_like_code_followup(text: str) -> bool:
-    lowered = text.lower().strip()
-    if not lowered:
-        return False
-    followups = (
-        "可以",
-        "好",
-        "好的",
-        "帮我实现",
-        "实现一下",
-        "继续",
-        "写吧",
-        "做吧",
-        "yes",
-        "ok",
-        "sure",
-        "go ahead",
-    )
-    return any(item in lowered for item in followups)
-
-
-def _mentions_code_capability(text: str) -> bool:
-    lowered = text.lower()
-    markers = (
-        "代码",
-        "脚本",
-        "运行",
-        "执行",
-        "编写",
-        "实现",
-        "test",
-        "tests",
-        "code",
-        "script",
-        "run",
-        "execute",
-    )
-    return any(marker in lowered for marker in markers)
-
-
 def _max_action_number(action_ids: set[str]) -> int:
     maximum = 0
     for action_id in action_ids:
@@ -1548,6 +1596,7 @@ def _looks_like_code_followup(text: str) -> bool:
         "好",
         "好的",
         "帮我实现",
+        "实现一下",
         "实现一个",
         "继续",
         "写吧",

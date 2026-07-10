@@ -115,7 +115,7 @@ FastAPI 后端，默认不启动 watch：
 
 ## Watch 启动
 
-真实硬件前，先确认 `physical-agent.yaml` 指向正确 driver、workspace 和 backend。然后单独终端启动：
+真实硬件前，先确认 `physical-agent.yaml` 指向正确 driver、workspace 和 backend，并为实机 robot 显式写入 `execution_mode: hardware`（模拟实例才写 `simulation`）。然后单独终端启动：
 
 ```powershell
 .\.venv\Scripts\physical-agent.exe watch --config physical-agent.yaml

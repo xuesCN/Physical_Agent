@@ -17,6 +17,7 @@ agent:
 robots:
   arm_1:
     driver: mock_arm
+    execution_mode: simulation
     config:
       bounds:
         x: [-1.0, 1.0]
@@ -35,8 +36,8 @@ robots:
 
   rover_1:
     driver: mock_rover
+    execution_mode: simulation
     config:
       start_pose:
         x: 0.0
         y: 0.0
-

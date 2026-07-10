@@ -52,7 +52,7 @@ export function RobotsPanel({ state }: RobotsPanelProps) {
         status: robot.status ?? "unknown",
         worldStatus: firstString(worldInfo, ["status", "state"]),
         endpoint: firstString(worldInfo, ["endpoint", "url", "port", "serial_port", "address"]),
-        mode: firstString(worldInfo, ["mode", "transport"]),
+        mode: robot.execution_mode ?? firstString(worldInfo, ["mode", "transport"]),
         capabilities:
           robot.capabilities?.map((capability) => capability.name ?? "").filter(Boolean) ?? []
       };

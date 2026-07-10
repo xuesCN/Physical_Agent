@@ -28,6 +28,8 @@ def test_mcp_propose_action_sqlite_only_writes_pending_board(tmp_path):
 
     assert result["ok"] is True
     assert result["action_id"] == "act_mcp_sqlite"
+    assert result["agent_output"]["schema"] == "physical-agent/agent-output/v1"
+    assert result["agent_output"]["tasks"][0]["kind"] == "safety_gate"
     actions = store.read_actions()
     assert [action.id for action in actions["pending"]] == ["act_mcp_sqlite"]
     assert actions["pending"][0].metadata["expected"][0]["path"] == "robots.arm_1.status"
@@ -48,3 +50,44 @@ def test_mcp_tool_specs_describe_proposal_only_tools(tmp_path):
     propose_spec = next(spec for spec in specs if spec["name"] == "physical_agent_propose_action")
     metadata_schema = propose_spec["parameters"]["properties"]["metadata"]
     assert "expected" in metadata_schema["properties"]
+    assert "safety_intent" in metadata_schema["properties"]
+
+
+def test_mcp_get_state_includes_safety_and_compiled_plan(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = open_state_store(config_path=config_path)
+    store.initialize()
+    mcp = PhysicalAgentMCP(config_path)
+    mcp.propose_action(
+        {
+            "id": "act_state",
+            "robot": "arm_1",
+            "capability": "observe",
+            "params": {},
+            "reason": "Inspect state.",
+        }
+    )
+
+    state = mcp.get_state()
+
+    assert state["safety"]["rules"]
+    assert state["plan"]["plan"].agent_output is not None
+
+
+def test_mcp_duplicate_action_id_returns_structured_error(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = open_state_store(config_path=config_path)
+    store.initialize()
+    mcp = PhysicalAgentMCP(config_path)
+    action = {
+        "id": "act_duplicate",
+        "robot": "arm_1",
+        "capability": "observe",
+        "params": {},
+    }
+
+    assert mcp.propose_action(action)["ok"] is True
+    duplicate = mcp.propose_action(action)
+
+    assert duplicate["ok"] is False
+    assert duplicate["error"] == "invalid_proposal"

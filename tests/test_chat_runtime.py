@@ -1,6 +1,8 @@
 import json
+from types import SimpleNamespace
 
 import physical_agent.agent.chat_runtime as chat_runtime_module
+import physical_agent.cli as cli_module
 from physical_agent.agent.chat_runtime import ChatRuntime
 from physical_agent.llm import llm_settings_path, write_llm_settings_file
 from physical_agent.quickstart import setup_project
@@ -47,10 +49,20 @@ def test_chat_runtime_rule_based_drafts_actions_without_writing_pending(tmp_path
     assert result["ok"] is True
     assert result["actions"] == []
     assert [action["capability"] for action in result["draft_actions"]] == ["pick", "place"]
+    assert result["agent_output"]["lifecycle"] == "draft"
+    assert result["agent_output"]["actions"][0]["id"]
+    gates = [
+        task
+        for task in result["agent_output"]["tasks"]
+        if task["kind"] == "safety_gate"
+    ]
+    assert len(gates) == 2
+    assert all(task["status"] == "not_scheduled" for task in gates)
     assert "```action-draft" in result["reply"]
     store = open_state_store(config_path=config_path)
     assert store.read_actions()["pending"] == []
     assert store.read_plan()["plan"].needs_watch is False
+    assert store.read_plan()["plan"].agent_output is not None
 
 
 def test_chat_runtime_auto_step_does_not_execute_chat_drafts(tmp_path):
@@ -66,6 +78,94 @@ def test_chat_runtime_auto_step_does_not_execute_chat_drafts(tmp_path):
     store = open_state_store(config_path=config_path)
     assert store.read_world()["state"]["objects"]["red_block"]["location"] == "table"
     assert store.read_actions()["pending"] == []
+
+
+def test_repeated_chat_drafts_receive_unique_ids_and_remapped_dependencies(tmp_path):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    runtime = ChatRuntime(config_path, planner_name="rule_based")
+
+    first = runtime.respond("pick the red block and place it on the tray")
+    second = runtime.respond("pick the red block and place it on the tray")
+
+    first_ids = [action["id"] for action in first["draft_actions"]]
+    second_ids = [action["id"] for action in second["draft_actions"]]
+    assert set(first_ids).isdisjoint(second_ids)
+    assert first["draft_actions"][1]["depends_on"] == [first_ids[0]]
+    assert second["draft_actions"][1]["depends_on"] == [second_ids[0]]
+
+
+def test_chat_runtime_tool_loop_auto_step_is_compatibility_noop(tmp_path, monkeypatch):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+
+    class FakeToolLoop:
+        def __init__(self, path):
+            self.config_path = path
+
+        async def run(self, messages, **kwargs):
+            store = open_state_store(config_path=self.config_path)
+            store.append_pending_action(
+                Action(
+                    id="act_tool_loop",
+                    robot="arm_1",
+                    capability="observe",
+                    params={},
+                    reason="Observe through the proposal-only tool loop.",
+                )
+            )
+            return SimpleNamespace(content="Action proposed.", steps=[])
+
+    monkeypatch.setattr(chat_runtime_module, "OpenAIToolLoop", FakeToolLoop)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="tool_loop",
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+
+    result = runtime.respond("look around", auto_step=True)
+
+    assert result["executed"] == 0
+    assert result["plan"]["needs_watch"] is True
+    assert [action["id"] for action in result["actions"]] == ["act_tool_loop"]
+    store = open_state_store(config_path=config_path)
+    assert [action.id for action in store.read_actions()["pending"]] == ["act_tool_loop"]
+    assert store.read_actions()["completed"] == []
+
+
+def test_cli_composes_explicit_watch_step_for_legacy_auto_step(tmp_path, monkeypatch):
+    calls: list[str] = []
+
+    class FakeWatchRuntime:
+        def __init__(self, config_path):
+            assert config_path == tmp_path / "physical-agent.yaml"
+
+        async def setup(self):
+            calls.append("setup")
+
+        async def step(self, *, setup):
+            assert setup is False
+            calls.append("step")
+            return 2
+
+        async def shutdown(self):
+            calls.append("shutdown")
+
+    fake_store = SimpleNamespace(read_feedback=lambda: {"latest": {"status": "completed"}})
+    monkeypatch.setattr(cli_module, "WatchRuntime", FakeWatchRuntime)
+    monkeypatch.setattr(cli_module, "open_state_store", lambda **kwargs: fake_store)
+    result = {"actions": [{"id": "act_001"}], "executed": 0}
+
+    cli_module._run_chat_auto_step(
+        result,
+        config=tmp_path / "physical-agent.yaml",
+        enabled=True,
+    )
+
+    assert calls == ["setup", "step", "shutdown"]
+    assert result["executed"] == 2
+    assert result["feedback"]["latest"]["status"] == "completed"
 
 
 def test_chat_runtime_auto_falls_back_when_llm_fails(tmp_path, monkeypatch):
@@ -280,14 +380,10 @@ def test_chat_runtime_stream_prompt_allows_copyable_action_drafts(tmp_path, monk
     assert store.read_actions()["pending"] == []
 
 
-def test_chat_runtime_stream_ignores_auto_step_and_watch_runtime(tmp_path, monkeypatch):
+def test_chat_runtime_stream_ignores_auto_step_without_watch_dependency(tmp_path):
     config_path = tmp_path / "physical-agent.yaml"
     setup_project(config_path, publish=True)
-
-    def fail_watch_init(self, *args, **kwargs):
-        raise AssertionError("streaming chat must not instantiate WatchRuntime")
-
-    monkeypatch.setattr(chat_runtime_module.WatchRuntime, "__init__", fail_watch_init)
+    assert not hasattr(chat_runtime_module, "WatchRuntime")
     runtime = ChatRuntime(
         config_path,
         planner_name="rule_based",

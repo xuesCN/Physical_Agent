@@ -9,6 +9,7 @@ from physical_agent.agent.chat_runtime import ChatRuntime
 from physical_agent.agent.driver_coder import DriverCodingAgent
 from physical_agent.agent.onboarding import HardwareIntegrationAssistant
 from physical_agent.agent.runtime import AgentRuntime
+from physical_agent.application.output_projection import project_chat_plan
 from physical_agent.config import DEFAULT_CONFIG_NAME, load_config, write_default_config
 from physical_agent.doctor import doctor_ok, run_doctor
 from physical_agent.protocol.schemas import Action
@@ -47,6 +48,11 @@ class GuiController:
 
         actions = workspace.read_actions()
         feedback = workspace.read_feedback()
+        plan = project_chat_plan(
+            workspace.read_plan(),
+            actions=actions,
+            feedback=feedback,
+        )
         code_result = _latest_code_result(workspace.read_chat())
         return {
             "ready": True,
@@ -61,12 +67,14 @@ class GuiController:
             "runtime": runtime_info,
             "actions": {
                 "pending": _dump_actions(actions["pending"]),
+                "in_progress": _dump_actions(actions.get("in_progress", [])),
                 "completed": _dump_actions(actions["completed"]),
                 "cancelled": _dump_actions(actions["cancelled"]),
             },
             "feedback": feedback,
+            "safety": workspace.read_safety(),
             "chat": workspace.read_chat(),
-            "plan": workspace.read_plan(),
+            "plan": plan,
             "memory": workspace.read_memory(),
             "doctor": [check.as_dict() for check in run_doctor(self.config_path)],
         }
@@ -98,10 +106,15 @@ class GuiController:
             self._ensure_watch_started()
             assert self.watch_runtime is not None
             executed = asyncio.run(self.watch_runtime.step(setup=False))
+            stats = dict(self.watch_runtime.last_step_stats)
             return {
                 "ok": True,
-                "message": f"Executed {executed} action(s).",
+                "message": (
+                    f"Processed {stats.get('processed', executed)} action(s); "
+                    f"executed {executed}."
+                ),
                 "executed": executed,
+                "stats": stats,
                 "state": self.state(),
             }
 
@@ -228,7 +241,7 @@ def _runtime_info(config: Any) -> dict[str, Any]:
         {
             "robot_id": robot_id,
             "driver": robot.driver,
-            "mode": "mock" if _is_mock_driver(robot.driver) else "hardware",
+            "mode": "mock" if robot.execution_mode == "simulation" else "hardware",
         }
         for robot_id, robot in config.robots.items()
     ]
@@ -239,11 +252,6 @@ def _runtime_info(config: Any) -> dict[str, Any]:
         "requires_confirmation": bool(config.watch.require_human_approval or has_hardware),
         "drivers": drivers,
     }
-
-
-def _is_mock_driver(driver_ref: str) -> bool:
-    name = str(driver_ref).strip().replace("\\", "/").rstrip("/").split("/")[-1].lower()
-    return name.startswith("mock_")
 
 
 def _json_safe(value: Any) -> Any:

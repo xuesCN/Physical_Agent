@@ -14,6 +14,7 @@ from physical_agent.agent.planner import Planner
 from physical_agent.agent.rule_based import RuleBasedPlanner
 from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
 from physical_agent.protocol.expectations import EXPECTED_JSON_SCHEMA
+from physical_agent.protocol.actions import SAFETY_INTENT_JSON_SCHEMA
 from physical_agent.protocol.schemas import Action
 
 
@@ -43,6 +44,7 @@ ACTION_PLAN_SCHEMA: dict[str, Any] = {
                         "additionalProperties": True,
                         "properties": {
                             "expected": EXPECTED_JSON_SCHEMA,
+                            "safety_intent": SAFETY_INTENT_JSON_SCHEMA,
                         },
                     },
                 },
@@ -79,10 +81,29 @@ class LLMPlanner(Planner):
         capabilities: dict[str, Any],
         world: dict[str, Any],
     ) -> list[Action]:
+        return self.plan_with_context(
+            task=task,
+            capabilities=capabilities,
+            world=world,
+        )
+
+    def plan_with_context(
+        self,
+        *,
+        task: str,
+        capabilities: dict[str, Any],
+        world: dict[str, Any],
+        feedback: dict[str, Any] | None = None,
+        safety: dict[str, Any] | None = None,
+        previous_agent_output: dict[str, Any] | None = None,
+    ) -> list[Action]:
         context = build_planner_context(
             task,
             capabilities=capabilities,
             world=world,
+            feedback=feedback,
+            safety=safety,
+            previous_agent_output=previous_agent_output,
             budget=self.context_budget,
         )
         payload = self.client.structured_json(

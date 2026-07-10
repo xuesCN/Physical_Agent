@@ -193,11 +193,13 @@ export function omitKeys(record: UnknownRecord, keys: string[]): UnknownRecord {
 
 export function allActions(actions: {
   pending?: ActionItem[];
+  in_progress?: ActionItem[];
   completed?: ActionItem[];
   cancelled?: ActionItem[];
 } | undefined): ActionItem[] {
   return [
     ...(actions?.pending ?? []),
+    ...(actions?.in_progress ?? []),
     ...(actions?.completed ?? []),
     ...(actions?.cancelled ?? [])
   ];

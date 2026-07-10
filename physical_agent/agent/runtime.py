@@ -4,11 +4,13 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-from physical_agent.agent.llm_planner import LLMPlanner
+from physical_agent.application.plan_compiler import task_graph_steps
+from physical_agent.application.output_projection import materialize_agent_output
+from physical_agent.application.proposals import ProposalService, renumber_actions
 from physical_agent.agent.planner import Planner
-from physical_agent.agent.rule_based import RuleBasedPlanner
+from physical_agent.agent.planner_factory import create_planner
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config
-from physical_agent.protocol.schemas import Action
+from physical_agent.protocol.schemas import Action, ChatPlan
 from physical_agent.state import StateStore, open_state_store
 
 
@@ -38,32 +40,38 @@ class AgentRuntime:
     async def run_task(self, task: str, *, wait_for_feedback: bool = True) -> dict[str, Any]:
         await self.setup()
         workspace = self._workspace()
-        workspace.write_task(task, owner="human")
-
-        capabilities = workspace.read_capabilities()
-        world = workspace.read_world()
-        if not capabilities.get("robots"):
-            message = "No capabilities are available yet. Start `physical-agent watch` first."
-            workspace.append_log(message, actor="agent")
-            return {"ok": False, "message": message, "actions": []}
-
-        planner = self._resolve_planner()
-        actions = planner.plan(task=task, capabilities=capabilities, world=world)
-        if not actions:
-            message = "No action could be planned for this task."
-            workspace.append_log(message, actor="agent")
-            return {"ok": False, "message": message, "actions": []}
-        actions = self._renumber_actions(actions, workspace)
-
-        for action in actions:
-            workspace.append_pending_action(
-                _with_proposal_metadata(
-                    action,
-                    source="planner",
-                    proposed_by="agent",
-                    original_task=task,
-                )
+        proposal = ProposalService(
+            workspace,
+            planner_factory=self._resolve_planner,
+        ).submit_task(
+            task,
+            proposed_by="agent",
+        )
+        actions = proposal.actions
+        workspace.write_plan(
+            ChatPlan(
+                status="proposed_actions" if actions else "answered",
+                intent="act" if actions else "task",
+                summary=proposal.message,
+                steps=task_graph_steps(proposal.agent_output),
+                actions=actions,
+                needs_watch=bool(actions),
+                agent_output=proposal.agent_output,
             )
+        )
+        if not proposal.ok:
+            workspace.append_log(proposal.message, actor="agent")
+            return {
+                "ok": False,
+                "message": proposal.message,
+                "actions": [],
+                "agent_output": proposal.agent_output.model_dump(
+                    mode="json", by_alias=True
+                ),
+                "refusal_reason": proposal.refusal_reason,
+                "proposal_status": proposal.status,
+                "proposal_id": proposal.correlation.proposal_id,
+            }
         workspace.append_log(
             f"`physical-agent run` submitted {len(actions)} action(s): "
             + ", ".join(f"`{action.id}`" for action in actions),
@@ -71,16 +79,55 @@ class AgentRuntime:
         )
 
         if not wait_for_feedback:
-            return {"ok": True, "message": "Actions submitted.", "actions": actions, "feedback": []}
+            return {
+                "ok": True,
+                "message": proposal.message,
+                "actions": actions,
+                "agent_output": proposal.agent_output.model_dump(
+                    mode="json", by_alias=True
+                ),
+                "feedback": [],
+                "proposal_status": proposal.status,
+                "proposal_id": proposal.correlation.proposal_id,
+            }
 
         timeout_s = self._config().agent.feedback_timeout_s
         feedback = await self.wait_for_feedback(actions, timeout_s=timeout_s)
-        all_done = all(item.get("status") == "completed" for item in feedback)
+        materialized_output = materialize_agent_output(
+            proposal.agent_output,
+            actions=workspace.read_actions(),
+            feedback=workspace.read_feedback(),
+        )
+        all_done = (
+            len(feedback) == len(actions)
+            and materialized_output.status == "completed"
+        )
+        final_message = (
+            "Task completed."
+            if all_done
+            else "Task did not complete successfully."
+        )
+        workspace.write_plan(
+            ChatPlan(
+                status="answered" if all_done else "error",
+                intent="act",
+                summary=final_message,
+                steps=task_graph_steps(materialized_output),
+                actions=actions,
+                needs_watch=False,
+                agent_output=materialized_output,
+            )
+        )
         return {
             "ok": all_done,
-            "message": "Task completed." if all_done else "Task did not complete successfully.",
+            "message": final_message,
             "actions": actions,
+            "agent_output": materialized_output.model_dump(
+                mode="json", by_alias=True
+            ),
             "feedback": feedback,
+            "proposal_status": proposal.status,
+            "proposal_id": proposal.correlation.proposal_id,
         }
 
     async def wait_for_feedback(self, actions: list[Action], *, timeout_s: int) -> list[dict[str, Any]]:
@@ -89,12 +136,26 @@ class AgentRuntime:
         deadline = asyncio.get_running_loop().time() + timeout_s
         terminal_statuses = {"completed", "failed", "cancelled"}
         latest_by_id: dict[str, dict[str, Any]] = {}
+        verification_required = {
+            action.id
+            for action in actions
+            if bool((action.metadata or {}).get("expected"))
+        }
+        verification_done: set[str] = set()
         while asyncio.get_running_loop().time() < deadline:
             feedback_doc = workspace.read_feedback()
             for item in feedback_doc.get("history", []):
                 if item.get("action_id") in wanted and item.get("status") in terminal_statuses:
                     latest_by_id[item["action_id"]] = item
-            if wanted.issubset(latest_by_id):
+                if (
+                    item.get("event") == "expectation_check"
+                    and item.get("action_id") in verification_required
+                    and item.get("status") in {"verified", "violated", "skipped"}
+                ):
+                    verification_done.add(str(item["action_id"]))
+            if wanted.issubset(latest_by_id) and verification_required.issubset(
+                verification_done
+            ):
                 return [latest_by_id[action.id] for action in actions]
             await asyncio.sleep(0.1)
         return [latest_by_id[action.id] for action in actions if action.id in latest_by_id]
@@ -122,72 +183,15 @@ class AgentRuntime:
     def _resolve_planner(self) -> Planner:
         if self.planner is not None:
             return self.planner
-        config = self._config()
-        planner_name = (self.planner_name or config.agent.planner or "rule_based").lower()
-        if planner_name in {"rule_based", "rules", "offline"}:
-            self.planner = RuleBasedPlanner()
-            return self.planner
-        if planner_name in {"llm", "openai", "openai_compatible", "openai-compatible"}:
-            model = self.model
-            if model is None and config.agent.model != "fake/local":
-                model = config.agent.model
-            self.planner = LLMPlanner(
-                env_file=str(self.base_dir / ".env"),
-                model=model,
-                workspace_path=config.workspace_path(self.base_dir),
-            )
-            return self.planner
-        raise ValueError(f"Unsupported planner: {planner_name}")
+        self.planner = create_planner(
+            self._config(),
+            base_dir=self.base_dir,
+            planner_name=self.planner_name,
+            model=self.model,
+        )
+        return self.planner
 
     def _renumber_actions(self, actions: list[Action], workspace: StateStore) -> list[Action]:
-        used_ids: set[str] = set()
-        for item in workspace.read_feedback().get("history", []):
-            action_id = item.get("action_id")
-            if action_id:
-                used_ids.add(str(action_id))
-        action_board = workspace.read_actions()
-        for action in action_board["pending"] + action_board["completed"] + action_board["cancelled"]:
-            used_ids.add(action.id)
+        """Compatibility wrapper; new entrypoints use ProposalService directly."""
 
-        max_number = 0
-        for action_id in used_ids:
-            if action_id.startswith("act_"):
-                try:
-                    max_number = max(max_number, int(action_id.removeprefix("act_")))
-                except ValueError:
-                    continue
-        if max_number == 0:
-            return actions
-
-        mapping: dict[str, str] = {}
-        renumbered: list[Action] = []
-        for index, action in enumerate(actions, start=max_number + 1):
-            new_id = f"act_{index:03d}"
-            mapping[action.id] = new_id
-            renumbered.append(
-                action.model_copy(
-                    update={
-                        "id": new_id,
-                        "depends_on": [mapping.get(dep, dep) for dep in action.depends_on],
-                    }
-                )
-            )
-        return renumbered
-
-
-def _with_proposal_metadata(
-    action: Action,
-    *,
-    source: str,
-    proposed_by: str,
-    original_task: str,
-) -> Action:
-    data = action.model_dump(mode="json")
-    metadata = dict(data.get("metadata") or {})
-    metadata.setdefault("source", source)
-    metadata.setdefault("proposed_by", proposed_by)
-    metadata.setdefault("original_task", original_task)
-    if action.reason:
-        metadata.setdefault("planner_reason", action.reason)
-    data["metadata"] = metadata
-    return Action.model_validate(data)
+        return renumber_actions(actions, workspace)

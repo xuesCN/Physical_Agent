@@ -40,7 +40,10 @@ export function buildRobotViewModels(state: AgentState | null, configResponse: C
       id,
       driver: runtimeRobot.driver ?? configRobot.driver ?? "-",
       kind: runtimeRobot.kind ?? "robot",
-      mode: summarizeMode(robotConfig, worldInfo),
+      mode:
+        runtimeRobot.execution_mode ??
+        configRobot.execution_mode ??
+        summarizeMode(robotConfig, worldInfo),
       health: firstStatus(runtimeRobot.status, worldInfo),
       endpoint: summarizeEndpoint(robotConfig, worldInfo),
       configSummary: summarizeRecord(robotConfig, "no config"),

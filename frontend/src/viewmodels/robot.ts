@@ -19,6 +19,7 @@ export interface RobotOverview {
 export const ROBOT_KNOWN_KEYS = [
   "kind",
   "driver",
+  "execution_mode",
   "status",
   "mode",
   "health",
@@ -46,7 +47,13 @@ export function formatRobots(state: AgentState | null | undefined): RobotOvervie
         id,
         driver: firstString([robot?.driver, worldRobot.driver], "-"),
         mode: firstString(
-          [robotRecord.mode, worldRobot.mode, worldRobot.transport, robot?.kind],
+          [
+            robot?.execution_mode,
+            robotRecord.mode,
+            worldRobot.mode,
+            worldRobot.transport,
+            robot?.kind
+          ],
           "-"
         ),
         health,

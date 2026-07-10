@@ -472,13 +472,24 @@ export function shouldRefreshFullStateFromEvent(event: ApiEvent): boolean {
     return true;
   }
   if (event.type === "watch_step") {
-    return Number(event.payload?.executed ?? 0) > 0;
+    return watchStepChangedState(event);
   }
   return false;
 }
 
 export function shouldUpdateLastRefreshFromEvent(event: ApiEvent): boolean {
-  return event.type !== "watch_step" || Number(event.payload?.executed ?? 0) > 0;
+  return event.type !== "watch_step" || watchStepChangedState(event);
+}
+
+function watchStepChangedState(event: ApiEvent): boolean {
+  if (event.payload?.state_changed === true) {
+    return true;
+  }
+  const stats = event.payload?.stats;
+  if (stats && typeof stats === "object" && "state_changed" in stats) {
+    return stats.state_changed === true;
+  }
+  return Number(event.payload?.executed ?? 0) > 0;
 }
 
 export function shouldFallbackAfterSseClose(signal: AbortSignal): boolean {

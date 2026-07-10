@@ -231,6 +231,23 @@ body {
   align-items: start;
 }
 
+.agent-task-graph-card .ant-card-body {
+  overflow: hidden;
+}
+
+.agent-output-summary {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-task-row-safety > td {
+  background: var(--pa-accent-soft) !important;
+}
+
+.agent-task-row-safety > td:first-child {
+  box-shadow: inset 3px 0 0 var(--pa-accent);
+}
+
 .overview-path {
   display: block;
   max-width: 100%;

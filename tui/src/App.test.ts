@@ -194,6 +194,13 @@ test("idle watch_step summary does not force live refresh churn", () => {
     true
   );
   assert.equal(
+    shouldRefreshFullStateFromEvent({
+      type: "watch_step",
+      payload: { executed: 0, processed: 1, gate_decisions: 1, state_changed: true }
+    }),
+    true
+  );
+  assert.equal(
     shouldUpdateLastRefreshFromEvent({
       type: "state",
       payload: { state: { ok: true, ready: true, chat_messages: 2 } }

@@ -186,11 +186,24 @@ def test_api_controller_contract_runs_without_fastapi(tmp_path):
         )
     )
     assert proposed["action"]["id"] == "act_controller_direct"
+    assert proposed["agent_output"]["schema"] == "physical-agent/agent-output/v1"
+    assert any(
+        task["kind"] == "safety_gate"
+        for task in proposed["agent_output"]["tasks"]
+    )
 
     submitted = controller.submit_task(
         SubmitTaskRequest(task="pick the red block and place it on the tray")
     )
     assert [item["capability"] for item in submitted["actions"]] == ["pick", "place"]
+    assert submitted["agent_output"]["proposal_id"] == submitted["proposal_id"]
+    persisted_output = submitted["state"]["plan"]["plan"]["agent_output"]
+    assert persisted_output["proposal_id"] is None
+    assert {action["id"] for action in persisted_output["actions"]} == {
+        "act_controller_direct",
+        "act_001",
+        "act_002",
+    }
 
     chat = controller.chat(ChatRequest(message="remember that controller memory is safe"))
     assert chat["executed"] == 0
@@ -228,6 +241,63 @@ def test_api_controller_contract_runs_without_fastapi(tmp_path):
     ]
     assert board["completed"] == []
     assert board["cancelled"] == []
+
+
+def test_api_task_result_uses_shared_refusal_contract(tmp_path):
+    class RefusingPlanner:
+        last_refusal_reason = "The requested capability is intentionally unavailable."
+
+        def plan(self, *, task, capabilities, world):
+            return []
+
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    result = ApiController(config_path, planner=RefusingPlanner()).submit_task(
+        SubmitTaskRequest(task="do something unsupported")
+    )
+
+    assert result["ok"] is False
+    assert result["proposal_status"] == "refused"
+    assert result["refusal_reason"] == RefusingPlanner.last_refusal_reason
+    assert result["proposal_id"].startswith("proposal_")
+    assert result["agent_output"]["decision"] == "refuse"
+    assert result["agent_output"]["tasks"] == []
+
+
+def test_api_task_reports_unavailable_before_initializing_planner(tmp_path):
+    class PlannerMustNotRun:
+        def plan(self, *, task, capabilities, world):
+            raise AssertionError("planner must not run without live capabilities")
+
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = open_state_store(config_path=config_path)
+    store.initialize()
+    result = ApiController(config_path, planner=PlannerMustNotRun()).submit_task(
+        SubmitTaskRequest(task="look around")
+    )
+
+    assert result["ok"] is False
+    assert result["proposal_status"] == "unavailable"
+    assert result["actions"] == []
+
+
+def test_api_invalid_dependency_returns_client_error_without_partial_action(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    controller = ApiController(config_path)
+
+    with pytest.raises(api_server_module.ApiRequestError) as exc_info:
+        controller.propose_action(
+            ActionProposalRequest(
+                id="act_invalid_dep",
+                robot="arm_1",
+                capability="observe",
+                depends_on=["act_missing"],
+            )
+        )
+
+    assert exc_info.value.status_code == 422
+    assert store.read_actions()["pending"] == []
 
 
 def test_api_endpoints_cover_state_proposals_memory_ingest_search_and_audit(tmp_path):
@@ -1004,6 +1074,25 @@ def test_api_workspace_reset_clears_state_without_watch(tmp_path, monkeypatch):
     assert "arm_1" in config_path.read_text(encoding="utf-8")
 
 
+def test_api_workspace_reset_refuses_live_watch_lease(tmp_path):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    assert store.acquire_runtime_lease(
+        "watch-executor",
+        "active-watch",
+        ttl_s=30,
+    ) is True
+    client = TestClient(create_app(config_path))
+
+    response = client.post("/api/workspace/reset", json={"confirm": True})
+
+    assert response.status_code == 409
+    assert response.json()["ok"] is False
+    assert "Stop Watch first" in response.json()["message"]
+    assert store.release_runtime_lease("watch-executor", "active-watch") is True
+
+
 def test_api_integrate_generates_scaffold(tmp_path):
     TestClient = _client_or_skip()
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
@@ -1069,6 +1158,7 @@ def test_api_register_robot_appends_yaml_and_keeps_existing(tmp_path):
         json={
             "robot_id": "arm_2",
             "driver": "mock_rover",
+            "execution_mode": "simulation",
             "config": {"mode": "mock"},
         },
     )
@@ -1078,7 +1168,11 @@ def test_api_register_robot_appends_yaml_and_keeps_existing(tmp_path):
     assert body["ok"] is True
     assert body["requires_watch_restart"] is True
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert data["robots"]["arm_2"] == {"driver": "mock_rover", "config": {"mode": "mock"}}
+    assert data["robots"]["arm_2"] == {
+        "driver": "mock_rover",
+        "execution_mode": "simulation",
+        "config": {"mode": "mock"},
+    }
     # Existing robot must survive.
     assert "arm_1" in data["robots"]
     # Registered config must still load.

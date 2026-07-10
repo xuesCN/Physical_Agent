@@ -49,6 +49,36 @@
 **回灌与可见性**：`expectation_check` 进入 feedback history；context_builder 在后续 chat/planner 上下文注入 expectation feedback，让 LLM 看到期望、实测与 message，但不自动重试。前端不大改流程：Chat draft 卡片与 Actions 表格显示 expected 摘要，raw expected 作为折叠兜底，避免模型生成的“自证”完全隐形。
 **验收**：pick/place 带正确断言产生 verified；错误断言产生 violated；坏路径/坏格式/动作失败产生 skipped；缺失 expected 不产事件；多 check 聚合规则固定；expected 在提交前或动作详情可见；全量 pytest 与前端 build 通过。
 
+## VNext-1 AgentOutput + trusted PlanCompiler
+
+**目标**：把 Agent 的公开心智模型从 `Action[]` 改为可信编译的任务 DAG：`raw model decision → PlanCompiler → AgentOutput`。模型只提交 action intent 与 advisory `SafetyIntent`；compiler 按后端事实为每个物理 Action 注入唯一 mandatory、watch-owned `SafetyGateTask`，按需注入 `ApprovalTask` 与 `VerificationTask`，并让 `PhysicalActionTask` 依赖 Gate。下游 Action 的 Gate 还必须依赖上游 `PhysicalActionTask`。
+
+**边界**：`SafetyGateTask` 不是 Action、capability 或 LLM tool；caller/模型提供的 Gate task、`safety_gate=passed`、approval/provenance 都不可信。compiler 只描述义务，不预判 Gate outcome，也不 import watch/driver。approval 只决定是否等待人；F4 expected 只产生执行后 Verification。
+
+**兼容策略**：首轮保留 Action board 作为执行队列真源，旧 `actions` response 字段保留；`AgentOutput.tasks` 先作为可信计划投影。Chat draft 可返回 `lifecycle=draft` 与 `not_scheduled` tasks，避免把“展示草稿”误写成已排队。在 task graph 未持久化或实现可验证重建前，不宣称拥有完整 task runtime。
+
+**验收**：task/action id 唯一且 DAG 无环；每个 Action 恰有一个 Gate 和一个 PhysicalAction task；physical task 必须依赖 Gate；需要审批时 Gate 依赖 Approval；有 Action dependency 时下游 Gate 依赖上游 PhysicalAction；caller 无法删除/完成 Gate；API、MCP、AgentRuntime、Chat draft/tool loop 输出一致；全量 Python/React/TUI 回归通过。
+
+**实现口径（2026-07-10 已落地）**：`protocol/agent_output.py` 与 trusted `application/plan_compiler.py` 实现协议、任务 ID、检查说明与图不变量；`SafetyIntent` 进入 action metadata、LLM schema 与 prompt，但只作为 advisory details。ProposalService、API task/manual proposal、MCP、AgentRuntime、Chat draft/tool loop 与 ChatPlan 已接线；定向测试覆盖 DAG、caller Gate 伪造/删除、draft lifecycle、refused/unavailable 和各入口 wire schema。
+
+## VNext-2 Materialized AgentOutput + structured feedback + scheduler hardening
+
+**目标**：watch 对 Gate pass/reject/error 都写独立结构化 feedback；application 以 compiled topology、Action Board 和 Gate/Verification feedback materialize 当前 AgentOutput。后续认知轮次和 React/TUI 消费同一 projection，能回答“正在等谁、Gate 是否执行、动作/验证走到哪里”，chat-only plan 不能隐藏 active physical obligations。
+
+**关键修复**：① materializer 将 in-progress 映射 checking，Gate reject 将 PhysicalAction/Verification 映射 skipped，有 expected 时等待 expectation event；② SQLite claim 跳过等待 dependency、busy robot 与本 watch degraded/halted robot，不可能依赖显式 terminalize；③ capability override/watch default 形成 Gate/execute 共用的 effective timeout；④ feedback event 原子 append；⑤ watch step 用 `processed/gate_decisions/state_changed` 表达 Gate-only 变化；⑥ context-aware planner 读取 SAFETY、budgeted feedback 与 previous output，AgentRuntime 等 required verification。
+
+**验收**：Gate pass/reject 均有结构化记录且 reject 永不调用 driver；active tasks 在 ChatPlan 被覆盖后仍可重建；verification 状态与 AgentRuntime 终态一致；同 robot 不重叠 claim，不同 robot 可分别 claim；heartbeat degraded 暂停新动作并在恢复后放行；waiting dependency 保持 pending，impossible dependency 级联终态；并发 feedback 不丢事件；反馈超限后仍保留近期 code/check 摘要；默认不自动重试。
+
+**实现口径（2026-07-10 已落地）**：新增 `application/output_projection.py` 的 `materialize_agent_output/current_agent_output/project_chat_plan`；API/MCP/GUI/TUI 读取服务端 current projection。watch 为 pass/reject 写 checks/code/evidence/digest；SQLite 原子 feedback append、per-robot claim serialization、dependency cascade，heartbeat block/recovery 与 effective timeout 已接线。context_builder 增加 feedback event/char budget，contextual planner 收到 SAFETY/feedback/previous output；AgentRuntime 等 verification。定向测试覆盖上述状态映射、竞态与边界。
+
+## VNext-3 Persistent obligation state + atomic transaction
+
+**目标**：在兼容 projection 稳定后，决定并实现独立 task table 或同等可证明的持久化 obligation 模型；让持久化 task graph/obligation rows 与 actions 在一个事务中提交，并支持跨重启恢复、并发推进和完整 task history。
+
+**当前边界**：`append_pending_actions()` 已让一个 proposal 的多条 actions 在 SQLite 单事务内全有或全无，ProposalService 已切换为 batch append；冲突会回滚整批。仍未实现的是独立 task rows 及其与 action batch 的同事务提交；AgentOutput graph 仍是派生/plan 数据。server-side action id 也仍在事务外按 snapshot 编号，并发冲突会整批失败而不是产生半批。Run/Turn/Event ledger 排在此后。
+
+**验收**：保持当前 actions batch all-or-nothing；并发 proposal 的 id 在事务内分配或可安全重试；持久化 graph 与 actions 不产生半份或不一致；approval/Gate/action/verification 状态可恢复；迁移保持旧 actions response 和 Action Board 兼容；新表/API 不能绕过 watch Gate。
+
 ## W2 观察并发化 + 频率解耦
 
 **落地**（2026-07-07，`4e0f732`）：`update_world()` 对不同 robot 的 observe 使用 `asyncio.gather(..., return_exceptions=True)` 并发执行，timeout/异常逐 robot log-only 隔离；成功观测按 `robot_id` 稳定 merge，失败时以前一份 world 为底覆盖成功结果，避免单 robot 故障清空全局 world。
@@ -65,14 +95,23 @@
 
 ## W4 多机器人并行执行 + observed_at
 
+**当前边界（2026-07-10）**：SQLite claim transaction 禁止同 robot 同时存在两条 in-progress action，并允许不同 robot 被分别领取；workspace `watch-executor` lease 同时只允许一个 WatchRuntime owner。单个 WatchRuntime 仍未用 `gather` 并行 execute，也没有 `observed_at/revision/stale`，因此 W4 仍未完成。
 **思路**：step() 领取后按 robot 分组，不同 robot 的动作 `asyncio.gather` 并行执行（同 robot 内保持串行）；`Observation` schema 加 `observed_at: datetime`（driver 基类默认填 now，driver 可覆盖）。
-**坑**：并行后 feedback 写入是共享 store——SQLite 的写锁已由 B3.5 事务保证，但写入顺序不再确定，测试断言别依赖顺序。
+**坑**：并行后 feedback 写入是共享 store；`append_feedback_event()` 已能防 lost update，但跨 robot 事件顺序仍不确定，测试断言不能依赖顺序。workspace lease 已防第二 WatchRuntime 同时工作；若目标包含崩溃接管或分区容错，仍须完成 W6.2 hardware fencing，不能把数据库 lease 当作设备 epoch。
 **验收**：双机器人各一动作时一次 step 双执行；world 里能看到各机器人观察时间。
 
 ## W5 driver 编写守则
 
 **思路**：三处落笔：`drivers/templates.py` 生成的 driver 模板注释里加"阻塞调用须带超时或 `asyncio.to_thread`"；`agent/driver_coder.py` 的 LLM 生成 prompt 加同样规则；`hardware-bringup-checklist.zh-CN.md` 加检查项。
 **验收**：`integrate` 生成的新 scaffold 里能看到该注释；driver_coder 生成的代码不出现裸阻塞 I/O（抽查）。
+
+## W6 Workspace watch lease 与 hardware fencing
+
+**W6.1 实现口径（2026-07-10 已落地）**：SQLite `runtime_leases` 提供 named `watch-executor` lease；Watch 在 driver connect 前获取，每次 setup 生成 unique owner，并按最长 operation budget 设置/续租 TTL。第二 WatchRuntime 在 active lease 下 setup fail closed。claim 使用同一 owner，completed/cancelled 写入以 `in_progress + claim_owner` CAS；旧 owner 的迟到结果失败并触发 fatal watch error。lease 丢失后 API watch loop 停止，stale shutdown 只 disconnect 自身 transport、不发送 halt。workspace reset 用 exclusive transaction 检查 active lease，HTTP reset 返回冲突。测试覆盖 acquire/renew/release/expiry、双 runtime、stale completion、fatal stop 与 reset guard。
+
+**W6.1 边界**：这是 workspace/SQLite-level singleton executor 和 stale-result fencing。它能阻止后续受 lease 检查的软件步骤，不能撤销已经发出的 driver call；失去数据库连接、网络分区或阻塞中的 transport 仍可能留下 in-flight physical effect。
+
+**W6.2 未完成**：将 epoch/fencing token 下沉到 driver/transport/设备或独占硬件代理，让控制面拒绝旧 owner I/O；定义 owner 崩溃、存储不可达、命令在途、接管前 fresh observe/fail-safe halt 的语义。验收要求旧 owner 即使仍存活、迟到 I/O 也不能影响继任者，接管绝不重放旧 action。
 
 ## F5.1 LeRobot motors（触发：舵机臂到手）
 

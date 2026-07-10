@@ -142,10 +142,29 @@ class ApiWatchService:
             while True:
                 try:
                     executed = await _run_watch_tick(runtime)
+                    runtime_stats = getattr(runtime, "last_step_stats", None)
+                    stats = (
+                        dict(runtime_stats)
+                        if isinstance(runtime_stats, dict)
+                        else {
+                            "executed": int(executed),
+                            "processed": int(executed),
+                            "gate_decisions": int(executed),
+                            "state_changed": bool(executed),
+                        }
+                    )
                     self.events.publish(
                         "watch_step",
                         {
                             "executed": int(executed),
+                            "processed": int(stats.get("processed", executed)),
+                            "gate_decisions": int(
+                                stats.get("gate_decisions", executed)
+                            ),
+                            "state_changed": bool(
+                                stats.get("state_changed", bool(executed))
+                            ),
+                            "stats": stats,
                             "state": self._state_summary(),
                         },
                     )
@@ -153,6 +172,11 @@ class ApiWatchService:
                     raise
                 except Exception as exc:
                     self.events.publish("error", error_payload(exc, phase="watch_step"))
+                    if bool(getattr(exc, "fatal_watch_error", False)):
+                        # Lease/claim fencing failures are terminal for this
+                        # runtime. Retrying would let a stale owner keep
+                        # touching hardware after a successor has taken over.
+                        break
                 await asyncio.sleep(self._interval_for(runtime))
         except asyncio.CancelledError:
             raise
@@ -196,6 +220,7 @@ def format_sse_event(event: dict[str, Any]) -> str:
 def summarize_state(state: dict[str, Any]) -> dict[str, Any]:
     actions = state.get("actions") or {}
     pending = _action_ids(actions.get("pending") or [])
+    in_progress = _action_ids(actions.get("in_progress") or [])
     completed = _action_ids(actions.get("completed") or [])
     cancelled = _action_ids(actions.get("cancelled") or [])
     return {
@@ -205,6 +230,7 @@ def summarize_state(state: dict[str, Any]) -> dict[str, Any]:
         "backend": state.get("backend"),
         "workspace_path": state.get("workspace_path"),
         "pending_actions": pending,
+        "in_progress_actions": in_progress,
         "completed_count": len(completed),
         "cancelled_count": len(cancelled),
         "chat_messages": len((state.get("chat") or {}).get("messages") or []),

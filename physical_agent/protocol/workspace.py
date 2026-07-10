@@ -186,6 +186,21 @@ class Workspace:
     def read_feedback(self) -> dict[str, Any]:
         return parse_feedback(self.file("feedback").read_text(encoding="utf-8"))
 
+    def append_feedback_event(self, event: dict[str, Any]) -> None:
+        target = self.file("feedback")
+        with _log_lock(target):
+            feedback = self.read_feedback()
+            history = list(feedback.get("history") or [])
+            history.append(event)
+            target.write_text(
+                render_feedback(
+                    event,
+                    history,
+                    revision=self._next_revision(target),
+                ),
+                encoding="utf-8",
+            )
+
     def write_safety(self, rules: dict[str, Any] | None = None) -> None:
         target = self.file("safety")
         target.write_text(

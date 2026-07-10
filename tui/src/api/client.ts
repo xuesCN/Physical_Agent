@@ -137,6 +137,7 @@ export function flattenActions(state: AgentState | null): ActionItem[] {
   }
   return [
     ...(state.actions.pending ?? []).map((action) => ({ ...action, status: action.status ?? "pending" })),
+    ...(state.actions.in_progress ?? []).map((action) => ({ ...action, status: action.status ?? "in_progress" })),
     ...(state.actions.completed ?? []).map((action) => ({ ...action, status: action.status ?? "completed" })),
     ...(state.actions.cancelled ?? []).map((action) => ({ ...action, status: action.status ?? "cancelled" }))
   ];

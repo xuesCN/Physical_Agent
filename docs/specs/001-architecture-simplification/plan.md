@@ -9,6 +9,7 @@
 | 1 | 冻结范围、建立规格与退役清单 | ✅ 第一轮完成 | spec/plan/tasks、三份 surface 审计、SPEC/PLAYBOOK 登记完成 |
 | 1.5 | legacy GUI parity + 缺口补齐 + launcher strangler cutover | ✅ PR #1 / `2d5e909` 验证完成 | 所有保留能力已覆盖；有意退役项有替代说明；thin launcher/wheel smoke + 当前提交 Playwright 全绿 |
 | 2 | 验证 cutover 后删除 legacy GUI | ✅ `5764bac` / PR #1 全绿 | React/FastAPI 成为唯一 GUI；安全/主路径回归通过 |
+| 2.1 | canonical projection 与删除门禁 review fix | 🟡 执行中 | React/TUI 不再二次推断 Gate；pending 不复用旧 passed Gate；PR e2e/wheel 负门禁阻塞 |
 | 3 | 退役 Markdown migration，缩成 safety/log sidecar | ⚪ 下一阶段 | sidecar 行为等价；旧目录仍 fail closed；救援指针可执行 |
 | 4 | 删除 `auto_step` 与 embedded watch composition | ⚪ | 所有 proposal/chat 入口不拥有 watch；正式 watch 命令不受影响 |
 | 5 | 结构化 Chat Turn + `action-draft` 双轨 | ⚪ | 独立一轮验证 structured/fence 一致，F1 主链与旧 fallback 全绿 |
@@ -67,20 +68,34 @@ Go：同一 wheel 中 `physical-agent gui`/`api` 都托管同一 Dashboard；没
 
 Rollback：回退整个步骤 2 提交即可恢复旧实现；步骤 1.5 新增能力保持可独立存在。
 
+## 2.1 canonical projection 与删除门禁 review fix
+
+本步只修 R2 阶段 review 暴露的既有架构偏差，不提前执行 R3-R7 的删除任务。
+
+1. React 与 TUI 只呈现服务端 `output_projection` 给出的 `AgentTask.status`；删除从 raw feedback/Action Board 二次 materialize Gate/approval/physical task status 的逻辑。
+2. 增加伪造或不完整 Gate feedback 负例，证明客户端不会把后端 fail-closed 的 task 改回 `passed`。
+3. 对 recovered 后重新处于 `pending` 的 action 忽略旧 claim 留下的 canonical `passed/allow` Gate 事件；不新增 persistent attempt/obligation schema，watch 下一次 claim 仍重新执行 Gate。
+4. PR Playwright 从 advisory 改为 blocking；clean-wheel smoke 自身检查 archive 不含 `physical_agent/gui/`，不只依赖 PR full pytest 的负断言。
+5. 本轮不更新用户指定保留的阶段快照 `docs/current-architecture-audit.md/html` 与 `docs/system-summary.zh-CN.md`。
+
+Go：backend forged/stale Gate 负例、React/TUI consumer 负例、frontend build/e2e、TUI test/build、Python projection/safety tests与 wheel smoke 全绿。
+
+Rollback：客户端删减、projection 修正和 CI hardening 分层清晰；任何行为回归可单独回退对应提交，不影响 R2 已删除的 legacy GUI。
+
 ## 3. 退役 Markdown migration，缩成 safety/log sidecar
 
-顺序不可交换：先抽生产 sidecar，再删 full Workspace/migrator。
+顺序不可交换：行为测试 → sidecar 接管 → 真实历史救援 smoke → migrator 删除 → fixture 改写/full Workspace 删除 → 文档收口。
 
-1. 新建聚焦的 state sidecar adapter，承接：
+1. 先以聚焦 behavior tests 锁定 SAFETY/LOG、doctor、audit、普通 init 与 overwrite/reset 现状，并定义 LOG mirror 失败时 SQLite 真源与 doctor 诊断口径。
+2. 新建聚焦的 state sidecar adapter，承接：
    - `SAFETY.md` 默认/读取/写入/front matter/revision；
    - `LOG.md` 初始化/actor/timestamp/revision/并发追加；
    - doctor 所需的最小 front matter 校验。
-2. `SqliteStateStore`、doctor、audit export 切到 sidecar；用 golden/behavior tests 锁定现状。
-3. 删除 CLI `migrate-md-to-sqlite`、`LegacyMarkdownWorkspaceReader`、SQLite migration function、迁移专用 audit reader 与 `allow_retired_markdown` 开关。
-4. 删除完整 `protocol.workspace` 以及 task/action/chat/capability/feedback/memory 的 Markdown parser/renderer；保留或内收 safety/log 所需最小 Markdown 工具。
-5. 重写非迁移 fixture，不把仍有价值的 driver/onboarding/chat-summary 测试随 `Workspace` 一起删除。
-6. 保留 legacy workspace detection 和显式 markdown backend 拒绝；错误文案改为 `9072b4e` 独立 worktree 救援流程，并用实际旧 checkout/package 做 smoke：旧 migrator→手改 config 为 sqlite→回新版运行不带 `--force` 的 init→state-check。
-7. 清 README/state-backends/system-summary/hardware guide/example/architecture 图和审计口径；REFACTORING 的 B6 历史事实不改写，只追加提前退役决定。
+3. `SqliteStateStore`、doctor、audit export 切到 sidecar；旧 migrator/full Workspace 暂留，证明生产路径已完成 strangler cutover。
+4. 保留 legacy workspace detection 和显式 markdown backend 拒绝；错误文案改为 `9072b4e` 独立 worktree救援流程，并在删除前用实际旧 checkout/package 做 smoke：核验旧/新解释器来源，旧 migrator→手改 config 为 sqlite→回新版运行不带 `--force` 的 init→state-check，并逐项验证历史 migrator 覆盖的数据面。
+5. rescue gate 全绿后，删除 CLI `migrate-md-to-sqlite`、`LegacyMarkdownWorkspaceReader`、SQLite migration function、迁移专用 audit reader、`allow_retired_markdown` 开关及只被 migrator 调用的 replace/revision helpers。
+6. 先重写非迁移 fixture，再删除完整 `protocol.workspace` 以及 task/action/chat/capability/world/feedback/plan/memory 的 Markdown parser/renderer；保留或内收 safety/log 所需最小 Markdown 工具，不把仍有价值的 driver/onboarding/chat-summary 测试随 `Workspace` 一起删除。
+7. 清 README/state-backends/hardware guide/example 等当前操作口径；REFACTORING 的 B6 历史事实不改写，只追加提前退役决定。用户指定保留的两份阶段快照不纳入本轮 current-doc 收口。
 
 Go：当前版本不存在 migrator/full Workspace；safety/log/doctor/audit 行为等价；显式和隐式旧 workspace 都拒绝启动且给出可执行救援指针。
 

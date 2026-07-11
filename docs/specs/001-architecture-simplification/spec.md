@@ -1,6 +1,6 @@
 # 001：架构减法与兼容面退役
 
-状态：执行中（R0、R1.5、R2 完成；下一阶段 R3 sidecar/migration 退役）
+状态：执行中（R0、R1.5、R2 完成；R2.1 canonical projection 收口中；随后进入 R3）
 
 日期：2026-07-10
 
@@ -23,6 +23,8 @@
 ```
 
 R1.5 只完成正式栈补缺与 strangler cutover，不在同一提交删除 legacy 实现。draft PR #1 已在 `2d5e909` 上取得独立 wheel/API/Python/TUI 与真实 Chromium 25/25 证据，R2 随后才删除 legacy 实现。
+
+R2 阶段 review 发现 React/TUI 仍会从 raw feedback/Action Board 二次推断 task status，且 recovered pending action 可能复用旧 claim 的 passed Gate 证据。R2.1 只修这两个 canonical projection 偏差并强化既有门禁，不新增 task table、attempt ledger 或任何冻结功能。
 
 ## 1. 不可破坏的边界
 

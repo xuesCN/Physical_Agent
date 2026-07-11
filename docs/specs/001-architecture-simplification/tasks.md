@@ -98,6 +98,18 @@
 - [x] 本地 Python 405 passed、Safety/API/docs 定向 66 passed、frontend build、TUI 59 tests/typecheck/build、clean-wheel smoke 全绿。
 - [x] R2 pushed commit `5764bac` 的 draft PR #1 真实 Chromium 25/25。
 
+## R2.1 canonical projection 与门禁 review fix
+
+- [ ] React 删除从 raw feedback/Action Board 二次推断 AgentTask status 的逻辑，只呈现服务端 canonical projection。
+- [ ] TUI 删除同类二次推断逻辑，只呈现服务端 canonical projection。
+- [ ] React/TUI 增加 forged/incomplete Gate feedback 负例：后端 task=`failed` 时不得显示成 `passed`。
+- [ ] backend projection 对重新处于 `pending` 的 action 忽略旧 canonical `passed/allow` Gate 事件；invalid/forged evidence 仍 fail closed。
+- [ ] 不新增 attempt/task persistence；watch claim/validate/record/execute 顺序与唯一执行权保持不变。
+- [ ] PR Playwright 移除 `continue-on-error`，R0-R8 期间作为阻塞门禁。
+- [ ] clean-wheel smoke 直接断言 archive 不含 `physical_agent/gui/`。
+- [ ] 用户指定的 `current-architecture-audit.md/html` 与 `system-summary.zh-CN.md` 保持阶段快照，不在本轮改写。
+- [ ] frontend build/e2e、TUI test/typecheck/build、Python projection/safety tests、wheel smoke 全绿。
+
 ## R3 Markdown migration / full Workspace 退役
 
 ### R3-A 先锁现有 sidecar 行为
@@ -106,6 +118,8 @@
 - [ ] 把 `tests/test_markdown_protocol.py` 中 SAFETY/front-matter 必要行为迁到 sidecar tests；task/action/capabilities/feedback roundtrip 暂不删。
 - [ ] 锁定 SAFETY 默认值/覆盖值/front matter/revision/malformed 行为。
 - [ ] 锁定 LOG 初始化/actor/timestamp/revision/进程内并发 append/SQLite 双写行为。
+- [ ] 锁定普通 init 不覆盖人工 SAFETY/现有 LOG；overwrite/reset 恢复默认 SAFETY 并清 LOG。
+- [ ] 定义并锁定 LOG mirror 写失败或 malformed 时的契约：SQLite log 真源不得回滚/丢失，doctor 必须给出可诊断失败。
 - [ ] 锁定 doctor 的逻辑文档检查和 LOG front-matter 校验。
 - [ ] 锁定 audit export：复制 SAFETY；LOG JSON 只来自 SQLite。
 
@@ -130,8 +144,9 @@
 - [ ] 保留并更新 `test_load_config_rejects_legacy_markdown_workspace_when_backend_omitted`。
 - [ ] 错误文案指向独立 worktree checkout `9072b4e`（完整 commit `9072b4e9fb600e505668aeb6076eb6cb85e5ff82`）。
 - [ ] 在临时目录/独立 worktree checkout `9072b4e9fb600e505668aeb6076eb6cb85e5ff82`，安装并调用该 checkout 的旧 Python package，构造完整 legacy workspace 并运行历史 migrator；不得误用当前 executable。
+- [ ] smoke 显式记录 old/current 两个解释器的 `physical_agent.__file__`，证明来自不同 checkout/package。
 - [ ] rescue smoke 确认历史命令不会自动改 config；手动改为 sqlite 后回当前版本，运行不带 `--force` 的 `physical-agent init`，随后运行 `physical-agent state-check`。
-- [ ] rescue smoke 验证迁移后的 task/actions/chat/memory/log 可读。
+- [ ] rescue smoke 逐项验证迁移后的 task/capabilities/world/actions/feedback/SAFETY/chat/plan/memory/uploads/log 可读，并确认 current init 前后 SAFETY/LOG 内容不被意外覆盖。
 - [ ] 明示已有 `state.db` 时不要轻率使用历史 `--overwrite`。
 
 ### R3-D 删除一次性迁移入口
@@ -139,6 +154,7 @@
 - [ ] `physical_agent/cli.py`: migrator import 与 `migrate-md-to-sqlite` command。
 - [ ] `physical_agent/state/legacy_markdown.py`: `LegacyMarkdownWorkspaceReader` 全文件。
 - [ ] `physical_agent/state/sqlite.py`: `migrate_markdown_workspace_to_sqlite()` 与迁移专用 imports。
+- [ ] `physical_agent/state/sqlite.py`: 删除只由 migrator 调用的 `_replace_actions_with_revision`、`_replace_chat_with_revision`、`_replace_memory_with_revision`、`_replace_uploads_with_revision`、`_replace_log_entries`、`_payload_revision`、`_metadata_revision`。
 - [ ] `physical_agent/state/audit.py`: `read_markdown_log_document/entries()` 与专属 imports。
 - [ ] `physical_agent/config.py`: `allow_retired_markdown=True` 开关。
 - [ ] 删除 `tests/test_state_store.py::test_legacy_markdown_reader_is_migration_only_not_state_store`。
@@ -155,22 +171,23 @@
 - [ ] `WorkspaceDocument` 若仍作为最小 front-matter 返回类型则保留，不因名称相似误删。
 - [ ] `physical_agent/protocol/markdown.py` 只缩到 sidecar 所需 front matter/YAML fence/safety/log 最小函数（或内收 sidecar）；不得按文件名机械全删。
 - [ ] 删除 `physical_agent/protocol/workspace.py` full Workspace helper。
-- [ ] 删除 task/action/chat/capabilities/feedback/memory 的退役 Markdown parser/renderer。
+- [ ] 删除 task/action/chat/capabilities/world/feedback/plan/memory 的退役 Markdown parser/renderer。
 - [ ] 删除 `physical_agent/protocol/__init__.py` 的 `Workspace` public export。
 - [ ] 永久保留 `export-audit` 命令与 SQLite audit export。
 - [ ] 只有 R3-A 行为已迁移后，才删除旧 `tests/test_workspace.py` 与 `tests/test_markdown_protocol.py` 中退役 full-document roundtrip tests。
 
 ### R3-F 文档与最终验证
 
-- [ ] 清 `README.md`、`README.zh-CN.md`、`docs/state-backends.zh-CN.md`、`docs/system-summary.zh-CN.md`、`docs/hardware-bringup-checklist.zh-CN.md`。
-- [ ] 清 `docs/current-architecture-audit.md/html`、`docs/current-architecture-overview.svg`、`examples/xiaozhi_mcp_hardware/README.md`；若改 audit Markdown，同步 HTML hash 测试。
+- [ ] 清 `README.md`、`README.zh-CN.md`、`docs/state-backends.zh-CN.md`、`docs/hardware-bringup-checklist.zh-CN.md`。
+- [-] `docs/current-architecture-audit.md/html` 与 `docs/system-summary.zh-CN.md` 是用户保留的阶段快照，不纳入 R3 current-doc 收口，也不据此阻塞 R3。
+- [ ] 清 `docs/current-architecture-overview.svg`、`examples/xiaozhi_mcp_hardware/README.md`。
 - [ ] 同步 `docs/SPEC.zh-CN.md`、`docs/PLAYBOOK.zh-CN.md`、`docs/REFACTORING.zh-CN.md`；B6 历史事实保留，只追加提前退役。
-- [ ] `rg "LegacyMarkdownWorkspaceReader|migrate_markdown_workspace_to_sqlite|physical_agent\.protocol\.workspace"` 为零（历史说明逐条审阅）。
+- [ ] production/tests 中 `rg "LegacyMarkdownWorkspaceReader|migrate_markdown_workspace_to_sqlite|physical_agent\.protocol\.workspace"` 为零；历史/救援文档仅保留逐条审阅后的白名单引用。
 - [ ] sidecar、legacy negative、rescue smoke、全量 pytest 与 safety boundary 全绿。
 
 ## R4 `auto_step` 退役
 
-- [ ] 删除 legacy GUI auto-step surface（随 R2）。
+- [x] 删除 legacy GUI auto-step surface（已随 R2 完成；CLI/API/ChatRuntime 兼容形状仍按本节后续任务退役）。
 - [ ] 删除 `physical-agent chat --auto-step` option。
 - [ ] 删除 `physical_agent/cli.py::_run_chat_auto_step()` 与调用/输出。
 - [ ] 删除 `ChatRuntime.respond(... auto_step=...)`。

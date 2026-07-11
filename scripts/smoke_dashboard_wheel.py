@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.request
 import venv
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,6 +61,7 @@ def _run_smoke(workdir: Path) -> None:
         cwd=ROOT,
     )
     wheel = next(wheel_dir.glob("physical_agent-*.whl"))
+    _assert_no_retired_gui(wheel)
 
     base_env = workdir / "base-env"
     _create_venv(base_env)
@@ -126,6 +128,20 @@ def _run_smoke(workdir: Path) -> None:
     )
     if (api_health.get("executor") or {}).get("mode") != "none":
         raise RuntimeError(f"API without --watch did not report executor none: {api_health}")
+
+
+def _assert_no_retired_gui(wheel: Path) -> None:
+    with zipfile.ZipFile(wheel) as archive:
+        retired = [
+            name
+            for name in archive.namelist()
+            if name.startswith("physical_agent/gui/")
+        ]
+    if retired:
+        raise RuntimeError(
+            "Packaged wheel contains retired physical_agent/gui files: "
+            + ", ".join(retired)
+        )
 
 
 def _smoke_server(command: list[str], *, cwd: Path) -> dict:

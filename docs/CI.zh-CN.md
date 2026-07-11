@@ -4,7 +4,7 @@ CI（Continuous Integration，持续集成）是在每次 push 或 pull request 
 
 本仓库的 CI 配置在 `.github/workflows/ci.yml`。
 
-## 当前策略：宽松但守底线
+## 当前策略：删除期主路径全部阻塞
 
 Physical Agent 连接真实物理执行链路，CI 必须守住安全宪法；同时项目仍在快速重构，CI 不能把每一次内部拆分都卡成重活。因此当前采用以下分层策略：
 
@@ -12,7 +12,7 @@ Physical Agent 连接真实物理执行链路，CI 必须守住安全宪法；�
 | --- | --- | --- |
 | 必跑检查 | 是 | 守住安全边界、前端构建与 TUI 跨客户端契约 |
 | PR 完整后端 | 是（仅 PR） | 用 Python 3.12 跑完整 pytest，防止跨层回归 |
-| 建议性检查 | 否 | 跑浏览器 e2e，失败会提示但不直接阻塞 |
+| 浏览器主路径 | 是（PR/手动） | 跑真实 Chromium e2e，防止删除/迁移静默丢失用户能力 |
 | 手动 full run | 手动触发 | 收口、发版或大重构后再跑 Python 3.11/3.12 完整矩阵 |
 
 ## 自动检查
@@ -51,16 +51,16 @@ pull request 还会额外运行 `Python 3.12 full pytest (PR)`，执行完整 `p
 
 注意：GitHub Actions 的 workflow `env:` map 会把变量名按大小写不敏感处理。因此不能同时写 `HTTP_PROXY` 和 `http_proxy`、`NO_PROXY` 和 `no_proxy`。CI 里只保留一套大写代理变量；如果需要在测试进程内处理更多宿主环境差异，应放到测试 fixture 或命令步骤里，而不是在同一个 `env:` map 中重复声明。
 
-## 建议性检查
+## 浏览器主路径检查
 
-这些检查默认会显示结果，但 workflow 标记为 `continue-on-error`，失败时不直接阻塞：
+R0-R8 删除/迁移期间，Playwright 与其他 PR 检查一样阻塞：
 
-1. `Playwright dashboard advisory`
+1. `Playwright dashboard`
    - PR 和手动运行时触发
    - 启动临时 API 与 Vite dev server
    - 跑 `cd frontend && npm run test:e2e`
 
-建议性检查失败不等于可以无视。合并前至少要判断它是已知环境波动、测试本身过时，还是确实把用户流程改坏了。
+失败时先判断是已知环境波动、测试本身过时，还是确实把用户流程改坏了；在修复或得到明确的维护者豁免前不得合并。R8 后若要恢复 advisory，需依据实际 flaky 数据重新决策，不能自动降级。
 
 ## 手动 full run
 
@@ -147,7 +147,7 @@ python -m pytest -q
 
 如果阻塞检查失败，默认按真实回归处理，除非能证明测试已经过时。
 
-如果建议性检查失败，先看失败类型：
+如果浏览器检查失败，先看失败类型：
 
 - 构建或类型错误：通常要修。
 - 浏览器超时、截图、trace 失败：判断是环境波动还是用户流程坏了。

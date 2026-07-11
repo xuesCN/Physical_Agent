@@ -7,7 +7,6 @@ from typing import Any
 
 from physical_agent.config import DEFAULT_CONFIG_NAME, load_config
 from physical_agent.drivers.loader import load_driver
-from physical_agent.protocol.markdown import parse_front_matter
 from physical_agent.state import open_state_store
 
 
@@ -64,7 +63,7 @@ def run_doctor(config_path: str | Path = DEFAULT_CONFIG_NAME) -> list[DoctorChec
         for name in workspace.filenames:
             try:
                 if name == "log":
-                    parse_front_matter(workspace.file(name).read_text(encoding="utf-8"))
+                    workspace.validate_log_mirror()
                 else:
                     getattr(workspace, f"read_{name}")()
                 checks.append(DoctorCheck(f"workspace:{name}", True, "Parsed successfully."))

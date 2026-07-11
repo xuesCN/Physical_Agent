@@ -14,6 +14,7 @@ from physical_agent.protocol.memory import (
     normalize_memory_tags,
 )
 from physical_agent.protocol.expectations import normalize_expected_metadata
+from physical_agent.protocol.markdown import parse_front_matter
 from physical_agent.protocol.retrieval import (
     chunk_source_id_for_memory_note,
     make_chunks_for_text,
@@ -1063,6 +1064,10 @@ class SqliteStateStore:
     def append_log(self, message: str, *, actor: str | None = None) -> None:
         timestamp = _now()
         with self._connect() as conn:
+            # Revision allocation and the log row belong to one serialized
+            # transaction. Without this, concurrent appenders can all persist
+            # the same document revision even though every row is retained.
+            conn.execute("BEGIN IMMEDIATE")
             revision = self._next_revision_conn(conn, "log")
             conn.execute(
                 """
@@ -1078,6 +1083,26 @@ class SqliteStateStore:
                 revision,
             )
         self._file_workspace.append_log(message, actor=actor)
+
+    def validate_log_mirror(self) -> dict[str, Any]:
+        """Validate that the human LOG mirror matches SQLite's committed revision."""
+        target = self.file("log")
+        doc = parse_front_matter(target.read_text(encoding="utf-8"))
+        expected = self._read_document("log").get("metadata", {})
+        try:
+            expected_revision = int(expected.get("revision") or 1)
+        except (TypeError, ValueError):
+            expected_revision = 1
+        if doc.schema != DOC_SCHEMAS["log"]:
+            raise ValueError(
+                f"LOG.md schema must be `{DOC_SCHEMAS['log']}`, got `{doc.schema}`."
+            )
+        if doc.revision != expected_revision:
+            raise ValueError(
+                "LOG.md mirror revision does not match SQLite log revision: "
+                f"file={doc.revision}, sqlite={expected_revision}."
+            )
+        return dict(doc.metadata)
 
     def export_human_view(self, out_dir: Path | None = None) -> dict[str, Any]:
         documents = {

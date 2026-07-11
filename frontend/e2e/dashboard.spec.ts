@@ -886,7 +886,7 @@ test("overview exposes the compiled SafetyGate task in AgentOutput", async ({ pa
   expectNoConsoleErrors(consoleErrors);
 });
 
-test("AgentOutput task statuses project the latest watch and action results", async ({ page }) => {
+test("AgentOutput task statuses trust the server projection over raw feedback", async ({ page }) => {
   const consoleErrors = collectConsoleErrors(page);
   const completedAction = {
     ...mockAction("move-success"),
@@ -894,7 +894,13 @@ test("AgentOutput task statuses project the latest watch and action results", as
       approval: { required: true, status: "approved" },
     },
   };
-  const cancelledAction = mockAction("move-denied");
+  const projectedTasks = [
+    { ...mockApprovalTask(completedAction.id), status: "completed" },
+    ...mockCompiledTaskPair(completedAction.id).map((task) => ({
+      ...task,
+      status: task.kind === "safety_gate" ? "failed" : "completed",
+    })),
+  ];
   await mockReadyApiWithRobot(page, {
     plan: {
       metadata: { revision: 7 },
@@ -902,17 +908,13 @@ test("AgentOutput task statuses project the latest watch and action results", as
         status: "needs_watch",
         agent_output: {
           schema: "physical-agent/agent-output/v1",
-          status: "waiting_execution",
+          status: "failed",
           decision: "propose",
           lifecycle: "submitted",
-          message: "Run two compiled actions.",
+          message: "The server rejected non-authoritative Gate evidence.",
           proposal_id: "proposal-runtime-status",
-          tasks: [
-            mockApprovalTask(completedAction.id),
-            ...mockCompiledTaskPair(completedAction.id),
-            ...mockCompiledTaskPair(cancelledAction.id),
-          ],
-          actions: [completedAction, cancelledAction],
+          tasks: projectedTasks,
+          actions: [completedAction],
         },
       },
     },
@@ -922,25 +924,16 @@ test("AgentOutput task statuses project the latest watch and action results", as
           event: "safety_gate",
           task_id: `task:safety_gate:${completedAction.id}`,
           action_id: completedAction.id,
-          status: "rejected",
-        },
-        {
-          event: "safety_gate",
-          action_id: completedAction.id,
           status: "passed",
-        },
-        {
-          event: "safety_gate",
-          task_id: `task:safety_gate:${cancelledAction.id}`,
-          action_id: cancelledAction.id,
-          status: "rejected",
+          decision: "allow",
+          actor: "agent",
         },
       ],
     },
     actions: {
       pending: [],
       completed: [completedAction],
-      cancelled: [cancelledAction],
+      cancelled: [],
     },
   });
 
@@ -958,21 +951,12 @@ test("AgentOutput task statuses project the latest watch and action results", as
   const completedGate = graph
     .locator("tr.agent-task-row-safety")
     .filter({ hasText: completedAction.id });
-  await expect(completedGate).toContainText("passed");
-  await expect(completedGate).not.toContainText("rejected");
+  await expect(completedGate).toContainText("failed");
+  await expect(completedGate).not.toContainText("passed");
   const completedTask = graph
     .locator("tr.agent-task-row-physical_action")
     .filter({ hasText: completedAction.id });
   await expect(completedTask).toContainText("completed");
-
-  const rejectedGate = graph
-    .locator("tr.agent-task-row-safety")
-    .filter({ hasText: cancelledAction.id });
-  await expect(rejectedGate).toContainText("rejected");
-  const skippedTask = graph
-    .locator("tr.agent-task-row-physical_action")
-    .filter({ hasText: cancelledAction.id });
-  await expect(skippedTask).toContainText("skipped");
   expectNoConsoleErrors(consoleErrors);
 });
 

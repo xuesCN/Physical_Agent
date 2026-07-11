@@ -156,6 +156,48 @@ def test_forged_gate_feedback_cannot_satisfy_mandatory_gate():
     )
 
 
+def test_recovered_pending_action_does_not_reuse_old_passed_gate():
+    action = _compiled().actions[0]
+    output = materialize_agent_output(
+        _compiled(),
+        actions={
+            "pending": [action],
+            "in_progress": [],
+            "completed": [],
+            "cancelled": [],
+        },
+        feedback={"history": [_gate_event(status="passed", decision="allow")]},
+    )
+    tasks = {task.kind: task for task in output.tasks}
+
+    assert output.status == "waiting_execution"
+    assert tasks["safety_gate"].status == "queued"
+    assert tasks["physical_action"].status == "waiting"
+
+
+def test_pending_action_with_forged_gate_feedback_still_fails_closed():
+    action = _compiled().actions[0]
+    forged = _gate_event(status="passed", decision="allow")
+    forged["actor"] = "agent"
+    output = materialize_agent_output(
+        _compiled(),
+        actions={
+            "pending": [action],
+            "in_progress": [],
+            "completed": [],
+            "cancelled": [],
+        },
+        feedback={"history": [forged]},
+    )
+    gate = next(task for task in output.tasks if task.kind == "safety_gate")
+
+    assert output.status == "failed"
+    assert gate.status == "failed"
+    assert gate.details["projection_error"]["code"] == (
+        "safety.gate.evidence_invalid"
+    )
+
+
 def test_rejected_action_without_approval_or_verification_is_terminal_failed():
     action = Action(
         id="act_optional_approval",

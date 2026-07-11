@@ -172,7 +172,7 @@ test("ActionsPanel renders approval status", () => {
   assert.match(view.lastFrame() ?? "", /approval required/);
 });
 
-test("ActionsPanel renders compiled mandatory SafetyGate tasks and feedback status", () => {
+test("ActionsPanel trusts compiled SafetyGate status over raw feedback", () => {
   const view = render(
     <ActionsPanel
       force
@@ -182,7 +182,7 @@ test("ActionsPanel renders compiled mandatory SafetyGate tasks and feedback stat
           plan: {
             agent_output: {
               schema: "physical-agent/agent-output/v1",
-              status: "waiting_execution",
+              status: "failed",
               decision: "propose",
               lifecycle: "submitted",
               tasks: [
@@ -190,7 +190,7 @@ test("ActionsPanel renders compiled mandatory SafetyGate tasks and feedback stat
                   id: "task:safety_gate:act_001",
                   kind: "safety_gate",
                   owner: "watch",
-                  status: "queued",
+                  status: "failed",
                   action_id: "act_001",
                   depends_on: [],
                   mandatory: true,
@@ -207,7 +207,9 @@ test("ActionsPanel renders compiled mandatory SafetyGate tasks and feedback stat
               event: "safety_gate",
               task_id: "task:safety_gate:act_001",
               action_id: "act_001",
-              status: "passed"
+              status: "passed",
+              decision: "allow",
+              actor: "agent"
             }
           ]
         },
@@ -219,7 +221,8 @@ test("ActionsPanel renders compiled mandatory SafetyGate tasks and feedback stat
   assert.match(frame, /safety_gate/);
   assert.match(frame, /mandatory watch gate/);
   assert.match(frame, /SAFETY.md/);
-  assert.match(frame, /passed/);
+  assert.match(frame, /failed/);
+  assert.doesNotMatch(frame, /passed/);
 });
 
 test("ConfigPanel renders configured robots without exposing secrets", () => {

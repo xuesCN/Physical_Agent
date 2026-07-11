@@ -44,6 +44,19 @@ def materialize_agent_output(
             if _is_authoritative_gate_event(raw_gate_event, task.action_id)
             else None
         )
+        if (
+            action_state == "pending"
+            and gate_event is not None
+            and gate_event.get("status") == "passed"
+            and gate_event.get("decision") == "allow"
+        ):
+            # A claimed action may be recovered to pending after the executor
+            # disappears. Its next claim must run SafetyGate again, so a passed
+            # decision from the abandoned claim cannot satisfy the current
+            # public obligation. Invalid evidence is intentionally not cleared
+            # here and still fails closed below.
+            raw_gate_event = None
+            gate_event = None
         verification_event = latest_verification.get(task.action_id)
         status = task.status
         details = dict(task.details)

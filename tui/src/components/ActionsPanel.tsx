@@ -12,7 +12,7 @@ interface ActionsPanelProps {
 export function ActionsPanel({ state, error, force = false }: ActionsPanelProps) {
   const actions = flattenActions(state);
   const output = agentOutput(state);
-  const tasks = currentTasks(state, output);
+  const tasks = currentTasks(output);
   if (!force && !error && state?.ready && actions.length === 0 && tasks.length === 0) {
     return null;
   }
@@ -67,57 +67,8 @@ function agentOutput(state: AgentState | null): AgentOutput | null {
   return output && typeof output === "object" ? output as AgentOutput : null;
 }
 
-function currentTasks(state: AgentState | null, output: AgentOutput | null): AgentTask[] {
-  const tasks = Array.isArray(output?.tasks) ? output.tasks.map((task) => ({ ...task })) : [];
-  const history = Array.isArray(state?.feedback?.history) ? state.feedback.history : [];
-  const gateStatus = new Map<string, string>();
-  const rejectedGateActions = new Set<string>();
-  for (const event of history) {
-    if (event.event === "safety_gate") {
-      const taskId = typeof event.task_id === "string" ? event.task_id : "";
-      if (taskId) {
-        gateStatus.set(taskId, String(event.status ?? ""));
-      }
-      if (event.status === "rejected" && typeof event.action_id === "string") {
-        rejectedGateActions.add(event.action_id);
-      }
-    }
-  }
-  const completed = new Set((state?.actions?.completed ?? []).map((action) => action.id));
-  const cancelled = new Set((state?.actions?.cancelled ?? []).map((action) => action.id));
-  const inProgress = new Set((state?.actions?.in_progress ?? []).map((action) => action.id));
-  const actions = [
-    ...(state?.actions?.pending ?? []),
-    ...(state?.actions?.in_progress ?? []),
-    ...(state?.actions?.completed ?? []),
-    ...(state?.actions?.cancelled ?? [])
-  ];
-  const approvalStatus = new Map(
-    actions.map((action) => {
-      const approval = action.metadata?.approval as Record<string, unknown> | undefined;
-      return [action.id, String(approval?.status ?? "")] as const;
-    })
-  );
-  return tasks.map((task) => {
-    let status = gateStatus.get(task.id) || task.status;
-    if (task.kind === "physical_action") {
-      const approval = approvalStatus.get(task.action_id);
-      status = cancelled.has(task.action_id)
-        ? rejectedGateActions.has(task.action_id) || approval === "rejected"
-          ? "skipped"
-          : "failed"
-        : completed.has(task.action_id)
-          ? "completed"
-          : inProgress.has(task.action_id)
-            ? "checking"
-            : status;
-    }
-    if (task.kind === "approval") {
-      const approval = approvalStatus.get(task.action_id);
-      status = approval === "approved" ? "completed" : approval === "rejected" ? "rejected" : approval === "pending" ? "requested" : status;
-    }
-    return { ...task, status };
-  });
+function currentTasks(output: AgentOutput | null): AgentTask[] {
+  return Array.isArray(output?.tasks) ? output.tasks : [];
 }
 
 function taskStatusColor(status: string) {

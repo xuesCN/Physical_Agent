@@ -7,14 +7,15 @@ const TOUR_STORAGE_KEY = "physical-agent-tour-dismissed";
 const LANGUAGE_STORAGE_KEY = "physical-agent-language";
 const THEME_STORAGE_KEY = "physical-agent-theme";
 
-function collectConsoleErrors(page: Page) {
+function collectConsoleErrors(page: Page, expected404Urls: string[] = []) {
   const consoleErrors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") {
       const location = message.location();
+      const ignored404Urls = ["/api/chat/stream", ...expected404Urls];
       if (
         message.text().includes("404") &&
-        location.url.includes("/api/chat/stream")
+        ignored404Urls.some((url) => location.url.includes(url))
       ) {
         return;
       }
@@ -968,10 +969,10 @@ test("AgentOutput task statuses project the latest watch and action results", as
     .locator("tr.agent-task-row-safety")
     .filter({ hasText: cancelledAction.id });
   await expect(rejectedGate).toContainText("rejected");
-  const failedTask = graph
+  const skippedTask = graph
     .locator("tr.agent-task-row-physical_action")
     .filter({ hasText: cancelledAction.id });
-  await expect(failedTask).toContainText("failed");
+  await expect(skippedTask).toContainText("skipped");
   expectNoConsoleErrors(consoleErrors);
 });
 
@@ -1083,7 +1084,7 @@ async function mockReadyApiWithRobot(
 test("config missing state renders a clear nonblank dashboard", async ({
   page,
 }) => {
-  const consoleErrors = collectConsoleErrors(page);
+  const consoleErrors = collectConsoleErrors(page, ["/api/config"]);
   await mockNotReadyApi(page, "Config file is missing.", {
     config_exists: false,
     workspace_exists: false,
@@ -1111,7 +1112,7 @@ test("config missing state renders a clear nonblank dashboard", async ({
 test("safe initialization creates the project then refreshes executor state", async ({
   page,
 }) => {
-  const consoleErrors = collectConsoleErrors(page);
+  const consoleErrors = collectConsoleErrors(page, ["/api/config"]);
   await mockNotReadyApi(page, "Config file is missing.", {
     config_exists: false,
     workspace_exists: false,

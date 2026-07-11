@@ -42,7 +42,7 @@
 | W6.1 | workspace watch runtime lease + unique claim-owner CAS/reset guard | 本轮完成 |
 | R0 | 架构减法规格 + GUI/Markdown/streaming 三份退役审计 | `e8750ca` |
 | R1.5 | 正式 Dashboard parity 补缺 + packaged wheel + thin `gui` strangler cutover | `9f3880a`, `2d5e909` |
-| R2 | 删除 legacy controller/server/static/tests/package-data 与 safety allowlist 例外 | 本轮提交 |
+| R2 | 删除 legacy controller/server/static/tests/package-data 与 safety allowlist 例外 | `5764bac` |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -277,7 +277,7 @@ R2 没有再改 `physical-agent gui` 的用户入口：它继续复用正式 `cr
 
 安全边界测试同步移除 legacy controller 对 `WatchRuntime` import 的 allowlist，扫描目录也不再包含不存在的 GUI package；正式 API 只剩 `ApiWatchService` 这个显式 lazy watch composition root。`current-architecture-audit.md/html` 同步重生成，不再把旧 GUI 描述为现行入口。回滚单位仍是整个 R2 删除提交，不需要回退已经独立验证的 R1.5 cutover。
 
-第一次删除后全量回归的 wheel 负断言发现：setuptools 增量 staging 仍残留 `build/lib/physical_agent/gui`，即使源码与 package-data 已删，wheel 仍可能把旧 package 带回。R2 因此把现有 build hook 扩成同时清理陈旧 Dashboard hash 资产与 retired GUI staging，并把“wheel 中不存在 `physical_agent/gui/`”固定为发布负契约。本地最终证据为 Python 405 passed、Safety/API/docs 定向 66 passed、frontend build、TUI 59 tests/typecheck/build 与 clean-wheel smoke；R2 pushed commit 仍需在 draft PR #1 上补真实 Chromium 25/25 后才能进入 R3。
+第一次删除后全量回归的 wheel 负断言发现：setuptools 增量 staging 仍残留 `build/lib/physical_agent/gui`，即使源码与 package-data 已删，wheel 仍可能把旧 package 带回。R2 因此把现有 build hook 扩成同时清理陈旧 Dashboard hash 资产与 retired GUI staging，并把“wheel 中不存在 `physical_agent/gui/`”固定为发布负契约。本地最终证据为 Python 405 passed、Safety/API/docs 定向 66 passed、frontend build、TUI 59 tests/typecheck/build 与 clean-wheel smoke；pushed commit `5764bac` 在 draft PR #1 / CI run `29140290422` 上再次通过 Python full、Safety、TUI、frontend、packaged-wheel 与真实 Chromium 25/25，R2 正式完成。
 
 ## 3. 关键决策与偏离（跨阶段汇总）
 

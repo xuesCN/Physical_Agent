@@ -85,7 +85,7 @@
 
 ## R2 验证 cutover 后删除 legacy GUI
 
-当前状态：实现删除与本地全量回归完成；等待 R2 pushed commit 在 draft PR #1 上再次运行真实 Chromium，绿后才进入 R3。
+当前状态：完成。R2 pushed commit `5764bac` 在 draft PR #1 / CI run `29140290422` 上通过 Python full、Safety、TUI、frontend、packaged-wheel 与真实 Chromium 25/25；可以进入 R3。
 
 - [x] R1.5 thin launcher 已成为默认入口并经过独立提交/验证；删除前 legacy 实现仍可回退但不再被 CLI 使用。
 - [x] launcher 与 wheel/API/核心 e2e 的 cutover 证据全绿后才开始删除。
@@ -96,7 +96,7 @@
 - [x] 删除 legacy package-data，并确认 README/guide 只描述正式 Dashboard。
 - [x] `rg "GuiController|make_server|physical_agent\.gui|gui/static"` 仅允许历史记录。
 - [x] 本地 Python 405 passed、Safety/API/docs 定向 66 passed、frontend build、TUI 59 tests/typecheck/build、clean-wheel smoke 全绿。
-- [ ] R2 pushed commit 的 draft PR #1 真实 Chromium 25/25。
+- [x] R2 pushed commit `5764bac` 的 draft PR #1 真实 Chromium 25/25。
 
 ## R3 Markdown migration / full Workspace 退役
 

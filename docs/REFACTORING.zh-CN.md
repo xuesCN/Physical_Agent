@@ -43,6 +43,8 @@
 | R0 | 架构减法规格 + GUI/Markdown/streaming 三份退役审计 | `e8750ca` |
 | R1.5 | 正式 Dashboard parity 补缺 + packaged wheel + thin `gui` strangler cutover | `9f3880a`, `2d5e909` |
 | R2 | 删除 legacy controller/server/static/tests/package-data 与 safety allowlist 例外 | `5764bac` |
+| R2.1 | canonical projection 收口 + Playwright/wheel 阻塞门禁 | `30e97dd`, `9adaf6c`, `b20ad20` |
+| R3-A | 锁定 SAFETY/LOG sidecar、doctor、audit 与 mirror failure 行为 | `e7f878b` |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -284,6 +286,12 @@ R2 没有再改 `physical-agent gui` 的用户入口：它继续复用正式 `cr
 阶段性 review 发现两个残余分叉：React/TUI 仍从 raw feedback 与 Action Board 自行重算 `AgentTask.status`，可能覆盖服务端 canonical projection；重新回到 `pending` 的 action 也可能复用旧 claim 留下的 canonical `passed/allow` Gate。R2.1 删除两端的状态 overlay，只呈现 application projection；后端仅对 pending action 忽略旧的权威 pass 证据，invalid/forged evidence 仍 fail closed。实现没有新增 attempt/task persistence，也没有改变 watch 的 claim/validate/record/execute 顺序和唯一执行权。
 
 门禁同步收紧：PR Playwright 不再 `continue-on-error`，clean-wheel smoke 直接检查 wheel archive 不含 `physical_agent/gui/`。提交 `30e97dd`、`9adaf6c`、`b20ad20` 经 draft PR #1 / CI run `29146358558` 通过 Python 407 tests、Safety、TUI 59 tests/typecheck/build、frontend production build、packaged-wheel smoke 与真实 Chromium 25/25。按用户约定，`current-architecture-audit.md/html` 与 `system-summary.zh-CN.md` 保持个人阶段快照，本轮不把它们纳入 current-doc closure。R2.1 完成，下一阶段进入 R3-A，先锁 safety/log sidecar 行为再迁移生产路径。
+
+### R3-A：锁定 safety/log sidecar 行为
+
+R3-A 先不抽 adapter，也不删除 migrator/full Workspace，而是新增 `tests/test_sidecar_behavior.py`，从 SQLite runtime 的公开行为锁定 SAFETY 默认与人工覆盖、front matter/revision/malformed、LOG 初始化/actor/UTC timestamp/revision/并发 append/SQLite 双写、普通 init 与 overwrite/reset、doctor 逻辑文档检查及 audit 的“复制 SAFETY、LOG JSON 只读 SQLite”边界。LOG mirror 写失败或 malformed 的正式契约是：SQLite 日志先提交且不回滚，调用点显式失败；doctor 对 malformed 或文件/SQLite revision 分叉持续 fail closed。为此 StateStore 增加只读 `validate_log_mirror()` 契约，doctor 不再自行只检查“能否 parse”，而是同时验证 log schema 与 canonical revision。
+
+16 路并发 behavior test 随即发现一个既有竞态：每条 `log_entries` 都能保留，但多个 append 会读取同一个 `doc_state` revision，最终 SQLite revision 可能停在 2，而文件镜像已到 17。修复是在 `append_log()` 中用 `BEGIN IMMEDIATE` 把 revision 分配、日志插入与 metadata upsert 串成同一事务；这与既有 atomic feedback append 纪律一致，没有改变 SQLite 为真源、LOG 为人类镜像的边界。提交 `e7f878b` 的 R3-A 定向 12 tests、相关状态/API/安全回归 91 tests 与全量 Python `416 passed, 1 warning` 均通过。下一步 R3-B 才把这些已锁行为迁入聚焦 sidecar adapter；本轮未触碰用户保留的阶段快照。
 
 ## 3. 关键决策与偏离（跨阶段汇总）
 

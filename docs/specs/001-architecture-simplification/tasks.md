@@ -114,14 +114,14 @@
 
 ### R3-A 先锁现有 sidecar 行为
 
-- [ ] 把 `tests/test_workspace.py` 中 LOG mirror 行为迁到聚焦的 sidecar behavior tests。
-- [ ] 把 `tests/test_markdown_protocol.py` 中 SAFETY/front-matter 必要行为迁到 sidecar tests；task/action/capabilities/feedback roundtrip 暂不删。
-- [ ] 锁定 SAFETY 默认值/覆盖值/front matter/revision/malformed 行为。
-- [ ] 锁定 LOG 初始化/actor/timestamp/revision/进程内并发 append/SQLite 双写行为。
-- [ ] 锁定普通 init 不覆盖人工 SAFETY/现有 LOG；overwrite/reset 恢复默认 SAFETY 并清 LOG。
-- [ ] 定义并锁定 LOG mirror 写失败或 malformed 时的契约：SQLite log 真源不得回滚/丢失，doctor 必须给出可诊断失败。
-- [ ] 锁定 doctor 的逻辑文档检查和 LOG front-matter 校验。
-- [ ] 锁定 audit export：复制 SAFETY；LOG JSON 只来自 SQLite。
+- [x] 把 `tests/test_workspace.py` 中 LOG mirror 行为迁到聚焦的 sidecar behavior tests。
+- [x] 把 `tests/test_markdown_protocol.py` 中 SAFETY/front-matter 必要行为迁到 sidecar tests；task/action/capabilities/feedback roundtrip 暂不删。
+- [x] 锁定 SAFETY 默认值/覆盖值/front matter/revision/malformed 行为。
+- [x] 锁定 LOG 初始化/actor/timestamp/revision/进程内并发 append/SQLite 双写行为。
+- [x] 锁定普通 init 不覆盖人工 SAFETY/现有 LOG；overwrite/reset 恢复默认 SAFETY 并清 LOG。
+- [x] 定义并锁定 LOG mirror 写失败或 malformed 时的契约：SQLite log 真源不得回滚/丢失，doctor 必须给出可诊断失败。
+- [x] 锁定 doctor 的逻辑文档检查和 LOG front-matter 校验。
+- [x] 锁定 audit export：复制 SAFETY；LOG JSON 只来自 SQLite。
 
 ### R3-B sidecar 接管生产路径
 

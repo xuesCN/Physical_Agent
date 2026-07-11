@@ -12,7 +12,6 @@ SCAN_DIRS = [
     ROOT / "physical_agent" / "application",
     ROOT / "physical_agent" / "agent",
     ROOT / "physical_agent" / "llm",
-    ROOT / "physical_agent" / "gui",
     ROOT / "physical_agent" / "api",
     ROOT / "physical_agent" / "mcp",
 ]
@@ -28,15 +27,10 @@ ALLOWLIST_REASONS = {
         "import",
         "physical_agent.watch.runtime",
     ): "The API watch service is the single lazy composition root for the explicitly enabled background watch loop.",
-    (
-        "physical_agent/gui/controller.py",
-        "import",
-        "physical_agent.watch.runtime",
-    ): "The legacy GUI controller is an explicit watch-owning composition root; no other GUI module may import watch.",
 }
 
 
-def test_agent_llm_gui_api_do_not_cross_execution_boundary():
+def test_agent_llm_api_do_not_cross_execution_boundary():
     findings = []
     for directory in SCAN_DIRS:
         for path in directory.rglob("*.py"):

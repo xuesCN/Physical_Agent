@@ -47,7 +47,6 @@ physical-agent = "physical_agent.cli:app"
 include = ["physical_agent*"]
 
 [tool.setuptools.package-data]
-"physical_agent.gui" = ["static/*"]
 "physical_agent.dashboard" = ["dist/*", "dist/**/*"]
 
 [tool.pytest.ini_options]

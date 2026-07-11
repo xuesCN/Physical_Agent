@@ -1,7 +1,7 @@
 # 重构过程
 
 > 本文浓缩自原 33 份 session-handoff 与 22 份 brief（已删除，git 历史可查）。姊妹文档：`SPEC.zh-CN.md`（目标与待办矩阵）。
-> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-10。
+> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-11。
 
 ## 0. 基线与纪律
 
@@ -41,7 +41,8 @@
 | VNext-2b | Proposal actions batch 单事务 all-or-nothing | 本轮完成 |
 | W6.1 | workspace watch runtime lease + unique claim-owner CAS/reset guard | 本轮完成 |
 | R0 | 架构减法规格 + GUI/Markdown/streaming 三份退役审计 | `e8750ca` |
-| R1.5 | 正式 Dashboard parity 补缺 + packaged wheel + thin `gui` strangler cutover | 本轮提交（R2 仍 No-Go） |
+| R1.5 | 正式 Dashboard parity 补缺 + packaged wheel + thin `gui` strangler cutover | `9f3880a`, `2d5e909` |
+| R2 | 删除 legacy controller/server/static/tests/package-data 与 safety allowlist 例外 | 本轮提交 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -268,6 +269,16 @@ React/TUI 统一消费 executor projection，不再把 `watch_enabled` 染成“
 
 测试迁移包括 FastAPI LLM driver model override/生成结果、无 watch 的 execution mode、初始化/executor/external lease/standby/fail-stop、thin launcher/browser readiness、wheel exact contents，以及 Playwright 的 mock stream fence → draft card → 真实 `/api/actions/propose` → 独立 `/api/state` pending 主链。最终本地证据：Python 3.12 `419 passed`（1 个既有 Starlette/httpx 弃用 warning），frontend production build 通过，TUI typecheck/test/build 通过（59 tests），clean-wheel 双 venv smoke 通过，Playwright 可发现 25 项。真实 Playwright 尚未运行：普通与放宽沙盒两次从官方 CDN 都得到 0 MiB 截断 Chromium zip。因此 cutover 可以提交，legacy GUI 仍保留且 R2 删除继续 No-Go，需 pushed commit 的 CI/可用浏览器环境补绿后再进入下一步。
 
+R1.5 的独立门禁随后由 draft PR #1 补齐。第一轮真实 Chromium 已成功安装并跑出 22/25：它抓到 Gate reject 后 physical task 的过期 `failed` 预期（正式 projection 语义是 `skipped`），以及 missing-config 时两次预期 `/api/config` 404 被通用 console-error 断言误判；同轮还暴露 GitHub Python 3.12 runner 不再隐式提供 `setuptools`/`wheel`，而本项目的 `--no-isolation` wheel 测试需要完整 build-system 工具链。`2d5e909` 只修正这三类验收/环境契约，第二轮 CI run `29139972352` 的 Python full、Safety、TUI、frontend、clean-wheel 与真实 Chromium 25/25 全绿，R2 才由 No-Go 转为 Go。
+
+### R2：删除 legacy GUI 实现
+
+R2 没有再改 `physical-agent gui` 的用户入口：它继续复用正式 `create_app()`，默认 embedded watch，并保留 `--no-watch`/host/port/no-open。删除的是第二套实现与第二套事实来源：`physical_agent/gui/` 的 controller、标准库 HTTP server、static HTML/JS/CSS，全套 `test_gui_server.py`/`test_gui_static_contract.py`，以及 wheel 的 `physical_agent.gui` package-data。此前迁移到 FastAPI/React 的 LLM integrate、初始化、executor、execution mode、draft→pending、i18n、reset 和正式 route 负用例继续保留。
+
+安全边界测试同步移除 legacy controller 对 `WatchRuntime` import 的 allowlist，扫描目录也不再包含不存在的 GUI package；正式 API 只剩 `ApiWatchService` 这个显式 lazy watch composition root。`current-architecture-audit.md/html` 同步重生成，不再把旧 GUI 描述为现行入口。回滚单位仍是整个 R2 删除提交，不需要回退已经独立验证的 R1.5 cutover。
+
+第一次删除后全量回归的 wheel 负断言发现：setuptools 增量 staging 仍残留 `build/lib/physical_agent/gui`，即使源码与 package-data 已删，wheel 仍可能把旧 package 带回。R2 因此把现有 build hook 扩成同时清理陈旧 Dashboard hash 资产与 retired GUI staging，并把“wheel 中不存在 `physical_agent/gui/`”固定为发布负契约。本地最终证据为 Python 405 passed、Safety/API/docs 定向 66 passed、frontend build、TUI 59 tests/typecheck/build 与 clean-wheel smoke；R2 pushed commit 仍需在 draft PR #1 上补真实 Chromium 25/25 后才能进入 R3。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -361,5 +372,6 @@ React/TUI 统一消费 executor projection，不再把 `watch_enabled` 染成“
 - **兼容字段存在不代表已经有独立新通道**（R0 的教训）：stream done 内部已有 `agent_output`，但它仍由 fence 反解析且 API 丢弃；判断迁移完成要追 producer→transport→consumer→persistence 的事实来源，而不是只看 schema 名称。
 - **带 hash 的前端产物要防增量构建残留**（R1.5 的教训）：只让 Vite `emptyOutDir` 不够，setuptools 的 `build/lib` 仍可能保存旧 chunk；wheel 测试必须比较资源全集，而不是只断言“有 index 和任意 asset”。
 - **浏览器验收不可用 discovery 冒充 runtime**（R1.5 的教训）：`playwright --list` 能抓语法/发现问题，但不能证明 route handler、SSE 与 DOM 交互实际成立；浏览器二进制不可用时应保留删除 No-Go，而不是为了收工勾绿。
+- **源码删除不等于发布物删除**（R2 的教训）：setuptools 增量 staging 会保留已经从源码树移除的 package；退役模块必须增加 wheel member 负断言，并在 build hook 中清理对应 staging 目录。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

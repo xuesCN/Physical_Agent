@@ -198,25 +198,6 @@ def test_gui_cli_missing_server_extra_has_actionable_message(tmp_path, monkeypat
     assert ".[server]" in result.output
 
 
-def test_importing_cli_does_not_import_legacy_gui_package():
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import sys; import physical_agent.cli; "
-                "assert 'physical_agent.gui' not in sys.modules"
-            ),
-        ],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert completed.returncode == 0, completed.stderr
-
-
 def test_dashboard_resource_path_is_package_local():
     assert dashboard_dist_path() == ROOT / "physical_agent" / "dashboard" / "dist"
 
@@ -257,3 +238,4 @@ def test_wheel_contains_dashboard_index_and_hashed_assets(tmp_path):
         if path.is_file()
     }
     assert packaged_dashboard == source_dashboard
+    assert not any(member.startswith("physical_agent/gui/") for member in members)

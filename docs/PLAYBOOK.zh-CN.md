@@ -16,7 +16,7 @@
 
 **冻结**：R0-R8 完成前，VNext-3/4、W4/W5/W6.2、F0 后续、F5/F6、B4-vec、registry/read-model 新能力与自动 replan 均不实施。原因是先消除第二 GUI、旧 workspace、兼容 fence 和重复 wire/read model，再判断是否真的需要新增持久化或硬件能力。
 
-**验收**：每个删除项都有前置正反测试或替代入口；双轨有独立一轮证据；wheel 安装后能启动同一 React Dashboard；全量 pytest、frontend build/e2e、TUI build/test、安全扫描与 docs/CLI grep 全绿。R0 已完成；R1.5 正式栈补缺、thin launcher 和 clean-wheel smoke 已实现，legacy 实现仍作为回退保留。当前提交尚缺真实 Chromium Playwright 运行（本环境官方包下载为 0 MiB 截断 zip），因此只允许提交 cutover，不允许进入 R2 删除。
+**验收**：每个删除项都有前置正反测试或替代入口；双轨有独立一轮证据；wheel 安装后能启动同一 React Dashboard；全量 pytest、frontend build/e2e、TUI build/test、安全扫描与 docs/CLI grep 全绿。R0 已完成；R1.5 正式栈补缺、thin launcher 与 clean-wheel smoke 经 draft PR #1 / `2d5e909` 独立验证，真实 Chromium 25/25。R2 随后删除 legacy controller/server/static/tests/package-data 与 safety allowlist 例外，保留 `physical-agent gui` 命令作为正式 FastAPI + React launcher。
 
 ## F0 LLM planner 实验
 

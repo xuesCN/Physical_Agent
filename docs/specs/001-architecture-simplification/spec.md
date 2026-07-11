@@ -1,6 +1,6 @@
 # 001：架构减法与兼容面退役
 
-状态：执行中（R0 完成；R1.5 cutover 已实现、浏览器门禁待补；R2 删除 No-Go）
+状态：执行中（R0、R1.5 完成；R2 legacy GUI 已删除、最终回归中）
 
 日期：2026-07-10
 
@@ -22,7 +22,7 @@
   -> React / TUI / API / MCP
 ```
 
-R1.5 只完成正式栈补缺与 strangler cutover，不删除 legacy 实现。只有当前提交的真实浏览器验收和独立 cutover 验证都通过后，才允许进入 R2 删除。
+R1.5 只完成正式栈补缺与 strangler cutover，不在同一提交删除 legacy 实现。draft PR #1 已在 `2d5e909` 上取得独立 wheel/API/Python/TUI 与真实 Chromium 25/25 证据，R2 随后才删除 legacy 实现。
 
 ## 1. 不可破坏的边界
 

@@ -25,30 +25,30 @@
 
 ## R1.5 legacy GUI parity checklist
 
-当前状态：正式栈缺口和 thin-launcher cutover 已实现，legacy 实现仍完整保留。当前提交的 Python、TUI、frontend build 与 clean-wheel smoke 已通过；Playwright 用例已补齐且可发现，但本环境从官方 CDN 得到的是 0 MiB 截断 Chromium 包，尚无当前提交的真实浏览器运行证据。因此 R2 删除门禁继续 **No-Go**。
+当前状态：正式栈缺口和 thin-launcher cutover 已实现并经独立 PR 验证。draft PR #1 在 `2d5e909` 上完成真实 Chromium 25/25；Python full、Safety、TUI、frontend build 与 clean-wheel smoke 同轮全绿。R1.5 删除门禁已经通过，R2 已获准执行。
 
 ### 端点与用户能力矩阵
 
 | Legacy surface | 用户能力 | 正式栈现状 | 决定 | 删除前证据 |
 | --- | --- | --- | --- | --- |
 | `GET /`, `/static/*` | 打开本地 GUI | FastAPI `/` 从 package resource 托管 React build | 保留并补齐 | [x] clean wheel `/` + hashed assets；[x] thin `gui` launcher |
-| `GET /api/state` | 状态、world、actions、feedback、safety、chat、plan、memory | FastAPI 同名 API 字段更多 | 保留 | [x] API state + Dashboard contracts；[ ] 当前提交浏览器全套 |
+| `GET /api/state` | 状态、world、actions、feedback、safety、chat、plan、memory | FastAPI 同名 API 字段更多 | 保留 | [x] API state + Dashboard contracts；[x] 当前提交浏览器全套 |
 | `GET /api/doctor` | Python/config/workspace/driver 诊断 | `/api/state-check` 只覆盖 state backend | 有意退役 browser doctor | [x] README/UI 指向 `physical-agent doctor`；[x] doctor 回归 |
-| `POST /api/setup` | 首次建 config/workspace、发布能力、连接 watch | 新 `/api/project/initialize` 只初始化，不连接 watch | 补安全初始化；不连接 watch | [x] missing/empty/invalid/并发 API；[x] Playwright case；[ ] 浏览器实跑 |
+| `POST /api/setup` | 首次建 config/workspace、发布能力、连接 watch | 新 `/api/project/initialize` 只初始化，不连接 watch | 补安全初始化；不连接 watch | [x] missing/empty/invalid/并发 API；[x] Playwright case；[x] 浏览器实跑 |
 | `POST /api/setup {force:true}` | 覆写 YAML、清 state、重连 watch | `/api/workspace/reset` 清 state、保留 YAML、active lease 拒绝 | 用安全 reset 替代 | [x] UI 文案；[x] 409 lease；[x] `setup --force` 指针 |
 | `POST /api/watch/start` | GUI 启动 watch | 正式进程生命周期 + executor projection | 有意退役 UI 控制 | [x] operator 命令；[x] embedded/external/none/waiting health |
 | `POST /api/watch/stop` | GUI 停止 watch（旧页面无按钮） | 停止正式 watch/API 进程 | 有意退役 UI 控制 | [x] operator 命令/停止语义 |
 | `POST /api/watch/step` | 手动执行一轮 | 无 | 有意退役 | [x] legacy routes 404 负用例；[x] watch 回归 |
 | `POST /api/task` | task → pending proposal | `/api/tasks/submit` + ProposalPanel | 已覆盖 | [x] canonical `agent_output.actions` API/UI contracts |
-| `POST /api/chat` | chat | `/api/chat` + `/api/chat/stream` | 已覆盖；步骤 5 才新增结构化通道 | [x] fence stream → card → real propose/state Playwright case；[ ] 浏览器实跑 |
+| `POST /api/chat` | chat | `/api/chat` + `/api/chat/stream` | 已覆盖；步骤 5 才新增结构化通道 | [x] fence stream → card → real propose/state Playwright case；[x] 浏览器实跑 |
 | chat planner selector | 每条消息选 auto/llm/rules | React 固定 auto | 有意退役 UI selector | [x] Settings 仅配 provider/model；[x] CLI `chat --planner` 文档 |
 | chat auto-step | reply 后推进 watch | Dashboard/API 不提供；CLI 兼容残余留到 R4 | Dashboard 侧退役 | [-] 正式 Dashboard 负用例；R4 仍按原顺序单独退役 CLI 形状 |
 | browser code skill | chat 改本地代码并展示 `code_result` | FastAPI 显式关闭 | 有意退役 | [x] `chat --show-code-result` 指针；[x] API-safe runtime 测试 |
 | `POST /api/integrate` | scaffold/LLM driver 生成、model override | FastAPI + HardwarePanel 已覆盖并增强 | 保留 | [x] FastAPI LLM/model override/生成结果测试 |
 | `POST /api/demo` | hard-coded mock pick/place + 两步执行 | 无；CLI smoke-test 替代 | 有意退役 | [x] `setup --smoke-test` 文案和回归；[x] `/api/demo` 404 |
-| language toggle | 中英文 | React i18n + AntD locale | 已覆盖 | [x] 既有 i18n Playwright contract；[ ] 当前提交浏览器全套 |
+| language toggle | 中英文 | React i18n + AntD locale | 已覆盖 | [x] 既有 i18n Playwright contract；[x] 当前提交浏览器全套 |
 | runtime mode | mock/hardware/confirmation/driver mode | config + executor/capability 分层展示 | 补 config mode + health | [x] watch 未运行时 hardware/simulation API + Playwright case |
-| world/timeline/system | world、robots、objects、actions/feedback、raw details | React 已产品化，信息架构不同 | 已覆盖/增强 | [x] 既有 Overview/Actions/Events/Safety cases；[ ] 当前提交浏览器全套 |
+| world/timeline/system | world、robots、objects、actions/feedback、raw details | React 已产品化，信息架构不同 | 已覆盖/增强 | [x] 既有 Overview/Actions/Events/Safety cases；[x] 当前提交浏览器全套 |
 | hardware result | generated files、validation、next steps | React 展示更多且可注册 robot | 已覆盖/增强 | [x] scaffold/register API/e2e contract；[x] LLM generation API |
 | refresh | 重读当前状态 | SSE + executor heartbeat + refresh/fallback | 已覆盖/增强 | [x] SSE EOF/fallback/TUI tests；[x] lease heartbeat event test |
 | `/api/config`, `/api/config/robots` | 查看有效配置、注册 robot | ConfigPanel/HardwarePanel 正式能力 | 正式栈保留 | [x] read/register/duplicate/invalid API + e2e contracts |
@@ -80,20 +80,23 @@
 - [x] browser code skill 替代为 `physical-agent chat --show-code-result`，不暗示 Settings 能启用。
 - [x] Python 全量、frontend build、TUI typecheck/test、wheel content/clean-venv smoke 已通过。
 - [x] Playwright 当前提交可发现 25 个用例。
-- [ ] 在可下载 Chromium 的环境实际运行当前提交 Playwright 全套并留 CI/人工证据。
-- [ ] 上述浏览器门禁通过后，才能把 parity 表视为最终全绿并进入 R2 删除。
+- [x] draft PR #1 / CI run `29139972352` 在 `2d5e909` 上真实运行 Chromium：25/25。
+- [x] parity 表最终全绿，R2 删除门禁通过。
 
 ## R2 验证 cutover 后删除 legacy GUI
 
-- [ ] R1.5 thin launcher 已成为默认入口并经过独立提交/验证；legacy 实现仍可回退但不再被 CLI 使用。
-- [ ] launcher 与 wheel/API/核心 e2e 的 cutover 证据全绿后才开始删除。
-- [ ] 更新安全 allowlist，删除 `physical_agent/gui/controller.py` 例外。
-- [ ] 删除 `physical_agent/gui/__init__.py`、`controller.py`、`server.py`、`static/*`。
-- [ ] 删除 `tests/test_gui_server.py`；有价值用例已在正式栈落地后才允许删除。
-- [ ] 删除 `tests/test_gui_static_contract.py`；正式 React contract/e2e 已覆盖后才允许删除。
-- [ ] 删除 legacy package-data 和 README/guide 启动口径。
-- [ ] `rg "GuiController|make_server|physical_agent\.gui|gui/static"` 仅允许历史记录。
-- [ ] Python safety/API tests、frontend build/e2e、wheel smoke 全绿。
+当前状态：实现删除与本地全量回归完成；等待 R2 pushed commit 在 draft PR #1 上再次运行真实 Chromium，绿后才进入 R3。
+
+- [x] R1.5 thin launcher 已成为默认入口并经过独立提交/验证；删除前 legacy 实现仍可回退但不再被 CLI 使用。
+- [x] launcher 与 wheel/API/核心 e2e 的 cutover 证据全绿后才开始删除。
+- [x] 更新安全 allowlist，删除 `physical_agent/gui/controller.py` 例外。
+- [x] 删除 `physical_agent/gui/__init__.py`、`controller.py`、`server.py`、`static/*`。
+- [x] 删除 `tests/test_gui_server.py`；有价值用例已先迁到正式栈。
+- [x] 删除 `tests/test_gui_static_contract.py`；正式 React contract/e2e 已覆盖。
+- [x] 删除 legacy package-data，并确认 README/guide 只描述正式 Dashboard。
+- [x] `rg "GuiController|make_server|physical_agent\.gui|gui/static"` 仅允许历史记录。
+- [x] 本地 Python 405 passed、Safety/API/docs 定向 66 passed、frontend build、TUI 59 tests/typecheck/build、clean-wheel smoke 全绿。
+- [ ] R2 pushed commit 的 draft PR #1 真实 Chromium 25/25。
 
 ## R3 Markdown migration / full Workspace 退役
 

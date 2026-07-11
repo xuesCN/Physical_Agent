@@ -100,15 +100,15 @@
 
 ## R2.1 canonical projection 与门禁 review fix
 
-- [ ] React 删除从 raw feedback/Action Board 二次推断 AgentTask status 的逻辑，只呈现服务端 canonical projection。
-- [ ] TUI 删除同类二次推断逻辑，只呈现服务端 canonical projection。
-- [ ] React/TUI 增加 forged/incomplete Gate feedback 负例：后端 task=`failed` 时不得显示成 `passed`。
-- [ ] backend projection 对重新处于 `pending` 的 action 忽略旧 canonical `passed/allow` Gate 事件；invalid/forged evidence 仍 fail closed。
-- [ ] 不新增 attempt/task persistence；watch claim/validate/record/execute 顺序与唯一执行权保持不变。
-- [ ] PR Playwright 移除 `continue-on-error`，R0-R8 期间作为阻塞门禁。
-- [ ] clean-wheel smoke 直接断言 archive 不含 `physical_agent/gui/`。
-- [ ] 用户指定的 `current-architecture-audit.md/html` 与 `system-summary.zh-CN.md` 保持阶段快照，不在本轮改写。
-- [ ] frontend build/e2e、TUI test/typecheck/build、Python projection/safety tests、wheel smoke 全绿。
+- [x] React 删除从 raw feedback/Action Board 二次推断 AgentTask status 的逻辑，只呈现服务端 canonical projection。
+- [x] TUI 删除同类二次推断逻辑，只呈现服务端 canonical projection。
+- [x] React/TUI 增加 forged/incomplete Gate feedback 负例：后端 task=`failed` 时不得显示成 `passed`。
+- [x] backend projection 对重新处于 `pending` 的 action 忽略旧 canonical `passed/allow` Gate 事件；invalid/forged evidence 仍 fail closed。
+- [x] 不新增 attempt/task persistence；watch claim/validate/record/execute 顺序与唯一执行权保持不变。
+- [x] PR Playwright 移除 `continue-on-error`，R0-R8 期间作为阻塞门禁。
+- [x] clean-wheel smoke 直接断言 archive 不含 `physical_agent/gui/`。
+- [x] 用户指定的 `current-architecture-audit.md/html` 与 `system-summary.zh-CN.md` 保持阶段快照，不在本轮改写。
+- [x] frontend build/e2e、TUI test/typecheck/build、Python projection/safety tests、wheel smoke 全绿（PR #1 CI run `29146358558`）。
 
 ## R3 Markdown migration / full Workspace 退役
 

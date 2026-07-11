@@ -279,6 +279,12 @@ R2 没有再改 `physical-agent gui` 的用户入口：它继续复用正式 `cr
 
 第一次删除后全量回归的 wheel 负断言发现：setuptools 增量 staging 仍残留 `build/lib/physical_agent/gui`，即使源码与 package-data 已删，wheel 仍可能把旧 package 带回。R2 因此把现有 build hook 扩成同时清理陈旧 Dashboard hash 资产与 retired GUI staging，并把“wheel 中不存在 `physical_agent/gui/`”固定为发布负契约。本地最终证据为 Python 405 passed、Safety/API/docs 定向 66 passed、frontend build、TUI 59 tests/typecheck/build 与 clean-wheel smoke；pushed commit `5764bac` 在 draft PR #1 / CI run `29140290422` 上再次通过 Python full、Safety、TUI、frontend、packaged-wheel 与真实 Chromium 25/25，R2 正式完成。
 
+### R2.1：canonical projection 与删除门禁 review fix
+
+阶段性 review 发现两个残余分叉：React/TUI 仍从 raw feedback 与 Action Board 自行重算 `AgentTask.status`，可能覆盖服务端 canonical projection；重新回到 `pending` 的 action 也可能复用旧 claim 留下的 canonical `passed/allow` Gate。R2.1 删除两端的状态 overlay，只呈现 application projection；后端仅对 pending action 忽略旧的权威 pass 证据，invalid/forged evidence 仍 fail closed。实现没有新增 attempt/task persistence，也没有改变 watch 的 claim/validate/record/execute 顺序和唯一执行权。
+
+门禁同步收紧：PR Playwright 不再 `continue-on-error`，clean-wheel smoke 直接检查 wheel archive 不含 `physical_agent/gui/`。提交 `30e97dd`、`9adaf6c`、`b20ad20` 经 draft PR #1 / CI run `29146358558` 通过 Python 407 tests、Safety、TUI 59 tests/typecheck/build、frontend production build、packaged-wheel smoke 与真实 Chromium 25/25。按用户约定，`current-architecture-audit.md/html` 与 `system-summary.zh-CN.md` 保持个人阶段快照，本轮不把它们纳入 current-doc closure。R2.1 完成，下一阶段进入 R3-A，先锁 safety/log sidecar 行为再迁移生产路径。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。

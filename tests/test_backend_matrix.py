@@ -90,10 +90,25 @@ def test_load_config_rejects_legacy_markdown_workspace_when_backend_omitted(tmp_
     message = str(exc_info.value)
     assert "migrate-md-to-sqlite" in message
     assert "workspace.backend: sqlite" in message
+    assert "9072b4e9fb600e505668aeb6076eb6cb85e5ff82" in message
+    assert "without `--force`" in message
     assert message == RETIRED_MARKDOWN_BACKEND_GUIDANCE
 
     with pytest.raises(ValueError, match="migrate-md-to-sqlite"):
         open_state_store(config_path=config_path)
+
+
+def test_load_config_does_not_misclassify_incomplete_legacy_file_set(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    del data["workspace"]["backend"]
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    Workspace(tmp_path / "workspace").initialize()
+    (tmp_path / "workspace" / "MEMORY.md").unlink()
+
+    config = load_config(config_path)
+
+    assert config.workspace.backend == "sqlite"
 
 
 def test_load_config_keeps_sqlite_default_without_legacy_markdown_workspace(tmp_path):

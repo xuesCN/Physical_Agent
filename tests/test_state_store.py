@@ -64,6 +64,9 @@ def test_open_state_store_rejects_explicit_markdown_backend(tmp_path):
     message = str(exc_info.value)
     assert "migrate-md-to-sqlite" in message
     assert "workspace.backend: sqlite" in message
+    assert "9072b4e9fb600e505668aeb6076eb6cb85e5ff82" in message
+    assert "independent git worktree" in message
+    assert "do not use the historical `--overwrite`" in message
 
     config = PhysicalAgentConfig.model_validate(
         {"workspace": {"path": "./workspace", "backend": "markdown"}}

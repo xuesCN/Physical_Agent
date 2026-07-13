@@ -12,9 +12,17 @@ from pydantic import BaseModel, Field
 DEFAULT_CONFIG_NAME = "physical-agent.yaml"
 RETIRED_MARKDOWN_BACKEND_GUIDANCE = (
     "Runtime Markdown backend has been retired. This workspace cannot be "
-    "opened as an active backend. To convert a legacy Markdown workspace, run "
-    "`physical-agent migrate-md-to-sqlite --config physical-agent.yaml`, then "
-    "set `workspace.backend: sqlite` in physical-agent.yaml."
+    "opened as an active backend. To rescue it, create an independent git "
+    "worktree at historical commit "
+    "`9072b4e9fb600e505668aeb6076eb6cb85e5ff82`, install and invoke that "
+    "checkout's `physical-agent migrate-md-to-sqlite --config "
+    "physical-agent.yaml`, then set `workspace.backend: sqlite` manually. "
+    "Do not use the upgraded current executable as the historical migrator. "
+    "If workspace/state.db already exists, back it up and do not use the "
+    "historical `--overwrite` option unless replacement is intentional. "
+    "Return to the current version and run `physical-agent init --config "
+    "physical-agent.yaml` without `--force`, followed by `physical-agent "
+    "state-check --config physical-agent.yaml`."
 )
 LEGACY_MARKDOWN_WORKSPACE_FILES = (
     "TASK.md",

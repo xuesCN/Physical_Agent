@@ -10,7 +10,7 @@
 | 1.5 | legacy GUI parity + 缺口补齐 + launcher strangler cutover | ✅ PR #1 / `2d5e909` 验证完成 | 所有保留能力已覆盖；有意退役项有替代说明；thin launcher/wheel smoke + 当前提交 Playwright 全绿 |
 | 2 | 验证 cutover 后删除 legacy GUI | ✅ `5764bac` / PR #1 全绿 | React/FastAPI 成为唯一 GUI；安全/主路径回归通过 |
 | 2.1 | canonical projection 与删除门禁 review fix | ✅ `b20ad20` / PR #1 全绿 | React/TUI 不再二次推断 Gate；pending 不复用旧 passed Gate；PR e2e/wheel 负门禁阻塞 |
-| 3 | 退役 Markdown migration，缩成 safety/log sidecar | 🟡 R3-A `e7f878b` 完成；下一步 R3-B | sidecar 行为等价；旧目录仍 fail closed；救援指针可执行 |
+| 3 | 退役 Markdown migration，缩成 safety/log sidecar | 🟡 R3-A `e7f878b`、R3-B `a64be59` 完成；下一步 R3-C | sidecar 行为等价；旧目录仍 fail closed；救援指针可执行 |
 | 4 | 删除 `auto_step` 与 embedded watch composition | ⚪ | 所有 proposal/chat 入口不拥有 watch；正式 watch 命令不受影响 |
 | 5 | 结构化 Chat Turn + `action-draft` 双轨 | ⚪ | 独立一轮验证 structured/fence 一致，F1 主链与旧 fallback 全绿 |
 | 6 | 收敛 application/read-model 职责和官方消费者 | ⚪ | `_append_actions` 等死代码为零；消费者只读 canonical projection/output |

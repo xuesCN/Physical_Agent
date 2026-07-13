@@ -125,13 +125,14 @@
 
 ### R3-B sidecar 接管生产路径
 
-- [ ] 新 `state/sidecars.py`（最终命名可调整）只负责 safety policy + log mirror。
-- [ ] `SqliteStateStore` 不再 import/reference/instantiate `protocol.workspace.Workspace`。
-- [ ] 把 `SqliteStateStore.filenames = Workspace.filenames` 改成 state 层自己的逻辑文档名常量。
-- [ ] sidecar 只持有 `SAFETY.md`/`LOG.md` 文件名，不缩减 SQLite 的 task/capabilities/world/actions/feedback/chat/plan/memory 逻辑文档集合。
-- [ ] doctor 继续检查 task/capabilities/world/actions/feedback/chat/plan/memory，并只对 LOG 做 front-matter 文件校验。
-- [ ] `SqliteStateStore`、doctor、audit export 全部切到新 adapter。
-- [ ] `rg "from physical_agent.protocol.workspace import Workspace|Workspace\.filenames|_file_workspace" physical_agent/state physical_agent/doctor.py` 为零。
+- [x] 新 `state/sidecars.py` 只负责 safety policy + log mirror。
+- [x] `SqliteStateStore` 不再 import/reference/instantiate `protocol.workspace.Workspace`。
+- [x] 把 `SqliteStateStore.filenames = Workspace.filenames` 改成 state 层自己的逻辑文档名常量。
+- [x] sidecar 只持有 `SAFETY.md`/`LOG.md` 文件名，不缩减 SQLite 的 task/capabilities/world/actions/feedback/chat/plan/memory 逻辑文档集合。
+- [x] doctor 继续检查 task/capabilities/world/actions/feedback/chat/plan/memory，并只对 LOG 做 front-matter/revision 文件校验。
+- [x] `SqliteStateStore`、doctor、audit export 全部切到新 adapter。
+- [x] `rg "from physical_agent.protocol.workspace import Workspace|Workspace\.filenames|_file_workspace" physical_agent/state/sqlite.py physical_agent/doctor.py` 为零。
+- [-] 更宽的 `physical_agent/state` grep 仍只命中 migration-only `legacy_markdown.py` 两处；必须等 R3-C rescue gate 后随 R3-D 删除，不能为字面归零提前隐藏依赖。
 
 ### R3-C 先固化 legacy 防护与真实救援 smoke
 

@@ -46,14 +46,6 @@ def render_front_matter(metadata: dict[str, Any], body: str) -> str:
     return f"---\n{front}\n---\n\n{clean_body.rstrip()}\n"
 
 
-def extract_yaml_blocks(body: str) -> list[Any]:
-    blocks: list[Any] = []
-    for match in YAML_BLOCK_RE.finditer(body):
-        value = yaml.safe_load(match.group(1))
-        blocks.append(value if value is not None else {})
-    return blocks
-
-
 def extract_yaml_block_after_heading(body: str, heading: str, *, level: int = 2) -> Any:
     marker = "#" * level
     heading_re = re.compile(
@@ -69,20 +61,3 @@ def extract_yaml_block_after_heading(body: str, heading: str, *, level: int = 2)
         return None
     value = yaml.safe_load(block_match.group(1))
     return value if value is not None else {}
-
-
-def extract_section_text(body: str, heading: str, *, level: int = 2) -> str:
-    marker = "#" * level
-    heading_re = re.compile(
-        rf"^{re.escape(marker)}\s+{re.escape(heading)}\s*$",
-        re.MULTILINE,
-    )
-    heading_match = heading_re.search(body)
-    if not heading_match:
-        return ""
-    rest = body[heading_match.end() :]
-    next_heading_re = re.compile(rf"^#{{1,{level}}}\s+", re.MULTILINE)
-    next_match = next_heading_re.search(rest)
-    section = rest[: next_match.start()] if next_match else rest
-    return section.strip()
-

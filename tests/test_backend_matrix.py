@@ -11,10 +11,14 @@ from typer.testing import CliRunner
 
 import physical_agent.cli as cli_module
 from physical_agent.agent.chat_runtime import ChatRuntime
-from physical_agent.config import RETIRED_MARKDOWN_BACKEND_GUIDANCE, load_config, write_default_config
+from physical_agent.config import (
+    LEGACY_MARKDOWN_WORKSPACE_FILES,
+    RETIRED_MARKDOWN_BACKEND_GUIDANCE,
+    load_config,
+    write_default_config,
+)
 from physical_agent.mcp.server import PhysicalAgentMCP
 from physical_agent.protocol.schemas import Action
-from physical_agent.protocol.workspace import Workspace
 from physical_agent.state import SqliteStateStore, open_state_store
 from physical_agent.watch.runtime import WatchRuntime
 
@@ -44,6 +48,12 @@ def _ids(actions: list[Action]) -> list[str]:
 
 def _read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_legacy_workspace_file_set(path: Path) -> None:
+    path.mkdir(parents=True)
+    for filename in LEGACY_MARKDOWN_WORKSPACE_FILES:
+        (path / filename).write_text("legacy workspace fixture\n", encoding="utf-8")
 
 
 def test_default_init_setup_and_state_check_use_sqlite_with_safety_file(tmp_path):
@@ -83,7 +93,7 @@ def test_load_config_rejects_legacy_markdown_workspace_when_backend_omitted(tmp_
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     del data["workspace"]["backend"]
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-    Workspace(tmp_path / "workspace").initialize()
+    _write_legacy_workspace_file_set(tmp_path / "workspace")
 
     with pytest.raises(ValueError) as exc_info:
         load_config(config_path)
@@ -103,7 +113,7 @@ def test_load_config_does_not_misclassify_incomplete_legacy_file_set(tmp_path):
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     del data["workspace"]["backend"]
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-    Workspace(tmp_path / "workspace").initialize()
+    _write_legacy_workspace_file_set(tmp_path / "workspace")
     (tmp_path / "workspace" / "MEMORY.md").unlink()
 
     config = load_config(config_path)

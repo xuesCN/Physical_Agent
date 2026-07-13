@@ -9,7 +9,6 @@ from physical_agent.agent.onboarding import HardwareIntegrationAssistant
 from physical_agent.cli import app
 from physical_agent.drivers.loader import load_driver
 from physical_agent.protocol.schemas import Action
-from physical_agent.protocol.workspace import Workspace
 from physical_agent.quickstart import setup_project
 from physical_agent.state import open_state_store
 
@@ -168,14 +167,15 @@ def test_hardware_integration_assistant_generates_loadable_driver(tmp_path):
         base_dir=tmp_path,
     ).generate()
 
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
+    workspace_path = tmp_path / "workspace"
+    artifacts_path = workspace_path / "artifacts"
+    artifacts_path.mkdir(parents=True)
     loaded = load_driver(
         robot_id="demo_1",
         driver_ref=str(result.output_path),
         config={"mode": "mock", "port": "COM3", "baudrate": 115200},
-        workspace_path=workspace.path,
-        artifacts_path=workspace.artifacts_path,
+        workspace_path=workspace_path,
+        artifacts_path=artifacts_path,
     )
     asyncio.run(loaded.driver.connect())
 
@@ -307,14 +307,15 @@ def test_driver_coding_agent_uses_llm_to_update_driver(tmp_path):
     assert "LLM generated demo driver" in driver_text
     assert (result.output_path / "llm-coding-report.md").exists()
 
-    workspace = Workspace(tmp_path / "workspace-coded")
-    workspace.initialize()
+    workspace_path = tmp_path / "workspace-coded"
+    artifacts_path = workspace_path / "artifacts"
+    artifacts_path.mkdir(parents=True)
     loaded = load_driver(
         robot_id="coded_1",
         driver_ref=str(result.output_path),
         config={"mode": "mock", "port": "COM3", "baudrate": 115200},
-        workspace_path=workspace.path,
-        artifacts_path=workspace.artifacts_path,
+        workspace_path=workspace_path,
+        artifacts_path=artifacts_path,
     )
     asyncio.run(loaded.driver.connect())
     move = asyncio.run(

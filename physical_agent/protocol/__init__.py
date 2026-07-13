@@ -12,7 +12,6 @@ from physical_agent.protocol.schemas import (
     WorkspaceDocument,
 )
 from physical_agent.protocol.agent_output import AgentOutput, AgentTask
-from physical_agent.protocol.workspace import Workspace
 
 __all__ = [
     "Action",
@@ -27,6 +26,5 @@ __all__ = [
     "HealthStatus",
     "Observation",
     "RobotRuntimeProfile",
-    "Workspace",
     "WorkspaceDocument",
 ]

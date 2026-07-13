@@ -54,7 +54,6 @@ def test_sqlite_runtime_and_doctor_do_not_reference_full_workspace():
     project_root = Path(__file__).resolve().parents[1]
     for relative in ("physical_agent/state/sqlite.py", "physical_agent/doctor.py"):
         source = (project_root / relative).read_text(encoding="utf-8")
-        assert "physical_agent.protocol.workspace" not in source
         assert "Workspace.filenames" not in source
         assert "_file_workspace" not in source
 

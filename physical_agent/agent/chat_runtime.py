@@ -99,10 +99,7 @@ class ChatRuntime:
         self.workspace = open_state_store(self.config, base_dir=self.base_dir)
         self.workspace.initialize()
 
-    def respond(self, message: str, *, auto_step: bool = False) -> dict[str, Any]:
-        # Kept for callers that still send the legacy option. ChatRuntime is a
-        # proposal-side component and must never start the watch execution side.
-        _ = auto_step
+    def respond(self, message: str) -> dict[str, Any]:
         self.setup()
         workspace = self._workspace()
         continuation_message = self._code_continuation_message(message)
@@ -360,13 +357,11 @@ class ChatRuntime:
         self,
         message: str,
         *,
-        auto_step: bool = False,
         cancel_check: Callable[[], bool] | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Stream a reply-only chat response.
 
-        This API-safe path never writes pending actions and never starts watch,
-        even if ``auto_step`` is passed by a caller.
+        This API-safe path never writes pending actions and never starts watch.
         """
 
         self.setup()

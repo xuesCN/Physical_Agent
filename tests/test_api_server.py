@@ -782,8 +782,8 @@ def test_api_chat_constructs_api_safe_chat_runtime(tmp_path, monkeypatch):
     calls = {}
 
     class FakeRuntime:
-        def respond(self, message, *, auto_step=False):
-            calls["respond"] = {"message": message, "auto_step": auto_step}
+        def respond(self, message):
+            calls["respond"] = {"message": message}
             return {
                 "ok": True,
                 "mode": "rule_based",
@@ -800,7 +800,7 @@ def test_api_chat_constructs_api_safe_chat_runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(api_server_module, "_new_chat_runtime", fake_new_runtime)
 
     client = TestClient(create_app(config_path))
-    response = client.post("/api/chat", json={"message": "hello", "auto_step": True})
+    response = client.post("/api/chat", json={"message": "hello"})
 
     assert response.status_code == 200
     assert calls["runtime"] == {
@@ -809,7 +809,7 @@ def test_api_chat_constructs_api_safe_chat_runtime(tmp_path, monkeypatch):
         "enable_code_skills": False,
         "enable_hardware_integration": False,
     }
-    assert calls["respond"] == {"message": "hello", "auto_step": False}
+    assert calls["respond"] == {"message": "hello"}
 
 
 def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
@@ -819,10 +819,9 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
     calls = {}
 
     class FakeRuntime:
-        def respond_stream(self, message, *, auto_step=False, **kwargs):
+        def respond_stream(self, message, **kwargs):
             calls["respond"] = {
                 "message": message,
-                "auto_step": auto_step,
                 "has_cancel_check": "cancel_check" in kwargs,
             }
             yield {"type": "delta", "delta": "hel"}
@@ -851,7 +850,6 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
             "message": "hello",
             "request_id": "req-test",
             "stream_id": "stream-test",
-            "auto_step": True,
         },
     ) as response:
         assert response.status_code == 200
@@ -871,7 +869,6 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
     }
     assert calls["respond"] == {
         "message": "hello",
-        "auto_step": False,
         "has_cancel_check": True,
     }
 
@@ -882,7 +879,7 @@ def test_api_chat_stream_sends_sanitized_error_event(tmp_path, monkeypatch):
     _prepare_store(config_path)
 
     class FakeRuntime:
-        def respond_stream(self, message, *, auto_step=False, **kwargs):
+        def respond_stream(self, message, **kwargs):
             raise OpenAICompatibleError("Bearer sk-local-secret-7890 failed")
             yield  # pragma: no cover
 
@@ -916,7 +913,7 @@ def test_api_chat_stream_abort_registry_stops_before_consuming_runtime(tmp_path,
     assert controller.abort_chat_stream("stream-abort", reason="test") is True
 
     class FakeRuntime:
-        def respond_stream(self, message, *, auto_step=False, **kwargs):
+        def respond_stream(self, message, **kwargs):
             raise AssertionError("aborted stream must not consume runtime chunks")
             yield  # pragma: no cover
 
@@ -1102,12 +1099,12 @@ def test_api_requests_do_not_instantiate_watch_or_execute_driver(tmp_path, monke
     ).status_code == 200
     assert client.post(
         "/api/chat",
-        json={"message": "look around", "auto_step": True},
+        json={"message": "look around"},
     ).status_code == 200
     with client.stream(
         "POST",
         "/api/chat/stream",
-        json={"message": "look around", "auto_step": True},
+        json={"message": "look around"},
     ) as response:
         assert response.status_code == 200
         stream_event_types = [

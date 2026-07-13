@@ -557,7 +557,7 @@ def test_api_watch_setup_failure_is_fail_stop_not_reconnect_loop(
     assert FailingWatchRuntime.instances[0].shutdown_called is True
 
 
-def test_http_auto_step_like_fields_do_not_start_watch(tmp_path, monkeypatch):
+def test_http_proposal_handlers_do_not_start_watch(tmp_path, monkeypatch):
     TestClient = _client_or_skip()
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     _prepare_store(config_path)
@@ -571,22 +571,21 @@ def test_http_auto_step_like_fields_do_not_start_watch(tmp_path, monkeypatch):
         proposed = client.post(
             "/api/actions/propose",
             json={
-                "id": "act_auto_step_ignored",
+                "id": "act_request_boundary",
                 "robot": "arm_1",
                 "capability": "observe",
                 "params": {},
-                "reason": "auto_step must be ignored by API proposal handlers",
+                "reason": "request-side proposal must not start watch",
                 "depends_on": [],
-                "auto_step": True,
             },
         )
         submitted = client.post(
             "/api/tasks/submit",
-            json={"task": "look around", "auto_step": True},
+            json={"task": "look around"},
         )
         chat = client.post(
             "/api/chat",
-            json={"message": "look around", "auto_step": True},
+            json={"message": "look around"},
         )
 
     assert proposed.status_code == 200
@@ -598,7 +597,7 @@ def test_http_auto_step_like_fields_do_not_start_watch(tmp_path, monkeypatch):
     board = store.read_actions()
     assert [item.id for item in board["completed"]] == []
     assert [item.id for item in board["cancelled"]] == []
-    assert "act_auto_step_ignored" in {item.id for item in board["pending"]}
+    assert "act_request_boundary" in {item.id for item in board["pending"]}
 
 
 @pytest.mark.asyncio

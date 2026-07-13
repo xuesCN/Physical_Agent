@@ -525,7 +525,7 @@ Or send one message and exit:
 ```bash
 physical-agent chat --message "What can you see right now?"
 physical-agent chat "write a tiny square example under test and run it"
-physical-agent chat --planner llm --auto-step --message "Please pick the red block and place it on the tray."
+physical-agent chat --planner llm --message "Please pick the red block and place it on the tray."
 ```
 
 The chat command defaults to `--planner auto`: it uses the LLM planner when `.env` contains API settings and falls back to rule-based chat otherwise. The chat agent reads chat, memory, capabilities, world, and feedback from StateStore. It writes replies, current intent, and proposed actions back to StateStore. Watch still validates and executes those actions.
@@ -582,4 +582,4 @@ pytest -q
 
 Current coverage includes SAFETY/LOG sidecar behavior, legacy workspace fail-closed detection and historical rescue, SQLite workspace lifecycle, driver manifest and loader behavior, hardware onboarding scaffold generation, safety validation, mock drivers, rule-based planning, watch runtime stepping, the end-to-end SQLite loop, one-command setup, doctor checks, and FastAPI/Dashboard contracts.
 
-It also covers the chat protocol, chat memory, chat action proposals, chat auto-step execution, and the GUI chat endpoint.
+It also covers the chat protocol, chat memory, proposal-only chat boundaries, and the Dashboard chat endpoint.

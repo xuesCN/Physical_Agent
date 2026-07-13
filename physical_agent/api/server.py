@@ -111,7 +111,6 @@ class SubmitTaskRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     planner: str | None = None
-    auto_step: bool = False
     request_id: str | None = None
     stream_id: str | None = None
 
@@ -915,7 +914,7 @@ class ApiController:
             enable_code_skills=False,
             enable_hardware_integration=False,
         )
-        response = runtime.respond(message, auto_step=False)
+        response = runtime.respond(message)
         config, store = self._store(require_exists=True)
         store.append_log("API chat replied without executing watch.", actor="api")
         state = self._state(config, store)
@@ -1004,7 +1003,6 @@ class ApiController:
         )
         runtime_stream = runtime.respond_stream(
             message,
-            auto_step=False,
             cancel_check=stream_state.abort_event.is_set,
         )
         try:

@@ -26,7 +26,7 @@ push 和 pull request 默认会跑：
      - `tests/test_safety_boundaries.py`
      - `tests/test_safety.py`
      - API 请求侧不得实例化 watch 或执行 driver
-     - HTTP auto-step 字段不得启动 watch
+     - HTTP proposal handlers 不得启动 watch
      - SQLite 默认状态后端 smoke
      - watch 单步执行 smoke
 
@@ -86,7 +86,7 @@ python -m pytest -q \
   tests/test_safety_boundaries.py \
   tests/test_safety.py \
   tests/test_api_server.py::test_api_requests_do_not_instantiate_watch_or_execute_driver \
-  tests/test_api_watch_events.py::test_http_auto_step_like_fields_do_not_start_watch \
+  tests/test_api_watch_events.py::test_http_proposal_handlers_do_not_start_watch \
   tests/test_backend_matrix.py::test_default_init_setup_and_state_check_use_sqlite_with_safety_file \
   tests/test_state_store.py::test_open_state_store_defaults_to_sqlite \
   tests/test_watch_runtime.py::test_watch_runtime_step_executes_action

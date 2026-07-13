@@ -357,7 +357,7 @@ physical-agent chat
 ```bash
 physical-agent chat --message "What can you see right now?"
 physical-agent chat "在 test 里写一个最简单的正方形示例并运行"
-physical-agent chat --planner llm --auto-step --message "Please pick the red block and place it on the tray."
+physical-agent chat --planner llm --message "Please pick the red block and place it on the tray."
 ```
 
 默认 `--planner auto` 会优先尝试 `.env` 里的 LLM，失败时回退到本地 rule-based chat。看到 `LLM chat was unavailable` 不代表框架崩了，常见原因是：
@@ -396,7 +396,7 @@ physical_agent/mcp/server.py
 - `list_robots`
 - `run_action`
 
-v1 不把完整 MCP 依赖放进核心运行时，避免影响 watch / agent / Markdown loop 的稳定性。
+v1 不把完整 MCP 依赖放进核心运行时，避免影响 watch / agent / SQLite 状态主链的稳定性。
 
 ## 开发和测试
 
@@ -414,9 +414,9 @@ pytest -q
 
 测试覆盖：
 
-- Markdown front matter 和 fenced YAML parser / renderer
-- workspace 初始化、revision 递增、log append
-- SQLite StateStore 的原子动作、lease recovery、迁移、state-check、audit export
+- SAFETY/LOG sidecar 的 front matter、revision 与 log append
+- SQLite workspace 初始化与状态读写
+- SQLite StateStore 的原子动作、lease recovery、state-check、audit export
 - 默认 SQLite init / setup / state-check / export-audit
 - driver manifest 和 config schema 校验
 - built-in driver 与本地 driver loader
@@ -430,7 +430,7 @@ pytest -q
 - 一条命令 setup 和 smoke test
 - doctor 健康检查
 - FastAPI / Dashboard contracts
-- chat protocol、memory、action proposal 和 auto-step
+- chat protocol、memory、action proposal 与 proposal-only 执行边界
 
 ## Clean-Room 声明
 

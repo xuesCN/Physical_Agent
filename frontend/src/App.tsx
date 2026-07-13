@@ -319,7 +319,13 @@ function Dashboard({
                 updateStreamingAssistant(
                   current,
                   assistantKey,
-                  String(payload.reply ?? assistantContent)
+                  String(payload.reply ?? assistantContent),
+                  {
+                    stream_status: "completed",
+                    agent_output: payload.agent_output ?? null,
+                    plan: payload.plan ?? null,
+                    draft_actions: payload.draft_actions ?? []
+                  }
                 )
               );
             }
@@ -976,7 +982,8 @@ function localChatMessage(
 function updateStreamingAssistant(
   messages: ChatMessage[] | null,
   localKey: string,
-  content: string
+  content: string,
+  metadata: Record<string, unknown> = { stream_status: "streaming" }
 ): ChatMessage[] | null {
   if (!messages) {
     return messages;
@@ -990,7 +997,7 @@ function updateStreamingAssistant(
       content,
       metadata: {
         ...item.metadata,
-        stream_status: "streaming"
+        ...metadata
       }
     };
   });

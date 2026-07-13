@@ -213,44 +213,44 @@
 
 ### Producer/API
 
-- [ ] R5 开工先做受限 spike；正式方案必须同时保留一个 authoritative action set、真实首 token/delta 和中途 abort，不能用完整 reply 的本地分块冒充 streaming；无法同时满足则暂停并请求产品取舍。
-- [ ] 定义 typed/discriminated Chat result：普通 reply 的 `agent_output` 可选，proposal 为 draft output，tool-loop 为 submitted variant；R5 只收口 API 使用的 rule/LLM reply/proposal，不删除 CLI code/integration/tool-loop variants。
-- [ ] raw model actions 只分配一次稳定 draft IDs，再直接编译 draft `AgentOutput`；不从 fence 反向解析。
-- [ ] 同一个 result 写 ChatPlan 与 assistant metadata；done/plan/metadata/fence 的 action IDs/dependencies 完全一致。
-- [ ] `respond_stream()` 的 done item 携带同一个 `agent_output`/plan。
-- [ ] `ApiController.chat_stream()` 转发 `agent_output`/plan，不再只保留 reply/mode/state。
-- [ ] `/api/chat` 与 SSE done 的结构化字段语义一致。
-- [ ] draft lifecycle 不写 pending Action Board。
-- [ ] 浏览器/abort endpoint 中止客户端 transport；上游 provider iterator/request 按既有可取消能力释放，不能静默降级 Stop 语义。
-- [ ] compile/persist/done 前再次检查 cancellation；abort/error/partial stream 不产生可提交 structured draft 或 assistant draft metadata。
-- [ ] 增加“structured producer 仍在进行时 abort”的专项测试，验证无 done/draft persistence 与资源释放。
-- [ ] 每个 draft action 有唯一 mandatory、watch-owned Gate task。
+- [x] R5 开工先做受限 spike；单调用 structured stream 同时保留 authoritative action set、真实 provider reply delta 和中途 abort，没有用完整 reply 的本地分块冒充 LLM streaming。
+- [x] 定义 typed/discriminated Chat result：普通 reply、draft proposal 与 tool-loop submitted proposal 分 variant；CLI code/integration 路径保持独立。
+- [x] raw model actions 只分配一次稳定 draft IDs，再直接编译 draft `AgentOutput`；不从 fence 反向解析。
+- [x] 同一个 result 写 ChatPlan 与 assistant metadata；done/plan/metadata/fence 的 action IDs/dependencies 完全一致。
+- [x] `respond_stream()` 的 done item 携带同一个 `agent_output`/plan。
+- [x] `ApiController.chat_stream()` 转发 `agent_output`/plan/draft compatibility envelope，不再只保留 reply/mode/state。
+- [x] `/api/chat` 与 SSE done 的结构化字段语义一致。
+- [x] draft lifecycle 不写 pending Action Board。
+- [x] 浏览器/abort endpoint 中止客户端 transport；ChatRuntime 与 provider iterator 均显式 close。
+- [x] compile/persist/done 前再次检查 cancellation；abort/error/partial stream 不产生可提交 structured draft 或 assistant draft metadata。
+- [x] 增加“structured producer 仍在进行时 abort”的专项测试，验证无 done/draft persistence 与资源释放。
+- [x] 每个 draft action 有唯一 mandatory、watch-owned Gate task。
 
 ### 双轨 consumer
 
-- [ ] 兼容 fence 由 structured actions 生成；禁止 fence → canonical output。
-- [ ] React 增加 type guard，至少验证 `schema=physical-agent/agent-output/v1`、`lifecycle=draft`、`decision=propose` 和合法 action 数组。
-- [ ] type guard 通过后，React 优先 `message.metadata.agent_output.actions` / SSE `payload.agent_output.actions`。
-- [ ] structured 缺失时才 fallback `parseActionDrafts()`。
-- [ ] structured + fence 只显示一组；冲突时 structured 胜出。
-- [ ] refresh 后从 assistant metadata 恢复 Draft 卡片。
-- [ ] Add to Actions 提交 structured action，并补 `source=chat_draft` provenance。
-- [ ] structured turn 只分配一次稳定 draft IDs；现有逐卡 Add 语义下，prerequisite 先添加、dependent 后添加时 dependency 保持。
-- [ ] dependent-first 返回 422 且不产生部分写入；本轮不新增 Add All/batch UI 或新 batch endpoint。
-- [ ] TUI `AgentOutput` 类型增加 `actions`，draft 与 board truth 分开展示。
+- [x] 兼容 fence 由 structured actions 生成；禁止 fence → canonical output。
+- [x] React 增加 type guard，验证 schema/lifecycle/decision 和合法 action 数组。
+- [x] type guard 通过后，React 优先 `message.metadata.agent_output.actions` / SSE `payload.agent_output.actions`。
+- [x] structured 缺失或不合法时才 fallback `parseActionDrafts()`。
+- [x] structured + fence 只显示一组；冲突时 structured 胜出。
+- [x] refresh 后从 assistant metadata 恢复 Draft 卡片。
+- [x] Add to Actions 提交 structured action，并补 `source=chat_draft` provenance。
+- [x] structured turn 只分配一次稳定 draft IDs；prerequisite-first 后 dependent dependency 保持。
+- [x] dependent-first 返回 422 且不产生部分写入；未新增 Add All/batch UI 或新 batch endpoint。
+- [x] TUI `AgentOutput` 类型增加 `actions`，draft 以独立 transcript role 明示不属于 Action Board。
 
 ### 双轨验收
 
-- [ ] backend：done/ChatPlan/assistant metadata/compat fence 四者 actions IDs/dependencies 相等。
-- [ ] React：structured-only。
-- [ ] React：fence-only 历史 fallback。
-- [ ] React：structured + fence 一致。
-- [ ] React：structured + fence 冲突，structured 胜出。
-- [ ] React：Add → pending，未隐式 approve/execute。
-- [ ] e2e：stream → structured card → Add → pending board。
-- [ ] TUI：done/state 不丢 output，不把 draft 当 pending。
-- [ ] fake provider 延迟测试证明首个 delta 在最终 structured output 前到达；中途 abort 停止后续 transport/持久化。
-- [ ] 安全扫描：API/chat request path 不实例化 watch/driver。
+- [x] backend：done/ChatPlan/assistant metadata/compat fence 四者 actions IDs/dependencies 相等。
+- [ ] React：structured-only（用例已写，待远端真实 Chromium）。
+- [ ] React：fence-only 历史 fallback（用例已写，待远端真实 Chromium）。
+- [ ] React：structured + fence 一致（用例已写，待远端真实 Chromium）。
+- [ ] React：structured + fence 冲突，structured 胜出（用例已写，待远端真实 Chromium）。
+- [ ] React：Add → pending，未隐式 approve/execute（用例已写，待远端真实 Chromium）。
+- [ ] e2e：stream → structured card → Add → pending board（本地缺 Chromium，待远端门禁）。
+- [x] TUI：done/state 不丢 output，不把 draft 当 pending（60 tests）。
+- [x] fake provider 延迟测试证明首个 delta 在最终 structured output 前到达；中途 abort 停止后续 transport/持久化。
+- [x] 安全扫描：API/chat request path 不实例化 watch/driver（Safety smoke 32 tests）。
 - [ ] 双轨以独立提交/CI 轮次运行并记录证据；R5 完成后只能进入 R6，R7 还必须等待 R6 consumer migration。
 
 ## R6 职责/read-model 去重（含点名死代码）

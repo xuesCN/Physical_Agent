@@ -29,6 +29,9 @@ function rolePrefix(role: string): string {
   if (role === "assistant") {
     return "assistant";
   }
+  if (role === "draft") {
+    return "draft";
+  }
   return role;
 }
 

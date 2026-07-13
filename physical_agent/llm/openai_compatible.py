@@ -202,6 +202,7 @@ class OpenAICompatibleClient:
         *,
         temperature: float = 0.0,
         max_tokens: int = 1024,
+        response_format: dict[str, Any] | None = None,
         metadata: dict[str, str] | None = None,
     ) -> Iterator[str]:
         """Yield assistant text deltas from the configured compatible API mode."""
@@ -211,6 +212,7 @@ class OpenAICompatibleClient:
                 messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                text_format=_responses_text_format(response_format),
                 metadata=metadata,
             )
             return
@@ -219,8 +221,103 @@ class OpenAICompatibleClient:
             messages,
             temperature=temperature,
             max_tokens=max_tokens,
+            response_format=response_format,
             metadata=metadata,
         )
+
+    def stream_structured_json(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        schema: dict[str, Any],
+        schema_name: str,
+        temperature: float = 0.0,
+        max_tokens: int = 1024,
+        metadata: dict[str, str] | None = None,
+    ) -> Iterator[str]:
+        """Yield one authoritative JSON object from a real provider stream.
+
+        Format fallbacks are allowed only before the provider has yielded any
+        bytes, so callers never splice together two competing decisions.
+        """
+
+        strict_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": schema_name,
+                "strict": True,
+                "schema": schema,
+            },
+        }
+        yielded = False
+        strict_stream: Iterator[str] | None = None
+        try:
+            strict_stream = iter(
+                self.stream_chat_text(
+                    messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format=strict_format,
+                    metadata=metadata,
+                )
+            )
+            for delta in strict_stream:
+                yielded = True
+                yield delta
+            return
+        except OpenAICompatibleError as exc:
+            if yielded or not exc.is_bad_request:
+                raise
+        finally:
+            _close_stream(strict_stream)
+
+        fallback_messages = _messages_with_json_mode_instruction(
+            messages,
+            schema=schema,
+            schema_name=schema_name,
+        )
+        yielded = False
+        json_stream: Iterator[str] | None = None
+        try:
+            json_stream = iter(
+                self.stream_chat_text(
+                    fallback_messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format={"type": "json_object"},
+                    metadata=metadata,
+                )
+            )
+            for delta in json_stream:
+                yielded = True
+                yield delta
+            return
+        except OpenAICompatibleError as exc:
+            if yielded or not _is_response_format_unsupported_error(exc):
+                raise
+        finally:
+            _close_stream(json_stream)
+
+        plain_stream = iter(
+            self.stream_chat_text(
+                fallback_messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                metadata=metadata,
+            )
+        )
+        try:
+            yield from plain_stream
+        finally:
+            _close_stream(plain_stream)
+
+    @staticmethod
+    def parse_structured_json_text(
+        content: str,
+        *,
+        schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        return _parse_and_validate_json(content, schema=schema)
 
     def structured_json(
         self,
@@ -378,6 +475,7 @@ class OpenAICompatibleClient:
         *,
         temperature: float,
         max_tokens: int,
+        response_format: dict[str, Any] | None,
         metadata: dict[str, str] | None,
     ) -> Iterator[str]:
         payload: dict[str, Any] = {
@@ -387,6 +485,8 @@ class OpenAICompatibleClient:
             "max_tokens": max_tokens,
             "stream": True,
         }
+        if response_format is not None:
+            payload["response_format"] = response_format
         if metadata:
             payload["metadata"] = metadata
         reasoning_applied = _apply_chat_reasoning(payload, self.settings)
@@ -517,6 +617,7 @@ class OpenAICompatibleClient:
         *,
         temperature: float,
         max_tokens: int,
+        text_format: dict[str, Any] | None,
         metadata: dict[str, str] | None,
     ) -> Iterator[str]:
         instructions, input_items = _messages_to_responses_parts(messages)
@@ -529,6 +630,8 @@ class OpenAICompatibleClient:
         }
         if instructions:
             payload["instructions"] = instructions
+        if text_format is not None:
+            payload["text"] = {"format": text_format}
         if metadata:
             payload["metadata"] = metadata
         reasoning_applied = _apply_responses_reasoning(payload, self.settings)

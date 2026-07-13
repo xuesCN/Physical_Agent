@@ -262,9 +262,12 @@ def test_chat_runtime_stream_writes_completed_assistant_message(tmp_path, monkey
     )
 
     class FakeClient:
-        def stream_chat_text(self, messages, **kwargs):
-            yield "hel"
-            yield "lo"
+        def stream_structured_json(self, messages, **kwargs):
+            yield '{"reply":"hel'
+            yield 'lo","intent":"chat","steps":[],"actions":[],"memory":[]}'
+
+        def parse_structured_json_text(self, content, **kwargs):
+            return json.loads(content)
 
     monkeypatch.setattr(runtime, "_llm_client", lambda: FakeClient())
 
@@ -290,18 +293,29 @@ def test_chat_runtime_stream_abort_writes_partial_without_actions(tmp_path, monk
         enable_code_skills=False,
         enable_hardware_integration=False,
     )
+    transport = {"closed": False}
 
     class FakeClient:
-        def stream_chat_text(self, messages, **kwargs):
-            yield "partial"
-            yield " ignored"
+        def stream_structured_json(self, messages, **kwargs):
+            try:
+                yield '{"reply":"partial'
+                yield ' ignored","intent":"act","steps":[],"actions":['
+                yield (
+                    '{"robot":"arm_1","capability":"observe","params":{},'
+                    '"reason":"inspect","depends_on":[]}],"memory":[]}'
+                )
+            finally:
+                transport["closed"] = True
+
+        def parse_structured_json_text(self, content, **kwargs):
+            return json.loads(content)
 
     monkeypatch.setattr(runtime, "_llm_client", lambda: FakeClient())
     checks = {"count": 0}
 
     def cancel_after_first_delta():
         checks["count"] += 1
-        return checks["count"] >= 3
+        return checks["count"] >= 4
 
     events = list(runtime.respond_stream("hello", cancel_check=cancel_after_first_delta))
 
@@ -311,8 +325,11 @@ def test_chat_runtime_stream_abort_writes_partial_without_actions(tmp_path, monk
     assert messages[-1].content == "partial"
     assert messages[-1].metadata["stream_status"] == "cancelled"
     assert messages[-1].metadata["partial"] is True
+    assert messages[-1].metadata["agent_output"] is None
     assert store.read_plan()["plan"].status == "cancelled"
+    assert store.read_plan()["plan"].agent_output is None
     assert store.read_actions()["pending"] == []
+    assert transport["closed"] is True
 
 
 def test_chat_runtime_stream_never_creates_pending_actions(tmp_path):
@@ -328,7 +345,10 @@ def test_chat_runtime_stream_never_creates_pending_actions(tmp_path):
     events = list(runtime.respond_stream("pick the red block and place it on the tray"))
 
     assert events[-1]["type"] == "done"
-    assert "did not create a pending action" in events[-1]["reply"]
+    assert any(
+        "without writing pending actions" in step
+        for step in events[-1]["plan"]["steps"]
+    )
     assert "```action-draft" in events[-1]["reply"]
     assert '"capability": "pick"' in events[-1]["reply"]
     assert '"capability": "place"' in events[-1]["reply"]
@@ -349,24 +369,126 @@ def test_chat_runtime_stream_prompt_allows_copyable_action_drafts(tmp_path, monk
     captured = {}
 
     class FakeClient:
-        def stream_chat_text(self, messages, **kwargs):
+        def stream_structured_json(self, messages, **kwargs):
             captured["system"] = messages[0]["content"]
             captured["payload"] = json.loads(messages[1]["content"])
-            yield "draft"
+            yield (
+                '{"reply":"draft","intent":"chat","steps":[],"actions":[],'
+                '"memory":[]}'
+            )
+
+        def parse_structured_json_text(self, content, **kwargs):
+            return json.loads(content)
 
     monkeypatch.setattr(runtime, "_llm_client", lambda: FakeClient())
 
     events = list(runtime.respond_stream("我要让机械臂观察当前环境，应该提交什么 action?"))
 
     assert events[-1]["type"] == "done"
-    assert "Action Draft JSON" in captured["system"]
-    assert "```action-draft" in captured["system"]
-    assert "Do not call tools" in captured["system"]
-    assert "Do not return JSON" not in captured["system"]
+    assert "Return only JSON" in captured["system"]
+    assert "Action Draft JSON" not in captured["system"]
+    assert "```action-draft" not in captured["system"]
     assert "capabilities" in captured["payload"]
     assert events[-1]["actions"] == []
     store = open_state_store(config_path=config_path)
     assert store.read_actions()["pending"] == []
+
+
+def test_chat_runtime_structured_stream_is_early_and_has_one_draft_truth(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="llm",
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+    transport = {"finished": False, "closed": False}
+
+    class FakeClient:
+        def stream_structured_json(self, messages, **kwargs):
+            try:
+                yield '{"reply":"I drafted two actions.'
+                yield ('","intent":"act","steps":["Draft"],"actions":['
+                    '{"robot":"arm_1","capability":"pick","params":{"object":"red_block"},'
+                    '"reason":"pick","depends_on":[]},'
+                    '{"robot":"arm_1","capability":"place","params":{"object":"red_block"},'
+                    '"reason":"place","depends_on":[0]}],"memory":[]}'
+                )
+                transport["finished"] = True
+            finally:
+                transport["closed"] = True
+
+        def parse_structured_json_text(self, content, **kwargs):
+            return json.loads(content)
+
+    monkeypatch.setattr(runtime, "_llm_client", lambda: FakeClient())
+
+    stream = runtime.respond_stream("pick and place")
+    first = next(stream)
+
+    assert first == {"type": "delta", "delta": "I drafted two actions."}
+    assert transport["finished"] is False
+
+    events = [first, *list(stream)]
+    done = events[-1]
+    assert done["type"] == "done", done
+    assert transport == {"finished": True, "closed": True}
+
+    output_actions = done["agent_output"]["actions"]
+    assert done["draft_actions"] == output_actions
+    assert done["plan"]["agent_output"]["actions"] == output_actions
+    assert output_actions[1]["depends_on"] == [output_actions[0]["id"]]
+    fence = chat_runtime_module._extract_action_drafts_from_reply(done["reply"])
+    assert [
+        (action["id"], action["capability"], action["depends_on"])
+        for action in fence
+    ] == [
+        (action["id"], action["capability"], action["depends_on"])
+        for action in output_actions
+    ]
+    gates = [
+        task for task in done["agent_output"]["tasks"]
+        if task["kind"] == "safety_gate"
+    ]
+    assert len(gates) == 2
+    assert all(task["mandatory"] and task["owner"] == "watch" for task in gates)
+
+    store = open_state_store(config_path=config_path)
+    assistant = store.read_chat()["messages"][-1]
+    assert assistant.metadata["draft_actions"] == output_actions
+    assert assistant.metadata["agent_output"]["actions"] == output_actions
+    assert store.read_actions()["pending"] == []
+
+
+def test_incremental_structured_reply_decodes_split_json_escapes():
+    parser = chat_runtime_module._IncrementalJsonReply()
+
+    deltas = [
+        *parser.feed('{"reply":"line\\'),
+        *parser.feed('nrobot \\uD83D'),
+        *parser.feed('\\uDE80","intent":"chat"}'),
+    ]
+
+    assert deltas == ["line", "\nrobot ", "🚀"]
+    assert parser.complete is True
+    assert parser.text == "line\nrobot 🚀"
+
+
+def test_incremental_structured_reply_ignores_nested_reply_keys():
+    parser = chat_runtime_module._IncrementalJsonReply()
+
+    deltas = [
+        *parser.feed('{"actions":[{"metadata":{"reply":"not user visible"}}],'),
+        *parser.feed('"reply":"top-level reply","intent":"chat"}'),
+    ]
+
+    assert deltas == ["top-level reply"]
+    assert parser.complete is True
+    assert parser.text == "top-level reply"
 
 
 def test_chat_runtime_stream_has_no_watch_dependency(tmp_path):

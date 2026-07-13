@@ -51,6 +51,7 @@
 | R3-E | 删除 full Workspace helper 与退役 Markdown protocol | `4a8ec86` |
 | R3-F | 当前文档、示例与发布包收口 | `9698b3e` |
 | R4 | 删除 chat 自动推进兼容面与 CLI 内嵌 watch | `da14064` |
+| R5 | 单调用 structured Chat Turn + fence 双轨消费者 | 本轮实现；独立 CI 待确认 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -337,6 +338,16 @@ README、state backend/hardware guide、架构 SVG 与 hardware examples 已统�
 
 旧的“传入参数也忽略”测试被替换为更直接的结构边界：CLI chat 与 HTTP action/task/chat handlers 在 WatchRuntime/driver execute 被设为 exploding stub 时仍完成 proposal-only 流程；CLI help 同时证明旧 option 消失而 `watch`/`api --watch` 保留。提交 `da14064` 的定向 68 tests、最终树全量 Python `403 passed, 1 warning`、Safety 32、frontend build、TUI 59 tests/typecheck/build 与 clean-wheel smoke 全绿；远端 CI run `29234488489` 的 Python full、Safety、frontend+wheel、TUI 与真实 Chromium Playwright 全部成功。R5 仍须先验证 structured streaming + fence 双轨，R4 没有提前触碰 fence 或重复 proposal fields。
 
+### R5：single-call structured Chat Turn + 双轨
+
+受限 spike 选择“一次 provider structured stream + 增量解码顶层 `reply` 字符串”：Chat Completions 使用 `response_format.json_schema`，Responses 使用 `text.format`；provider 不支持 strict format 时，只能在尚未产生任何 byte 前依次降级 JSON mode/JSON-only instruction。任一真实 byte 产生后禁止重试第二次决策调用，避免 reply 与 actions 来自两个互相矛盾的 turn。完整 JSON 到齐并通过本地 schema 后，raw actions 只分配一次 draft IDs、经 trusted `PlanCompiler` 编译一次；普通 reply、draft proposal、tool-loop submitted proposal 以 discriminated Chat Turn 表达。
+
+streaming reply delta 直接来自上游 JSON 字符串的增量 decoder；只有结构完成后追加的兼容 fence 是确定性本地后缀。done、ChatPlan、assistant metadata、`AgentOutput.actions` 与 fence 共用同一组 IDs/dependencies，后端不再从 fence 反向解析 canonical output。abort/GeneratorExit 会显式关闭 ChatRuntime/provider 两层 iterator，并在 compile、persist、done 前复查 cancellation；partial/error turn 只保存明确标记的普通 partial assistant 文本，不保存 draft output，也不写 pending Action Board。
+
+API SSE done 现在转发 `agent_output`/plan。React 在 render 时由 type guard 派生 Draft 卡片，严格验证 schema/lifecycle/decision/actions，structured 缺失或不合法才 fallback fence；一致或冲突都只显示 structured 一组。这遵循 React 重构纪律，没有为同一 draft 再建 effect/state 副本；只有 mock/旧服务未返回完整 state 时，才把 done envelope 附到本地 assistant metadata。TUI 补 `AgentOutput.actions`，把结构化 draft 写成独立 `draft` transcript，文案明确“不属于 Action Board”。Add 仍逐卡调用 proposal API并写 `source=chat_draft`；prerequisite-first 保留 dependency，dependent-first 422 且 board 无部分写入，本轮没有增加 batch endpoint。
+
+本地门禁：Python 全量按文件拆分运行 `157 + 254 = 411 passed`（沙盒单命令约 27 秒被截断，拆分覆盖全部测试文件；增量根级 `reply` 回归在对应分组单独复验）；Safety smoke `32 passed`；后端 R5 专项/API/provider `95 passed`；frontend production build 与 26 个 Playwright 用例发现通过；TUI typecheck/build 与 `60 passed`。本地缺 Playwright Chromium，真实 structured-only/fence-only/一致/冲突/refresh/Add 浏览器门禁和 clean-wheel 最终结果交给本轮独立远端 CI，确认前 R5 保持执行中。R5 不删除 fence、顶层兼容字段或 `_append_actions`，通过后只能进入 R6。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -405,6 +416,9 @@ README、state backend/hardware guide、架构 SVG 与 hardware examples 已统�
 64. **保留 `gui` 命令，不保留第二 controller**（R1.5）：命令兼容通过正式 FastAPI app factory 实现；legacy 模块只在 R2 门禁通过前作为回退存在，不再是默认入口。
 65. **真实 setup 失败不自动高频重连硬件**（R1.5）：missing init/external lease 可以安全轮询；driver connect/setup 错误 degraded fail-stop，交给显式进程生命周期重试。
 66. **Dashboard 是 wheel package resource，hashed build 必须去陈旧化**（R1.5）：源码 cwd 只能做开发 fallback；增量 wheel 在复制前清目标 dist，并验证 wheel 资源集合与当前 Vite 输出严格相等。
+67. **structured streaming 只能有一次权威决策调用**（R5）：同一 provider stream 同时承载 reply 与 action intents；format fallback 只允许发生在零 byte 阶段，已经产生 byte 后失败就终止该 turn，不能再调用模型拼接第二份 actions。
+68. **兼容 fence 是 structured output 的投影，不是输入**（R5/R7）：draft IDs/dependencies 先稳定、compiler 后注入 Gate，再从同一 actions 写 fence；React 冲突时 structured 胜出，后端永不 fence → AgentOutput。
+69. **Stop 的语义包含上游资源释放和零 draft persistence**（R5）：只停浏览器渲染不够；abort 必须 close provider iterator，并在 compile/persist/done 前复查，partial assistant 可留审计但不能带可提交 draft metadata。
 
 ## 4. 经验教训（流程侧）
 
@@ -413,6 +427,7 @@ README、state backend/hardware guide、架构 SVG 与 hardware examples 已统�
 - **git/CI 基建要跟上纪律**：长期单分支不 push、无 CI、测试对宿主环境敏感（代理变量/Python 版本），均记为工程欠账。
 - **mock 测不出阻塞类缺陷**（W1 的教训）：凡是"永不失败"的测试替身，都在掩盖一类真实故障模式；需要故意注入挂死/超时的对抗性测试。
 - **LLM 实验先固定凭据源与 provider 能力，再谈 planner 质量**（F0 的教训）：同一个 OpenAI-compatible 入口可能不支持 `response_format`/JSON mode；批量实验要先用 `.env` 连通、记录模型能力，再靠本地 schema 校验兜底，否则会把 provider 兼容问题误读成 planner/Gate 问题。
+- **结构化 streaming 的降级边界必须按“是否已产出 byte”定义**（R5）：按异常类型无条件重试会把一次 turn 偷换成两次不一致决策；producer 测试必须同时断言 early delta、midstream abort、close 和零 draft persistence。
 - **后端退役要同时保迁移旁路与清 UI 口径**（B6 的教训）：删除 factory 分支不够，CLI 迁移、state-check、前端说明、e2e mock、操作手册和旧 handoff 都可能继续暴露退役后端。
 - **同名产品动作要拆 UI 文案和数据语义**（F1 的教训）：draft 提交与执行审批都容易被叫 Approve；若文案不拆，用户会误以为点一次就放行执行，或误把提交动作板当成绕过审批。
 - **模型自带的证明必须给人看见**（F4 的教训）：expected 不参与安全裁决，但它会影响后续诊断上下文；至少要在 draft/action 详情露出摘要或 raw，避免变成不可见的“模型自证”。

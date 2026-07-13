@@ -1043,6 +1043,11 @@ class ApiController:
                         {
                             "reply": item.get("reply", ""),
                             "mode": item.get("mode", "rule_based"),
+                            "agent_output": _json_safe(item.get("agent_output")),
+                            "plan": _json_safe(item.get("plan")),
+                            "draft_actions": _json_safe(
+                                item.get("draft_actions", [])
+                            ),
                             "state": _json_safe(state),
                         }
                     )

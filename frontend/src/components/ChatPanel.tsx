@@ -10,7 +10,7 @@ import { Bubble, Sender } from "@ant-design/x";
 import { Alert, Button, Card, Descriptions, Empty, Popconfirm, Space, Tag, Typography } from "antd";
 import { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { parseActionDrafts } from "../actionDraft";
+import { resolveActionDrafts } from "../actionDraft";
 import { useMessages } from "../locales/context";
 import type { ActionItem, ChatMessage } from "../types";
 import { JsonSummaryLine } from "./JsonSummary";
@@ -182,7 +182,10 @@ function MessageContent({
   onEditDraft
 }: MessageContentProps) {
   const labels = useMessages();
-  const parsed = message.role === "assistant" ? parseActionDrafts(message.content) : null;
+  const parsed =
+    message.role === "assistant"
+      ? resolveActionDrafts(message.content, message.metadata?.agent_output)
+      : null;
   const markdown = parsed?.markdown ?? message.content;
   return (
     <div className="chat-message-content">

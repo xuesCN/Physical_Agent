@@ -63,8 +63,10 @@ export interface AgentOutput {
   status?: string;
   decision?: string;
   lifecycle?: string;
+  message?: string;
   proposal_id?: string | null;
   tasks?: AgentTask[];
+  actions?: ActionItem[];
 }
 
 export interface AgentPlan {
@@ -88,6 +90,7 @@ export interface ActionItem {
   params?: Record<string, unknown>;
   reason?: string | null;
   status?: string;
+  depends_on?: string[];
   metadata?: Record<string, unknown>;
 }
 

@@ -498,6 +498,94 @@ def test_stream_chat_text_aggregates_chat_completion_deltas(fake_openai):
     assert "extra_body" not in call["payload"]
 
 
+def test_stream_structured_json_uses_chat_completion_schema_format(fake_openai):
+    fake_openai.chat_outputs = [[_chat_delta('{"reply":"hello"}')]]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+    schema = {
+        "type": "object",
+        "required": ["reply"],
+        "properties": {"reply": {"type": "string"}},
+    }
+
+    chunks = list(
+        OpenAICompatibleClient(settings).stream_structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema=schema,
+            schema_name="chat_turn",
+        )
+    )
+
+    assert chunks == ['{"reply":"hello"}']
+    payload = fake_openai.instances[0].calls[0]["payload"]
+    assert payload["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "chat_turn",
+            "strict": True,
+            "schema": schema,
+        },
+    }
+
+
+def test_stream_structured_json_falls_back_only_before_provider_bytes(fake_openai):
+    fake_openai.chat_outputs = [
+        FakeBadRequestError("response_format json_schema unsupported"),
+        [_chat_delta('{"reply":"fallback"}')],
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+    schema = {
+        "type": "object",
+        "required": ["reply"],
+        "properties": {"reply": {"type": "string"}},
+    }
+
+    chunks = list(
+        OpenAICompatibleClient(settings).stream_structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema=schema,
+            schema_name="chat_turn",
+        )
+    )
+
+    assert chunks == ['{"reply":"fallback"}']
+    calls = fake_openai.instances[0].calls
+    assert len(calls) == 2
+    assert calls[0]["payload"]["response_format"]["type"] == "json_schema"
+    assert calls[1]["payload"]["response_format"] == {"type": "json_object"}
+
+
+def test_stream_structured_json_never_retries_after_provider_bytes(fake_openai):
+    def broken_stream():
+        yield _chat_delta('{"reply":"partial')
+        raise FakeBadRequestError("response_format json_schema unsupported")
+
+    fake_openai.chat_outputs = [broken_stream()]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+    client = OpenAICompatibleClient(settings)
+    stream = client.stream_structured_json(
+        [{"role": "user", "content": "ping"}],
+        schema={"type": "object"},
+        schema_name="chat_turn",
+    )
+
+    assert next(stream) == '{"reply":"partial'
+    with pytest.raises(OpenAICompatibleError):
+        next(stream)
+    assert len(fake_openai.instances[0].calls) == 1
+
+
 def test_stream_chat_text_passes_chat_reasoning_extra_body_when_configured(fake_openai):
     fake_openai.chat_outputs = [[_chat_delta("pong")]]
     settings = OpenAICompatibleSettings(
@@ -552,6 +640,40 @@ def test_stream_chat_text_aggregates_responses_deltas(fake_openai):
     assert call["payload"]["instructions"] == "Return text."
     assert call["payload"]["metadata"]["physical_agent_surface"] == "test_stream"
     assert call["payload"]["reasoning"] == {"effort": "medium", "summary": "auto"}
+
+
+def test_stream_structured_json_uses_responses_schema_format(fake_openai):
+    fake_openai.responses_outputs = [
+        [_responses_delta('{"reply":"hello"}'), {"type": "response.completed"}]
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+    schema = {
+        "type": "object",
+        "required": ["reply"],
+        "properties": {"reply": {"type": "string"}},
+    }
+
+    chunks = list(
+        OpenAICompatibleClient(settings).stream_structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema=schema,
+            schema_name="chat_turn",
+        )
+    )
+
+    assert chunks == ['{"reply":"hello"}']
+    payload = fake_openai.instances[0].calls[0]["payload"]
+    assert payload["text"]["format"] == {
+        "type": "json_schema",
+        "name": "chat_turn",
+        "strict": True,
+        "schema": schema,
+    }
 
 
 def test_stream_chat_text_error_redacts_api_key(fake_openai):

@@ -130,6 +130,52 @@ test("chat stream done with summary state can append reply to transcript", async
   assert.deepEqual(calls.states, []);
 });
 
+test("chat stream renders structured draft separately from Action Board", async () => {
+  const calls = createChatCalls({ includeTranscript: true });
+
+  await runTuiChatStream(
+    {
+      sendChatStream: async (_message, onEvent) => {
+        onEvent({ type: "delta", payload: { delta: "Review this draft." } });
+        onEvent({
+          type: "done",
+          payload: {
+            reply: "Review this draft.",
+            agent_output: {
+              schema: "physical-agent/agent-output/v1",
+              status: "draft",
+              decision: "propose",
+              lifecycle: "draft",
+              actions: [
+                {
+                  id: "draft_001",
+                  robot: "arm_1",
+                  capability: "observe",
+                  params: {},
+                  depends_on: []
+                }
+              ],
+              tasks: []
+            },
+            state: createReadyState()
+          }
+        });
+      }
+    },
+    "look around",
+    calls.handlers
+  );
+
+  assert.deepEqual(calls.transcript, [
+    { role: "assistant", content: "Review this draft." },
+    {
+      role: "draft",
+      content: "[draft output; not Action Board] draft_001 arm_1.observe"
+    }
+  ]);
+  assert.deepEqual(calls.states[0].actions?.pending, []);
+});
+
 test("SSE summary state does not overwrite full TUI state", () => {
   const states: AgentState[] = [];
   const result = applyEvent(

@@ -89,7 +89,9 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
     if (!normalized) {
       return;
     }
-    pendingLocalChatRef.current.push({ role, content: normalized });
+    if (role === "user" || role === "assistant") {
+      pendingLocalChatRef.current.push({ role, content: normalized });
+    }
     const id = `local-${Date.now()}-${transcriptCounterRef.current++}`;
     setTranscriptEntries((previous) => [
       ...previous,
@@ -556,17 +558,22 @@ export async function runTuiChatStream(
         handlers.setStreamingText(content);
       }
       if (event.type === "done") {
+        const reply = String(payload.reply ?? content);
+        if (handlers.appendTranscript) {
+          handlers.appendTranscript("assistant", reply);
+          const draft = draftOutputSummary(payload.agent_output);
+          if (draft) {
+            handlers.appendTranscript("draft", draft);
+          }
+          handlers.setStreamingText("");
+        }
         if (isFullAgentState(payload.state)) {
           handlers.setState(payload.state);
-          handlers.setStreamingText("");
-        } else {
-          const reply = String(payload.reply ?? content);
-          if (handlers.appendTranscript) {
-            handlers.appendTranscript("assistant", reply);
+          if (!handlers.appendTranscript) {
             handlers.setStreamingText("");
-          } else {
-            handlers.setStreamingText(reply);
           }
+        } else if (!handlers.appendTranscript) {
+          handlers.setStreamingText(reply);
         }
       }
       if (event.type === "error") {
@@ -590,6 +597,37 @@ function isFullAgentState(value: unknown): value is AgentState {
     "capabilities" in value ||
     "feedback" in value
   );
+}
+
+function draftOutputSummary(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (
+    value.schema !== "physical-agent/agent-output/v1" ||
+    value.lifecycle !== "draft" ||
+    value.decision !== "propose" ||
+    !Array.isArray(value.actions)
+  ) {
+    return null;
+  }
+  const labels: string[] = [];
+  for (const action of value.actions) {
+    if (!isRecord(action)) {
+      return null;
+    }
+    const id = typeof action.id === "string" ? action.id.trim() : "";
+    const robot = typeof action.robot === "string" ? action.robot.trim() : "";
+    const capability = typeof action.capability === "string" ? action.capability.trim() : "";
+    if (!id || !robot || !capability) {
+      return null;
+    }
+    labels.push(`${id} ${robot}.${capability}`);
+  }
+  if (!labels.length) {
+    return null;
+  }
+  return `[draft output; not Action Board] ${labels.join(", ")}`;
 }
 
 function isAgentStateSummary(value: unknown): boolean {

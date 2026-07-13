@@ -1019,6 +1019,20 @@ function mockCompiledTaskPair(actionId: string) {
   ];
 }
 
+function draftAgentOutput(actions: Array<Record<string, unknown>>) {
+  return {
+    schema: "physical-agent/agent-output/v1",
+    status: "draft",
+    decision: "propose",
+    lifecycle: "draft",
+    message: "Review the structured draft.",
+    proposal_id: null,
+    tasks: [],
+    actions,
+    refusal_reason: null,
+  };
+}
+
 async function mockReadyApiWithRobot(
   page: Page,
   overrides: Record<string, unknown> = {},
@@ -1184,6 +1198,7 @@ test("streaming action draft can be persisted to pending Actions", async ({ page
       capability: "observe",
       params: {},
       reason: "Inspect the workspace before moving.",
+      depends_on: [],
     }),
     "```",
   ].join("\n");
@@ -1199,6 +1214,16 @@ test("streaming action draft can be persisted to pending Actions", async ({ page
       request_id: "draft-e2e",
       reply,
       mode: "llm",
+      agent_output: draftAgentOutput([
+        {
+          id: actionId,
+          robot: "arm_1",
+          capability: "observe",
+          params: {},
+          reason: "Inspect the workspace before moving.",
+          depends_on: [],
+        },
+      ]),
     }),
   ], 20);
 
@@ -1218,6 +1243,107 @@ test("streaming action draft can be persisted to pending Actions", async ({ page
       return state.actions?.pending?.map((action) => action.id) ?? [];
     })
     .toContain(actionId);
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("chat drafts prefer structured output and retain fence fallback after refresh", async ({
+  page,
+}) => {
+  const consoleErrors = collectConsoleErrors(page);
+  const fenceOnly = {
+    id: "draft-fence-only",
+    robot: "arm_1",
+    capability: "pick",
+    params: { object: "red_block" },
+    reason: "Historical fallback.",
+    depends_on: [],
+  };
+  const consistent = {
+    id: "draft-consistent",
+    robot: "arm_1",
+    capability: "place",
+    params: { object: "red_block", target: "tray" },
+    reason: "Both tracks agree.",
+    depends_on: [],
+  };
+  const structuredConflict = {
+    id: "draft-structured-wins",
+    robot: "arm_1",
+    capability: "observe",
+    params: {},
+    reason: "Structured output is authoritative.",
+    depends_on: [],
+  };
+  const fenceConflict = {
+    id: "draft-fence-loses",
+    robot: "arm_1",
+    capability: "pick",
+    params: { object: "wrong_block" },
+    reason: "Compatibility conflict.",
+    depends_on: [],
+  };
+  const fence = (action: Record<string, unknown>) =>
+    `\n\n\`\`\`action-draft\n${JSON.stringify(action)}\n\`\`\``;
+
+  await mockReadyApiWithRobot(page, {
+    chat: {
+      messages: [
+        { role: "user", content: "structured only", created_at: "2026-07-01T01:00:00Z" },
+        {
+          role: "assistant",
+          content: "Structured-only reply.",
+          created_at: "2026-07-01T01:00:01Z",
+          metadata: {
+            agent_output: draftAgentOutput([
+              {
+                id: "draft-structured-only",
+                robot: "arm_1",
+                capability: "observe",
+                params: {},
+                reason: "Structured only.",
+                depends_on: [],
+              },
+            ]),
+          },
+        },
+        { role: "user", content: "historical fence", created_at: "2026-07-01T01:00:02Z" },
+        {
+          role: "assistant",
+          content: `Fence-only reply.${fence(fenceOnly)}`,
+          created_at: "2026-07-01T01:00:03Z",
+          metadata: {
+            agent_output: {
+              ...draftAgentOutput([structuredConflict]),
+              schema: "physical-agent/agent-output/v0",
+            },
+          },
+        },
+        { role: "user", content: "consistent tracks", created_at: "2026-07-01T01:00:04Z" },
+        {
+          role: "assistant",
+          content: `Consistent reply.${fence(consistent)}`,
+          created_at: "2026-07-01T01:00:05Z",
+          metadata: { agent_output: draftAgentOutput([consistent]) },
+        },
+        { role: "user", content: "conflicting tracks", created_at: "2026-07-01T01:00:06Z" },
+        {
+          role: "assistant",
+          content: `Conflict reply.${fence(fenceConflict)}`,
+          created_at: "2026-07-01T01:00:07Z",
+          metadata: { agent_output: draftAgentOutput([structuredConflict]) },
+        },
+      ],
+    },
+  });
+
+  await page.goto("/");
+  const cards = page.getByTestId("draft-action-card");
+  await expect(cards).toHaveCount(4);
+  await expect(cards.nth(0)).toContainText("arm_1.observe");
+  await expect(cards.nth(1)).toContainText("arm_1.pick");
+  await expect(cards.nth(2)).toContainText("arm_1.place");
+  await expect(cards.nth(3)).toContainText("arm_1.observe");
+  await expect(cards.nth(3)).not.toContainText("arm_1.pick");
   expectNoConsoleErrors(consoleErrors);
 });
 

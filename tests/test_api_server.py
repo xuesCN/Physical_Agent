@@ -404,6 +404,42 @@ def test_api_invalid_dependency_returns_client_error_without_partial_action(tmp_
     assert store.read_actions()["pending"] == []
 
 
+def test_api_chat_draft_dependency_requires_prerequisite_first(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    controller = ApiController(config_path)
+    dependent = ActionProposalRequest(
+        id="draft_dependent",
+        robot="arm_1",
+        capability="observe",
+        depends_on=["draft_prerequisite"],
+        metadata={"source": "chat_draft"},
+    )
+
+    with pytest.raises(api_server_module.ApiRequestError) as exc_info:
+        controller.propose_action(dependent)
+
+    assert exc_info.value.status_code == 422
+    assert store.read_actions()["pending"] == []
+
+    first = controller.propose_action(
+        ActionProposalRequest(
+            id="draft_prerequisite",
+            robot="arm_1",
+            capability="observe",
+            metadata={"source": "chat_draft"},
+        )
+    )
+    second = controller.propose_action(dependent)
+
+    assert first["action"]["id"] == "draft_prerequisite"
+    assert second["action"]["depends_on"] == ["draft_prerequisite"]
+    assert [action.id for action in store.read_actions()["pending"]] == [
+        "draft_prerequisite",
+        "draft_dependent",
+    ]
+
+
 def test_api_endpoints_cover_state_proposals_memory_ingest_search_and_audit(tmp_path):
     TestClient = _client_or_skip()
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
@@ -831,8 +867,18 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
                 "mode": "llm",
                 "reply": "hello",
                 "actions": [],
+                "draft_actions": [{"id": "draft_001"}],
+                "agent_output": {
+                    "schema": "physical-agent/agent-output/v1",
+                    "status": "draft",
+                    "decision": "propose",
+                    "lifecycle": "draft",
+                    "message": "hello",
+                    "tasks": [],
+                    "actions": [],
+                },
                 "memory": [],
-                "plan": None,
+                "plan": {"status": "answered"},
                 "executed": 0,
             }
 
@@ -860,6 +906,11 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
     assert events[0]["payload"]["request_id"] == "req-test"
     assert events[1]["payload"]["delta"] == "hel"
     assert events[3]["payload"]["reply"] == "hello"
+    assert events[3]["payload"]["agent_output"]["schema"] == (
+        "physical-agent/agent-output/v1"
+    )
+    assert events[3]["payload"]["plan"] == {"status": "answered"}
+    assert events[3]["payload"]["draft_actions"] == [{"id": "draft_001"}]
     assert events[3]["payload"]["state"]["chat"]["messages"] == []
     assert calls["runtime"] == {
         "config": config_path.resolve(),

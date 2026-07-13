@@ -47,6 +47,7 @@
 | R3-A | 锁定 SAFETY/LOG sidecar、doctor、audit 与 mirror failure 行为 | `e7f878b` |
 | R3-B | state sidecar adapter 接管 SQLite runtime/doctor/audit | `a64be59` |
 | R3-C | legacy fail-closed 防护 + 真实 `9072b4e` 历史救援 smoke | `d1713a0` |
+| R3-D | 删除当前一次性 Markdown migrator 与专用兼容实现 | `6309a1b` |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -306,6 +307,12 @@ R3-A 先不抽 adapter，也不删除 migrator/full Workspace，而是新增 `te
 错误指引不再假设当前版本永远保留 migrator，而是固定指向完整历史 commit `9072b4e9fb600e505668aeb6076eb6cb85e5ff82`：用户必须建立独立 git worktree、安装并调用该 checkout 的旧 `physical-agent migrate-md-to-sqlite`，手工把 config 改为 sqlite 后回当前版本运行非 force init 与 state-check；已有 `state.db` 时先备份，不得轻率使用历史 `--overwrite`。显式 `workspace.backend: markdown` 和省略 backend + 十个完整旧文件仍 fail closed；新增负例证明缺一个文件的不完整集合不会被误判为完整 legacy workspace。
 
 新增可重复执行的 `scripts/smoke_legacy_workspace_rescue.py`。它真实 `git worktree add --detach` 到历史 commit，以独立 venv interpreter 和旧 checkout package 构造 task/capabilities/world、pending/completed/cancelled actions、feedback、自定义 SAFETY、chat/summary、plan、memory、upload 与 LOG，再通过旧 Typer CLI 迁移。smoke 记录并断言 old/current 的 `sys.executable` 和 `physical_agent.__file__` 分别来自旧 worktree与当前 checkout；验证旧命令不改 config，第二次无 `--overwrite` 拒绝已有 DB；随后手改 sqlite，用当前 CLI 非 force init/state-check 升级 schema，逐项读回所有数据，并用 hash 证明 SAFETY/LOG 未被覆盖。提交 `d1713a0` 的真实 rescue smoke、legacy 定向 5 tests 与全量 Python `419 passed, 1 warning` 均通过，R3-D 删除门禁已解除；阶段快照仍未修改。
+
+### R3-D：删除当前一次性 Markdown migrator
+
+R3-C 门禁通过后，当前版本不再承担旧 Markdown workspace 的迁移职责：删除 CLI `migrate-md-to-sqlite`、`LegacyMarkdownWorkspaceReader`、`allow_retired_markdown` bypass、audit 的旧 LOG reader、SQLite migration function，以及只为迁移保留的五个 replace 与两个 revision helper；五项 migration-only tests 同步退出，新增 CLI help/unknown-command 负契约。`load_config()` 现在没有绕过 fail-closed 检测的公开开关，但显式 markdown backend、隐式完整旧文件集合、`RETIRED_MARKDOWN_BACKEND_GUIDANCE` 与完整历史 commit 指针继续保留。
+
+删除后再次运行 `scripts/smoke_legacy_workspace_rescue.py`：迁移仍由 `9072b4e` 独立 worktree 的旧 package/CLI 完成，随后回当前版本非 force init/state-check，十一类数据面、SAFETY/LOG hash 与已有 DB 拒绝全部通过。这证明历史后路不依赖当前树中的 migrator。production/tests 的 reader、migration function、config bypass 与专用 helper grep 为零；定向状态矩阵 40 tests 及清除沙盒代理后的全量 Python `415 passed, 1 warning`。提交 `6309a1b` 完成 R3-D；下一步 R3-E 只处理 full Workspace fixture/helper/protocol，不提前清 current docs，也不扩大冻结功能。
 
 ## 3. 关键决策与偏离（跨阶段汇总）
 

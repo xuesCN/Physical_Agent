@@ -132,7 +132,7 @@
 - [x] doctor 继续检查 task/capabilities/world/actions/feedback/chat/plan/memory，并只对 LOG 做 front-matter/revision 文件校验。
 - [x] `SqliteStateStore`、doctor、audit export 全部切到新 adapter。
 - [x] `rg "from physical_agent.protocol.workspace import Workspace|Workspace\.filenames|_file_workspace" physical_agent/state/sqlite.py physical_agent/doctor.py` 为零。
-- [-] 更宽的 `physical_agent/state` grep 仍只命中 migration-only `legacy_markdown.py` 两处；必须等 R3-C rescue gate 后随 R3-D 删除，不能为字面归零提前隐藏依赖。
+- [x] 更宽的 `physical_agent/state` grep 曾只命中 migration-only `legacy_markdown.py` 两处；R3-C rescue gate 通过后已随 R3-D 删除，未用间接 import 隐藏依赖。
 
 ### R3-C 先固化 legacy 防护与真实救援 smoke
 
@@ -152,18 +152,20 @@
 
 ### R3-D 删除一次性迁移入口
 
-- [ ] `physical_agent/cli.py`: migrator import 与 `migrate-md-to-sqlite` command。
-- [ ] `physical_agent/state/legacy_markdown.py`: `LegacyMarkdownWorkspaceReader` 全文件。
-- [ ] `physical_agent/state/sqlite.py`: `migrate_markdown_workspace_to_sqlite()` 与迁移专用 imports。
-- [ ] `physical_agent/state/sqlite.py`: 删除只由 migrator 调用的 `_replace_actions_with_revision`、`_replace_chat_with_revision`、`_replace_memory_with_revision`、`_replace_uploads_with_revision`、`_replace_log_entries`、`_payload_revision`、`_metadata_revision`。
-- [ ] `physical_agent/state/audit.py`: `read_markdown_log_document/entries()` 与专属 imports。
-- [ ] `physical_agent/config.py`: `allow_retired_markdown=True` 开关。
-- [ ] 删除 `tests/test_state_store.py::test_legacy_markdown_reader_is_migration_only_not_state_store`。
-- [ ] 删除 `tests/test_state_store.py::test_migrate_markdown_to_sqlite_cli_does_not_switch_backend`。
-- [ ] 删除 `tests/test_state_store.py::test_migrated_sqlite_export_contains_action_board_chat_memory_and_log`。
-- [ ] 删除 `tests/test_backend_matrix.py::test_markdown_to_sqlite_migration_preserves_readiness_state_and_audit`。
-- [ ] 删除 `tests/test_backend_matrix.py::test_markdown_to_sqlite_migration_reads_legacy_workspace_when_backend_omitted`。
-- [ ] CLI help 不再出现 migrate；legacy backend 负用例仍通过。
+- [x] `physical_agent/cli.py`: migrator import 与 `migrate-md-to-sqlite` command。
+- [x] `physical_agent/state/legacy_markdown.py`: `LegacyMarkdownWorkspaceReader` 全文件。
+- [x] `physical_agent/state/sqlite.py`: `migrate_markdown_workspace_to_sqlite()` 与迁移专用 imports。
+- [x] `physical_agent/state/sqlite.py`: 删除只由 migrator 调用的 `_replace_actions_with_revision`、`_replace_chat_with_revision`、`_replace_memory_with_revision`、`_replace_uploads_with_revision`、`_replace_log_entries`、`_payload_revision`、`_metadata_revision`。
+- [x] `physical_agent/state/audit.py`: `read_markdown_log_document/entries()` 与专属 imports。
+- [x] `physical_agent/config.py`: `allow_retired_markdown=True` 开关。
+- [x] 删除 `tests/test_state_store.py::test_legacy_markdown_reader_is_migration_only_not_state_store`。
+- [x] 删除 `tests/test_state_store.py::test_migrate_markdown_to_sqlite_cli_does_not_switch_backend`。
+- [x] 删除 `tests/test_state_store.py::test_migrated_sqlite_export_contains_action_board_chat_memory_and_log`。
+- [x] 删除 `tests/test_backend_matrix.py::test_markdown_to_sqlite_migration_preserves_readiness_state_and_audit`。
+- [x] 删除 `tests/test_backend_matrix.py::test_markdown_to_sqlite_migration_reads_legacy_workspace_when_backend_omitted`。
+- [x] CLI help 不再出现 migrate；显式/隐式 legacy backend 负用例仍通过。
+- [x] 删除后重新执行真实 `9072b4e` 独立 worktree 救援 smoke，十一类数据面与 current 非 force init/state-check 全部通过。
+- [x] production/tests 中 migrator/reader/bypass/迁移专用 helper 符号为零；清除沙盒代理影响后全量 Python `415 passed, 1 warning`。
 
 ### R3-E 退役 full Workspace helper/protocol
 

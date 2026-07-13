@@ -49,6 +49,7 @@
 | R3-C | legacy fail-closed 防护 + 真实 `9072b4e` 历史救援 smoke | `d1713a0` |
 | R3-D | 删除当前一次性 Markdown migrator 与专用兼容实现 | `6309a1b` |
 | R3-E | 删除 full Workspace helper 与退役 Markdown protocol | `4a8ec86` |
+| R3-F | 当前文档、示例与发布包收口 | `9698b3e` |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -322,6 +323,12 @@ R3-C 门禁通过后，当前版本不再承担旧 Markdown workspace 的迁移�
 随后删除 `protocol/workspace.py`、专用 `parsers.py`/`renderers.py`、`Workspace` public export、`test_workspace.py` 与 task/action/chat/capabilities/world/feedback/plan/memory 旧 roundtrip。`WorkspaceDocument` 仍是 `parse_front_matter()` 的最小返回类型；`protocol/markdown.py` 只保留 sidecar 实际使用的 front matter render/parse、YAML fence 与按 heading 取规则块。`export-audit`、SQLite audit、SAFETY/LOG sidecar 和 legacy fail-closed 检测均未改变。
 
 提交 `4a8ec86` 删除 1107 行、只新增 62 行聚焦 fixture。production/tests 的 full Workspace/parser/renderer import/call 为零；定向 39 tests 与清除代理后的全量 Python `404 passed, 1 warning`。真实 `9072b4e` rescue smoke 在删除后再次逐项通过十一类数据面、SAFETY/LOG hash、current 非 force init/state-check。下一步 R3-F 只清当前操作文档并做最终门禁；用户指定的阶段快照继续排除。
+
+### R3-F：当前文档与发布形态收口
+
+README、state backend/hardware guide、架构 SVG 与 hardware examples 已统一为 SQLite 运行真源 + SAFETY/LOG sidecar；当前 CLI 不再承诺迁移能力。需要旧 workspace 迁移的用户仍必须在独立 worktree checkout 完整提交 `9072b4e9fb600e505668aeb6076eb6cb85e5ff82`，不能用升级后的 executable。按用户约定，`current-architecture-audit.md/html` 与 `system-summary.zh-CN.md` 仍是阶段快照，不参与 current-doc closure。
+
+最终 wheel 验证暴露了一个删除类改动的发布风险：setuptools 增量构建会把 `build/lib/physical_agent` 中已从源码删除的 migrator/full Workspace 模块继续装进 wheel。`CleanPackageBuild` 因此改为每次重建完整 package tree，wheel smoke 与 unit contract 同时对 legacy GUI、`legacy_markdown.py`、`workspace.py`、`parsers.py`、`renderers.py` 做负断言。提交 `9698b3e` 经全量 Python `404 passed, 1 warning`、Safety smoke、frontend build、TUI 59 tests/typecheck/build、clean-wheel smoke 与真实历史救援验证；R3 完成，下一阶段按原子顺序进入 R4 `auto_step` 退役，不恢复冻结功能。
 
 ## 3. 关键决策与偏离（跨阶段汇总）
 

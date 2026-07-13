@@ -184,12 +184,14 @@
 
 ### R3-F 文档与最终验证
 
-- [ ] 清 `README.md`、`README.zh-CN.md`、`docs/state-backends.zh-CN.md`、`docs/hardware-bringup-checklist.zh-CN.md`。
+- [x] 清 `README.md`、`README.zh-CN.md`、`docs/state-backends.zh-CN.md`、`docs/hardware-bringup-checklist.zh-CN.md`；当前版本只描述 SQLite + SAFETY/LOG sidecar，旧 workspace 只保留 `9072b4e9fb600e505668aeb6076eb6cb85e5ff82` 独立 worktree 救援入口。
 - [-] `docs/current-architecture-audit.md/html` 与 `docs/system-summary.zh-CN.md` 是用户保留的阶段快照，不纳入 R3 current-doc 收口，也不据此阻塞 R3。
-- [ ] 清 `docs/current-architecture-overview.svg`、`examples/xiaozhi_mcp_hardware/README.md`。
-- [ ] 同步 `docs/SPEC.zh-CN.md`、`docs/PLAYBOOK.zh-CN.md`、`docs/REFACTORING.zh-CN.md`；B6 历史事实保留，只追加提前退役。
+- [x] 清 `docs/current-architecture-overview.svg`、xiaozhi/moce hardware examples；不再把退役 Markdown 文件或 legacy GUI 操作写成当前入口。
+- [x] 同步 `docs/SPEC.zh-CN.md`、`docs/PLAYBOOK.zh-CN.md`、`docs/REFACTORING.zh-CN.md`；B6 历史事实保留，只追加提前退役。
 - [x] production/tests 中 `rg "LegacyMarkdownWorkspaceReader|migrate_markdown_workspace_to_sqlite|physical_agent\.protocol\.workspace"` 为零；历史/救援文档仅保留逐条审阅后的白名单引用。
-- [ ] sidecar、legacy negative、rescue smoke、全量 pytest 与 safety boundary 全绿。
+- [x] 修复增量 wheel 的陈旧 `build/lib/physical_agent` 泄漏，并在 wheel smoke/unit test 断言不包含 legacy GUI、migrator 与 full Workspace 模块。
+- [x] sidecar、legacy negative、真实 rescue smoke、全量 Python `404 passed, 1 warning`、Safety smoke、frontend build、TUI 59 tests/typecheck/build 与 clean-wheel smoke 全绿；本地 Playwright 因无 Chromium 未执行，以本轮 PR CI 为最终门禁。
+- [x] R3-F 实现提交 `9698b3e`；R3 全部完成，下一阶段 R4 退役 `auto_step`，不启动冻结功能。
 
 ## R4 `auto_step` 退役
 

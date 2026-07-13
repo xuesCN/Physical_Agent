@@ -169,15 +169,18 @@
 
 ### R3-E 退役 full Workspace helper/protocol
 
-- [ ] `tests/test_driver_loader.py`、`tests/test_hardware_onboarding.py`、`tests/test_xiaozhi_mcp_driver.py` 先改成 SQLite/专用 path fixture。
-- [ ] `tests/test_chat_protocol.py::test_chat_summary_trim_respects_tiny_budget` 保留；只删 full Workspace roundtrip。
-- [ ] `WorkspaceDocument` 若仍作为最小 front-matter 返回类型则保留，不因名称相似误删。
-- [ ] `physical_agent/protocol/markdown.py` 只缩到 sidecar 所需 front matter/YAML fence/safety/log 最小函数（或内收 sidecar）；不得按文件名机械全删。
-- [ ] 删除 `physical_agent/protocol/workspace.py` full Workspace helper。
-- [ ] 删除 task/action/chat/capabilities/world/feedback/plan/memory 的退役 Markdown parser/renderer。
-- [ ] 删除 `physical_agent/protocol/__init__.py` 的 `Workspace` public export。
-- [ ] 永久保留 `export-audit` 命令与 SQLite audit export。
-- [ ] 只有 R3-A 行为已迁移后，才删除旧 `tests/test_workspace.py` 与 `tests/test_markdown_protocol.py` 中退役 full-document roundtrip tests。
+- [x] `tests/test_driver_loader.py`、`tests/test_hardware_onboarding.py`、`tests/test_xiaozhi_mcp_driver.py` 先改成只创建实际所需目录的专用 path fixture。
+- [x] `tests/test_chat_protocol.py::test_chat_summary_trim_respects_tiny_budget` 保留；只删 full Workspace roundtrip。
+- [x] `WorkspaceDocument` 仍作为最小 front-matter 返回类型保留，没有因名称相似误删。
+- [x] `physical_agent/protocol/markdown.py` 已缩到 sidecar 所需 front matter/YAML fence/safety/log 最小函数。
+- [x] 删除 `physical_agent/protocol/workspace.py` full Workspace helper。
+- [x] 删除 task/action/chat/capabilities/world/feedback/plan/memory 的退役 Markdown parser/renderer。
+- [x] 删除 `physical_agent/protocol/__init__.py` 的 `Workspace` public export。
+- [x] 永久保留 `export-audit` 命令与 SQLite audit export。
+- [x] R3-A 行为迁移已完成后，删除 `tests/test_workspace.py` 与 `tests/test_markdown_protocol.py` 中退役 full-document roundtrip tests；最小 front-matter contract 保留。
+- [x] legacy detection 测试改为显式构造旧文件集合，不用退役 helper 伪装 runtime 初始化。
+- [x] production/tests 的 full Workspace/parser/renderer imports 与调用为零；定向 39 tests、全量 Python `404 passed, 1 warning`。
+- [x] 删除后再次运行真实 `9072b4e` rescue smoke，十一类数据面、SAFETY/LOG 与 current init/state-check 全绿。
 
 ### R3-F 文档与最终验证
 
@@ -185,7 +188,7 @@
 - [-] `docs/current-architecture-audit.md/html` 与 `docs/system-summary.zh-CN.md` 是用户保留的阶段快照，不纳入 R3 current-doc 收口，也不据此阻塞 R3。
 - [ ] 清 `docs/current-architecture-overview.svg`、`examples/xiaozhi_mcp_hardware/README.md`。
 - [ ] 同步 `docs/SPEC.zh-CN.md`、`docs/PLAYBOOK.zh-CN.md`、`docs/REFACTORING.zh-CN.md`；B6 历史事实保留，只追加提前退役。
-- [ ] production/tests 中 `rg "LegacyMarkdownWorkspaceReader|migrate_markdown_workspace_to_sqlite|physical_agent\.protocol\.workspace"` 为零；历史/救援文档仅保留逐条审阅后的白名单引用。
+- [x] production/tests 中 `rg "LegacyMarkdownWorkspaceReader|migrate_markdown_workspace_to_sqlite|physical_agent\.protocol\.workspace"` 为零；历史/救援文档仅保留逐条审阅后的白名单引用。
 - [ ] sidecar、legacy negative、rescue smoke、全量 pytest 与 safety boundary 全绿。
 
 ## R4 `auto_step` 退役

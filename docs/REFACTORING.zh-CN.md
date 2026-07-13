@@ -48,6 +48,7 @@
 | R3-B | state sidecar adapter 接管 SQLite runtime/doctor/audit | `a64be59` |
 | R3-C | legacy fail-closed 防护 + 真实 `9072b4e` 历史救援 smoke | `d1713a0` |
 | R3-D | 删除当前一次性 Markdown migrator 与专用兼容实现 | `6309a1b` |
+| R3-E | 删除 full Workspace helper 与退役 Markdown protocol | `4a8ec86` |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -313,6 +314,14 @@ R3-A 先不抽 adapter，也不删除 migrator/full Workspace，而是新增 `te
 R3-C 门禁通过后，当前版本不再承担旧 Markdown workspace 的迁移职责：删除 CLI `migrate-md-to-sqlite`、`LegacyMarkdownWorkspaceReader`、`allow_retired_markdown` bypass、audit 的旧 LOG reader、SQLite migration function，以及只为迁移保留的五个 replace 与两个 revision helper；五项 migration-only tests 同步退出，新增 CLI help/unknown-command 负契约。`load_config()` 现在没有绕过 fail-closed 检测的公开开关，但显式 markdown backend、隐式完整旧文件集合、`RETIRED_MARKDOWN_BACKEND_GUIDANCE` 与完整历史 commit 指针继续保留。
 
 删除后再次运行 `scripts/smoke_legacy_workspace_rescue.py`：迁移仍由 `9072b4e` 独立 worktree 的旧 package/CLI 完成，随后回当前版本非 force init/state-check，十一类数据面、SAFETY/LOG hash 与已有 DB 拒绝全部通过。这证明历史后路不依赖当前树中的 migrator。production/tests 的 reader、migration function、config bypass 与专用 helper grep 为零；定向状态矩阵 40 tests 及清除沙盒代理后的全量 Python `415 passed, 1 warning`。提交 `6309a1b` 完成 R3-D；下一步 R3-E 只处理 full Workspace fixture/helper/protocol，不提前清 current docs，也不扩大冻结功能。
+
+### R3-E：删除 full Workspace helper/protocol
+
+生产依赖审计确认 R3-B 后 full `Workspace` 已不再服务 runtime，剩余使用者全部是测试 fixture 或退役 Markdown roundtrip。driver loader、hardware onboarding 与 xiaozhi tests 改为只创建 `workspace/artifacts` 的专用目录 fixture，不再为了两个路径生成十份旧 Markdown 文档；legacy 显式/隐式检测则直接使用 `LEGACY_MARKDOWN_WORKSPACE_FILES` 构造完整/不完整旧文件集合，使负契约表达检测条件本身。`test_chat_summary_trim_respects_tiny_budget` 作为纯摘要算法测试保留。
+
+随后删除 `protocol/workspace.py`、专用 `parsers.py`/`renderers.py`、`Workspace` public export、`test_workspace.py` 与 task/action/chat/capabilities/world/feedback/plan/memory 旧 roundtrip。`WorkspaceDocument` 仍是 `parse_front_matter()` 的最小返回类型；`protocol/markdown.py` 只保留 sidecar 实际使用的 front matter render/parse、YAML fence 与按 heading 取规则块。`export-audit`、SQLite audit、SAFETY/LOG sidecar 和 legacy fail-closed 检测均未改变。
+
+提交 `4a8ec86` 删除 1107 行、只新增 62 行聚焦 fixture。production/tests 的 full Workspace/parser/renderer import/call 为零；定向 39 tests 与清除代理后的全量 Python `404 passed, 1 warning`。真实 `9072b4e` rescue smoke 在删除后再次逐项通过十一类数据面、SAFETY/LOG hash、current 非 force init/state-check。下一步 R3-F 只清当前操作文档并做最终门禁；用户指定的阶段快照继续排除。
 
 ## 3. 关键决策与偏离（跨阶段汇总）
 

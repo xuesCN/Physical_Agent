@@ -46,6 +46,7 @@
 | R2.1 | canonical projection 收口 + Playwright/wheel 阻塞门禁 | `30e97dd`, `9adaf6c`, `b20ad20` |
 | R3-A | 锁定 SAFETY/LOG sidecar、doctor、audit 与 mirror failure 行为 | `e7f878b` |
 | R3-B | state sidecar adapter 接管 SQLite runtime/doctor/audit | `a64be59` |
+| R3-C | legacy fail-closed 防护 + 真实 `9072b4e` 历史救援 smoke | `d1713a0` |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -299,6 +300,12 @@ R3-A 先不抽 adapter，也不删除 migrator/full Workspace，而是新增 `te
 新增 `state/sidecars.py::StateSidecars`，它只认识 `SAFETY.md` 与 `LOG.md`：承接默认/人工 safety policy、front matter revision、进程内 LOG append 锁与 mirror validation。SQLite 自己持有十个逻辑文档名常量，`SqliteStateStore` 不再 import、实例化或调用 full `protocol.workspace.Workspace`；初始化、SAFETY 读写、LOG 镜像、doctor validation 与 audit SAFETY source 都委托新 adapter。没有新增数据库表，也没有把 SAFETY 移入 SQLite；R3-A 的 mirror failure 与 revision divergence 契约保持原样。
 
 原 checklist 曾要求对整个 `physical_agent/state` grep 后 full Workspace 引用为零，但这与同阶段“R3-C rescue smoke 前保留 migration-only reader”的顺序冲突。本轮选择诚实保留 `legacy_markdown.py` 的两处显式依赖，而不是换一种 import 写法隐藏它；runtime target `state/sqlite.py` 与 doctor 已严格归零，最后两处将在 R3-C 通过后随 R3-D 整个 reader 删除。新增结构测试锁定 adapter 只暴露两个 sidecar 文件、SQLite/doctor 不得回引 full Workspace。提交 `a64be59` 的定向 24 tests、迁移/状态/API/安全回归 82 tests 与全量 Python `418 passed, 1 warning` 均通过。下一步是 R3-C 真实历史救援验证，本轮未修改阶段快照。
+
+### R3-C：legacy fail-closed 与真实历史救援
+
+错误指引不再假设当前版本永远保留 migrator，而是固定指向完整历史 commit `9072b4e9fb600e505668aeb6076eb6cb85e5ff82`：用户必须建立独立 git worktree、安装并调用该 checkout 的旧 `physical-agent migrate-md-to-sqlite`，手工把 config 改为 sqlite 后回当前版本运行非 force init 与 state-check；已有 `state.db` 时先备份，不得轻率使用历史 `--overwrite`。显式 `workspace.backend: markdown` 和省略 backend + 十个完整旧文件仍 fail closed；新增负例证明缺一个文件的不完整集合不会被误判为完整 legacy workspace。
+
+新增可重复执行的 `scripts/smoke_legacy_workspace_rescue.py`。它真实 `git worktree add --detach` 到历史 commit，以独立 venv interpreter 和旧 checkout package 构造 task/capabilities/world、pending/completed/cancelled actions、feedback、自定义 SAFETY、chat/summary、plan、memory、upload 与 LOG，再通过旧 Typer CLI 迁移。smoke 记录并断言 old/current 的 `sys.executable` 和 `physical_agent.__file__` 分别来自旧 worktree与当前 checkout；验证旧命令不改 config，第二次无 `--overwrite` 拒绝已有 DB；随后手改 sqlite，用当前 CLI 非 force init/state-check 升级 schema，逐项读回所有数据，并用 hash 证明 SAFETY/LOG 未被覆盖。提交 `d1713a0` 的真实 rescue smoke、legacy 定向 5 tests 与全量 Python `419 passed, 1 warning` 均通过，R3-D 删除门禁已解除；阶段快照仍未修改。
 
 ## 3. 关键决策与偏离（跨阶段汇总）
 

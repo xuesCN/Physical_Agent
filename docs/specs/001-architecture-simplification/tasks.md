@@ -136,19 +136,19 @@
 
 ### R3-C 先固化 legacy 防护与真实救援 smoke
 
-- [ ] 保留 `RETIRED_MARKDOWN_BACKEND_GUIDANCE`。
-- [ ] 保留 `LEGACY_MARKDOWN_WORKSPACE_FILES`。
-- [ ] 保留 `_looks_like_legacy_markdown_workspace()`。
-- [ ] 显式 `workspace.backend: markdown` 继续拒绝。
-- [ ] 省略 backend + 完整旧文件集合继续拒绝，不能静默叠加 `state.db`。
-- [ ] 保留并更新 `test_open_state_store_rejects_explicit_markdown_backend`。
-- [ ] 保留并更新 `test_load_config_rejects_legacy_markdown_workspace_when_backend_omitted`。
-- [ ] 错误文案指向独立 worktree checkout `9072b4e`（完整 commit `9072b4e9fb600e505668aeb6076eb6cb85e5ff82`）。
-- [ ] 在临时目录/独立 worktree checkout `9072b4e9fb600e505668aeb6076eb6cb85e5ff82`，安装并调用该 checkout 的旧 Python package，构造完整 legacy workspace 并运行历史 migrator；不得误用当前 executable。
-- [ ] smoke 显式记录 old/current 两个解释器的 `physical_agent.__file__`，证明来自不同 checkout/package。
-- [ ] rescue smoke 确认历史命令不会自动改 config；手动改为 sqlite 后回当前版本，运行不带 `--force` 的 `physical-agent init`，随后运行 `physical-agent state-check`。
-- [ ] rescue smoke 逐项验证迁移后的 task/capabilities/world/actions/feedback/SAFETY/chat/plan/memory/uploads/log 可读，并确认 current init 前后 SAFETY/LOG 内容不被意外覆盖。
-- [ ] 明示已有 `state.db` 时不要轻率使用历史 `--overwrite`。
+- [x] 保留 `RETIRED_MARKDOWN_BACKEND_GUIDANCE`。
+- [x] 保留 `LEGACY_MARKDOWN_WORKSPACE_FILES`。
+- [x] 保留 `_looks_like_legacy_markdown_workspace()`。
+- [x] 显式 `workspace.backend: markdown` 继续拒绝。
+- [x] 省略 backend + 完整旧文件集合继续拒绝，不能静默叠加 `state.db`；不完整文件集合不误判。
+- [x] 保留并更新 `test_open_state_store_rejects_explicit_markdown_backend`。
+- [x] 保留并更新 `test_load_config_rejects_legacy_markdown_workspace_when_backend_omitted`。
+- [x] 错误文案指向独立 worktree checkout `9072b4e`（完整 commit `9072b4e9fb600e505668aeb6076eb6cb85e5ff82`）。
+- [x] `scripts/smoke_legacy_workspace_rescue.py` 在临时目录/独立 worktree checkout 完整历史 commit，以独立 venv interpreter 调用旧 package/CLI migrator；不使用当前 executable 充当旧 migrator。
+- [x] smoke 显式记录 old/current 两个解释器的 `physical_agent.__file__`，并断言分别来自旧 worktree/current checkout。
+- [x] rescue smoke 确认历史命令不会自动改 config；手动改为 sqlite 后回当前版本，运行不带 `--force` 的 `physical-agent init`，随后运行 `physical-agent state-check`。
+- [x] rescue smoke 逐项验证迁移后的 task/capabilities/world/actions/feedback/SAFETY/chat/plan/memory/uploads/log 可读，并确认 current init 前后 SAFETY/LOG 内容不被意外覆盖。
+- [x] 已有 `state.db` 时历史命令无 `--overwrite` 会拒绝；错误指引明示先备份且不要轻率覆盖。
 
 ### R3-D 删除一次性迁移入口
 

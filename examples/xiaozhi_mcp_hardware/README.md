@@ -5,7 +5,7 @@ This example shows how to connect a Xiaozhi MCP-style device to Physical Agent.
 The important boundary is simple:
 
 ```text
-agent writes intent into Markdown workspace files.
+agent submits a structured proposal into the SQLite Action Board.
 watch loads the driver, enforces safety, and talks to hardware or the MCP bridge.
 ```
 
@@ -158,7 +158,7 @@ layers exist.
 - `home` to return the robot to its home pose
 - `stop` to stop the current motion
 
-Those capabilities are published into `CAPABILITIES.md`, so the agent only sees Markdown and never touches hardware directly.
+Those capabilities are published into SQLite state and exposed through the application projection. The agent consumes structured capabilities and never touches hardware directly.
 
 ## What Integrators Should Remember
 
@@ -177,9 +177,9 @@ If execution does not happen, check:
 
 1. `physical-agent doctor`
 2. `physical-agent inspect`
-3. `workspace/CAPABILITIES.md`
-4. `workspace/ACTIONS.md`
-5. `workspace/FEEDBACK.md`
+3. `physical-agent inspect`
+4. Dashboard Actions and Events
+5. `physical-agent export-audit`
 
 Typical causes:
 

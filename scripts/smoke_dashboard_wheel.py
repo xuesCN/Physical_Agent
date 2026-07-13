@@ -61,7 +61,7 @@ def _run_smoke(workdir: Path) -> None:
         cwd=ROOT,
     )
     wheel = next(wheel_dir.glob("physical_agent-*.whl"))
-    _assert_no_retired_gui(wheel)
+    _assert_no_retired_package_files(wheel)
 
     base_env = workdir / "base-env"
     _create_venv(base_env)
@@ -130,16 +130,22 @@ def _run_smoke(workdir: Path) -> None:
         raise RuntimeError(f"API without --watch did not report executor none: {api_health}")
 
 
-def _assert_no_retired_gui(wheel: Path) -> None:
+def _assert_no_retired_package_files(wheel: Path) -> None:
+    retired_paths = {
+        "physical_agent/protocol/parsers.py",
+        "physical_agent/protocol/renderers.py",
+        "physical_agent/protocol/workspace.py",
+        "physical_agent/state/legacy_markdown.py",
+    }
     with zipfile.ZipFile(wheel) as archive:
         retired = [
             name
             for name in archive.namelist()
-            if name.startswith("physical_agent/gui/")
+            if name.startswith("physical_agent/gui/") or name in retired_paths
         ]
     if retired:
         raise RuntimeError(
-            "Packaged wheel contains retired physical_agent/gui files: "
+            "Packaged wheel contains retired package files: "
             + ", ".join(retired)
         )
 

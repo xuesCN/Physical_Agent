@@ -26,10 +26,10 @@
 
 ## B6 退役 markdown 后端（已完成，维护约束）
 
-**完成状态**：`MarkdownStateStore` / runtime Markdown backend 已退役；active backend 只支持 SQLite。`workspace.backend: markdown` 和"省略 backend 但存在完整 legacy Markdown workspace"都必须报迁移指引，不能静默打开旧后端。
-**保留边界**：R3 会提前退役 migration/full Workspace，但必须先把 SAFETY.md 文件真源与 SQLite 的 LOG.md 人类可读镜像抽成聚焦 sidecar；audit export 仍复制 SAFETY。不要把这类生产能力误删成"markdown 全家退役"。
-**禁止回流**：退役前，`LegacyMarkdownWorkspaceReader` 仍只服务 `migrate-md-to-sqlite`，不得被 runtime factory、watch、API、GUI、agent、chat、planner 或 MCP 直接使用；不得实现 `StateStore`，不得承接新功能字段。R3 将一并删除 reader/command，并保留 legacy workspace fail-closed 检测和 `9072b4e` 救援指针。
-**维护检查**：新增状态字段时只改 SQLite 与审计导出；全仓 grep `LegacyMarkdownWorkspaceReader`、`MarkdownStateStore`、`workspace.backend: markdown`、`backend_role: legacy`，确认旧后端只出现在迁移/历史说明语境。
+**完成状态**：`MarkdownStateStore`、当前 migrator/reader 与 full Workspace protocol 均已退役；active backend 只支持 SQLite。`workspace.backend: markdown` 和"省略 backend 但存在完整 legacy Markdown workspace"都必须 fail closed，不能静默打开旧后端或叠加 `state.db`。
+**保留边界**：`SAFETY.md` 文件真源与 SQLite 的 `LOG.md` 人类可读镜像已经由聚焦 sidecar 承接；audit export 仍复制 SAFETY。它们是正式安全/可审计能力，不属于旧 workspace protocol。
+**历史救援**：需要迁移旧 workspace 的用户只能使用 `9072b4e` 独立 worktree 的旧 package/CLI，手动切换 config 后回当前版本执行非 force init/state-check；当前 executable 不再提供迁移入口。
+**维护检查**：新增状态字段时只改 SQLite 与审计导出；全仓 grep `LegacyMarkdownWorkspaceReader`、`MarkdownStateStore`、`physical_agent.protocol.workspace`、`workspace.backend: markdown`，确认 production/tests 为零，剩余引用只属于历史/救援说明。
 
 ## F1 提案卡片 + Approve + 审批流
 

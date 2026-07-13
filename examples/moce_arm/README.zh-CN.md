@@ -38,13 +38,9 @@
 workspace-partial-hardware/
 ```
 
-重要文件：
-
-- `WORLD.md`：当前舵机状态
-- `ACTIONS.md`：动作板
-- `FEEDBACK.md`：执行反馈
-- `LOG.md`：审计日志
-- `CHAT.md`：GUI/Chat 对话记录
+运行态真源是 `workspace-partial-hardware/state.db`。使用 `physical-agent inspect`
+查看 world/capabilities/actions，使用 Dashboard Events 或 `physical-agent export-audit`
+查看 feedback/log；`SAFETY.md` 仍是人工安全规则真源，`LOG.md` 只是人类可读镜像。
 
 ## 2. 当前控制能力
 

@@ -239,3 +239,9 @@ def test_wheel_contains_dashboard_index_and_hashed_assets(tmp_path):
     }
     assert packaged_dashboard == source_dashboard
     assert not any(member.startswith("physical_agent/gui/") for member in members)
+    assert not {
+        "physical_agent/protocol/parsers.py",
+        "physical_agent/protocol/renderers.py",
+        "physical_agent/protocol/workspace.py",
+        "physical_agent/state/legacy_markdown.py",
+    } & members

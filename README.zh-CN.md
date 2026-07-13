@@ -169,47 +169,17 @@ workspace:
 
 运行时通过 `StateStore` Protocol 打开**一个且仅一个 active backend**：SQLite。动态运行状态写入 `workspace/state.db`；SQLite 表里的 payload 是 JSON。API/GUI 返回的 JSON 是结构化传输与渲染视图，不是另一套独立存储层。`SAFETY.md` 仍是人类拥有的文件真源，watch 每次执行前都会读取并强制执行。`export-audit` 可以把当前 SQLite 状态导出为可读审计视图到 `workspace/audit/`。
 
-旧 Markdown workspace 已不能作为 active backend 打开。已有旧项目先迁移：
-
-```powershell
-physical-agent migrate-md-to-sqlite --config physical-agent.yaml
-```
-
-迁移完成后，把 `physical-agent.yaml` 改成 `workspace.backend: sqlite`，再启动 CLI/API/GUI/watch。迁移命令保留一个版本周期，使用迁移专用 legacy reader 读取旧文件。
-
-```text
-workspace/
-  TASK.md
-  CAPABILITIES.md
-  WORLD.md
-  ACTIONS.md
-  FEEDBACK.md
-  SAFETY.md
-  LOG.md
-  CHAT.md
-  PLAN.md
-  MEMORY.md
-  artifacts/
-```
-
-旧协议 Markdown 文件使用 YAML front matter。正文可以有自然语言摘要，机器可读数据放在 fenced YAML code block 中。它们现在只作为迁移输入格式和审计/安全相关工具链的一部分保留。
-
-旧格式中的文件职责：
-
-- `TASK.md`：记录当前任务和人类约束。
-- `CAPABILITIES.md`：由 watch 根据 driver capabilities 生成，agent 只读。
-- `WORLD.md`：记录 watch 写入的世界状态。
-- `ACTIONS.md`：记录 agent 写入的 pending / completed / cancelled action board。
-- `FEEDBACK.md`：记录 watch 写入的执行反馈。
-- `SAFETY.md`：仍由人类拥有，watch 强制执行。
-- `LOG.md`：仍作为人类可读日志镜像。
-- `CHAT.md`：记录人类和 agent 的对话历史。
-- `PLAN.md`：记录 chat agent 当前意图、步骤和 proposed actions。
-- `MEMORY.md`：记录 chat agent 跨轮次保留的小型记忆。
+当前版本已经删除旧 Markdown workspace migrator、reader 和完整协议 parser。显式
+`workspace.backend: markdown`，或省略 backend 但目录中存在完整旧文件集合时，都会
+fail closed，避免在旧真源旁静默生成 SQLite。确需迁移的用户应在独立 worktree
+checkout 历史提交 `9072b4e9fb600e505668aeb6076eb6cb85e5ff82`，使用该旧版本的
+migrator；再回到当前版本，不带 `--force` 运行 `physical-agent init`，随后运行
+`physical-agent state-check`。完整防护流程见
+[`docs/state-backends.zh-CN.md`](docs/state-backends.zh-CN.md)。
 
 静态启动配置放在 `physical-agent.yaml`。动态运行状态放在 `workspace/state.db`。项目没有 `JsonStateStore`，也没有 “JSON backend”：JSON 是 SQLite payload、API 响应和 GUI 渲染的数据格式。
 
-GUI 不支持 live backend switch，也没有“迁移并自动切换”API。`migrate-md-to-sqlite` 只做 Markdown -> SQLite 迁移，不会自动修改已有 config；`export-audit` 只导出审计视图，不会修改 backend 或 action board。不提供 SQLite -> Markdown 反向迁移。
+GUI 不支持 backend switch，也没有迁移 API。`export-audit` 只导出审计视图，不会修改 backend 或 action board；当前版本也不提供 SQLite 到旧 Markdown workspace 的反向迁移。
 
 更完整的 backend 说明见 [`docs/state-backends.zh-CN.md`](docs/state-backends.zh-CN.md)。
 
@@ -464,6 +434,6 @@ pytest -q
 
 ## Clean-Room 声明
 
-Physical Agent 是一个独立实现。它使用公开、通用的架构思想，例如 embodied-agent 分层、watch/runtime 分离、声明式 driver manifest、Markdown workspace protocol 和 MCP-style tool facade。
+Physical Agent 是一个独立实现。它使用公开、通用的架构思想，例如 embodied-agent 分层、watch/runtime 分离、声明式 driver manifest、结构化状态存储和 MCP-style tool facade。
 
 本项目不包含第三方竞品代码、文件内容复制、README 表述复刻、CLI 设计复刻、示例任务复刻或具体实现复制。

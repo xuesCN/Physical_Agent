@@ -330,50 +330,15 @@ workspace/
 
 `export-audit` creates a read-only audit view under `workspace/audit/`. It is not a second backend.
 
-Legacy Markdown workspaces can be converted for one version cycle:
-
-```bash
-physical-agent migrate-md-to-sqlite --config physical-agent.yaml
-```
-
-Then set `workspace.backend: sqlite` in `physical-agent.yaml` before starting CLI/API/GUI/watch. The migration reader is one-way and migration-only; runtime Markdown backend is retired.
-
-Old Markdown protocol files used YAML front matter, Markdown prose, and fenced YAML blocks for machine-readable data:
-
-```text
-workspace/
-  TASK.md
-  CAPABILITIES.md
-  WORLD.md
-  ACTIONS.md
-  FEEDBACK.md
-  SAFETY.md
-  LOG.md
-  CHAT.md
-  PLAN.md
-  MEMORY.md
-  artifacts/
-```
-
-In the retired format, `TASK.md` recorded the active task and human constraints.
-
-`CAPABILITIES.md` was written by watch from loaded driver capabilities. The agent treated it as read-only.
-
-`WORLD.md` was written by watch from driver observations. It contained robot state, objects, environment data, and artifact paths.
-
-`ACTIONS.md` was written by the agent. It contained pending, completed, and cancelled action boards. Watch read pending actions and moved them after execution or safety rejection.
-
-`FEEDBACK.md` was written by watch. It recorded latest execution feedback and history for the agent to read.
-
-`SAFETY.md` is still owned by humans and enforced by watch. The agent can read it but cannot bypass it.
-
-`LOG.md` is still a human-readable log mirror for review.
-
-`CHAT.md` stored chat history between the human and the agent.
-
-`PLAN.md` stored the current chat intent, proposed steps, and proposed actions.
-
-`MEMORY.md` stored small persistent notes that the chat agent should remember across turns.
+The current executable no longer contains the retired Markdown workspace
+migrator or full-workspace parser. An old workspace is rejected fail-closed so
+that SQLite is never created beside an ambiguous legacy source. If rescue is
+required, use an independent worktree at historical commit
+`9072b4e9fb600e505668aeb6076eb6cb85e5ff82` to run that checkout's migrator,
+then return to the current version and run `physical-agent init` without
+`--force`, followed by `physical-agent state-check`. See
+[`docs/state-backends.zh-CN.md`](docs/state-backends.zh-CN.md) for the guarded
+procedure.
 
 Static configuration belongs in `physical-agent.yaml`. Dynamic state belongs in `workspace/state.db`.
 
@@ -605,7 +570,7 @@ agent:
 
 ## Clean-Room Implementation
 
-Physical Agent is an independent implementation. It uses general public architecture ideas such as embodied-agent layering, watchdog/runtime separation, declarative driver manifests, Markdown workspace protocols, and MCP-style tool facades. It does not include third-party competitor code, copied file contents, copied README wording, copied CLI design, copied example task suites, or copied implementation details.
+Physical Agent is an independent implementation. It uses general public architecture ideas such as embodied-agent layering, watchdog/runtime separation, declarative driver manifests, structured state stores, and MCP-style tool facades. It does not include third-party competitor code, copied file contents, copied README wording, copied CLI design, copied example task suites, or copied implementation details.
 
 ## Development Checks
 
@@ -615,6 +580,6 @@ Run the full test suite:
 pytest -q
 ```
 
-Current coverage includes Markdown protocol parsing/rendering for SAFETY/LOG/audit/migration, SQLite workspace lifecycle, driver manifest and loader behavior, hardware onboarding scaffold generation, safety validation, mock drivers, rule-based planning, watch runtime stepping, the end-to-end SQLite loop, one-command setup, doctor checks, and FastAPI/Dashboard contracts.
+Current coverage includes SAFETY/LOG sidecar behavior, legacy workspace fail-closed detection and historical rescue, SQLite workspace lifecycle, driver manifest and loader behavior, hardware onboarding scaffold generation, safety validation, mock drivers, rule-based planning, watch runtime stepping, the end-to-end SQLite loop, one-command setup, doctor checks, and FastAPI/Dashboard contracts.
 
 It also covers the chat protocol, chat memory, chat action proposals, chat auto-step execution, and the GUI chat endpoint.

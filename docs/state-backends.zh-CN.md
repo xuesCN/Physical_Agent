@@ -1,23 +1,23 @@
 # State Backend
 
-## 结论
+## 当前结论
 
-Physical Agent 现在只有一个 active state backend：
+Physical Agent 只有一个 active state backend：
 
 ```text
-StateStore Protocol -> SqliteStateStore
+StateStore Protocol -> SqliteStateStore -> workspace/state.db
 ```
 
-`workspace/state.db` 是运行态状态真源。项目没有 `JsonStateStore`，也没有可选的 Markdown backend；JSON 是 SQLite payload、API 传输和 GUI 渲染的数据格式。
+SQLite 保存 task、capabilities、world、actions、feedback、chat、plan、memory、uploads、retrieval chunks 与 log entries。JSON 只是 SQLite payload、API 传输和 UI 渲染格式，不是第二个 backend。
 
-Markdown 协议代码仍保留，但角色已经收窄：
+文件 sidecar 只剩两个正式职责：
 
-- `SAFETY.md` 仍是安全规则文件真源，watch 执行前读取并强制校验。
-- `LOG.md` 仍作为人类可读镜像保留，SQLite 的 log_entries 是状态真源。
-- `protocol/markdown.py`、parsers、renderers 仍服务于 SAFETY、LOG、audit export 和旧 workspace 迁移。
-- 旧 Markdown workspace 只能作为 `migrate-md-to-sqlite` 的输入格式读取，不能作为 active backend 打开。
+- `SAFETY.md` 是人类拥有的安全规则真源，watch 每次执行前读取并运行 SafetyGate。
+- `LOG.md` 是人类可读镜像；SQLite `log_entries` 才是运行态日志真源。
 
-## SQLite Backend
+`export-audit` 从 SQLite 导出 `workspace/audit/` 可读视图并复制 SAFETY；该目录不是 backend，也不能写回运行态。
+
+## 配置与日常诊断
 
 默认配置：
 
@@ -27,64 +27,51 @@ workspace:
   backend: sqlite
 ```
 
-SQLite backend 把 task、capabilities、world、actions、feedback、chat、plan、memory、uploads、log 等动态状态写入 `workspace/state.db`。action board 使用 SQLite 行来支持原子 append、claim、terminal mark、lease recovery 和并发 proposal。
-
-`SAFETY.md` 不迁入 SQLite。即使状态真源是 `state.db`，watch 执行动作前仍读取 `workspace/SAFETY.md` 并运行 SafetyGate。
-
-## Retired Markdown Backend
-
-以下两种配置都会被拒绝，不会打开旧 MarkdownStateStore：
-
-```yaml
-workspace:
-  path: ./workspace
-  backend: markdown
-```
-
-以及：配置省略 `workspace.backend`，但 `workspace/` 里已经存在完整 legacy Markdown 协议文件。
-
-错误信息会提示：
-
-```text
-physical-agent migrate-md-to-sqlite --config physical-agent.yaml
-workspace.backend: sqlite
-```
-
-## Migration And Audit
-
-`migrate-md-to-sqlite` 只做旧 Markdown workspace -> SQLite 迁移：
+初始化与只读检查：
 
 ```powershell
-.\.venv\Scripts\python.exe -m physical_agent.cli migrate-md-to-sqlite --config physical-agent.yaml
+physical-agent init --config physical-agent.yaml
+physical-agent state-check --config physical-agent.yaml
+physical-agent doctor --config physical-agent.yaml
+physical-agent export-audit --config physical-agent.yaml
 ```
 
-如果 `workspace/state.db` 已存在，命令默认拒绝覆盖。只有确认不会丢失用户状态时，才显式使用 `--overwrite`。
+普通 `init` 不覆盖已有状态或人工 SAFETY；只有明确要求重置时才使用 `--force`。
 
-迁移命令会使用迁移专用 legacy reader 读取旧 Markdown 文件；它不会通过 active backend loader 打开 MarkdownStateStore。迁移成功后，命令会提示用户把 `physical-agent.yaml` 改成：
+## 旧 Markdown workspace 的 fail-closed 边界
 
-```yaml
-workspace:
-  backend: sqlite
-```
+当前版本已经删除 runtime Markdown backend、迁移命令、legacy reader 和 full Workspace parser。以下两种情况都会被拒绝：
 
-当前版本不提供 `--switch-config`，不会自动修改配置。
+- 显式配置 `workspace.backend: markdown`。
+- 配置省略 backend，但目标目录存在完整 legacy Markdown 文件集合。
 
-`export-audit` 从当前 SQLite backend 导出人类可读审计视图：
+拒绝是防双真源门禁：当前进程不会在旧目录旁静默创建 `state.db`，也没有 GUI/API backend switch 或自动迁移入口。
+
+## 历史救援流程
+
+只有确实需要抢救旧 workspace 时才使用以下流程。迁移必须由独立历史 checkout 完成，不能调用当前 executable：
 
 ```powershell
-.\.venv\Scripts\python.exe -m physical_agent.cli export-audit --config physical-agent.yaml
+git worktree add --detach ..\Physical_Agent-legacy 9072b4e9fb600e505668aeb6076eb6cb85e5ff82
+cd ..\Physical_Agent-legacy
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e .
+.\.venv\Scripts\python.exe -m physical_agent.cli migrate-md-to-sqlite --config <旧项目的physical-agent.yaml>
 ```
 
-导出的 `workspace/audit/` 是视图，不是新的真源。它不修改 backend，不修改 action board，也不做 SQLite -> Markdown 反向迁移。
+历史命令不会自动修改 config。迁移完成后：
 
-## Operational Checks
+1. 先备份旧 workspace 和新生成的 `state.db`；已有 DB 时不要轻率使用历史 `--overwrite`。
+2. 手动把项目配置设为 `workspace.backend: sqlite`。
+3. 回到当前版本。
+4. 不带 `--force` 运行 `physical-agent init --config physical-agent.yaml`，让当前版本补齐 schema，同时保留 SAFETY/LOG。
+5. 运行 `physical-agent state-check --config physical-agent.yaml`，再用 `export-audit` 核对数据。
 
-`state-check` 和 `GET /api/state-check` 是只读诊断：
+仓库的 `scripts/smoke_legacy_workspace_rescue.py` 持续验证旧/新解释器隔离、十一类数据面、SAFETY/LOG 保留和已有 DB 拒绝。
 
-- backend 必须是 `sqlite`。
-- workspace 必须已初始化。
-- SQLite schema 必须完整。
-- audit export 目标必须可写。
-- SAFETY source 会显示为 `workspace/SAFETY.md`。
+## 不再支持的兼容面
 
-GUI 只显示当前 backend、workspace、state-check 摘要和 audit export 能力，不提供 backend select、切换按钮、运行时 active backend 切换，或“迁移并自动切换”API。
+- 当前 CLI 中不存在 `migrate-md-to-sqlite`。
+- 不支持 SQLite 到旧 Markdown workspace 的反向迁移。
+- 不支持 live backend switch。
+- 不把 audit JSON 或 `LOG.md` 当成可写状态真源。

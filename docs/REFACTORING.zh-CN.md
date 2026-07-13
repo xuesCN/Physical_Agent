@@ -50,6 +50,7 @@
 | R3-D | 删除当前一次性 Markdown migrator 与专用兼容实现 | `6309a1b` |
 | R3-E | 删除 full Workspace helper 与退役 Markdown protocol | `4a8ec86` |
 | R3-F | 当前文档、示例与发布包收口 | `9698b3e` |
+| R4 | 删除 chat 自动推进兼容面与 CLI 内嵌 watch | `da14064` |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -330,6 +331,12 @@ README、state backend/hardware guide、架构 SVG 与 hardware examples 已统�
 
 最终 wheel 验证暴露了一个删除类改动的发布风险：setuptools 增量构建会把 `build/lib/physical_agent` 中已从源码删除的 migrator/full Workspace 模块继续装进 wheel。`CleanPackageBuild` 因此改为每次重建完整 package tree，wheel smoke 与 unit contract 同时对 legacy GUI、`legacy_markdown.py`、`workspace.py`、`parsers.py`、`renderers.py` 做负断言。提交 `9698b3e` 经全量 Python `404 passed, 1 warning`、Safety smoke、frontend build、TUI 59 tests/typecheck/build、clean-wheel smoke 与真实历史救援验证；R3 完成，下一阶段按原子顺序进入 R4 `auto_step` 退役，不恢复冻结功能。
 
+### R4：删除 chat 自动推进兼容面
+
+删除 `physical-agent chat` 的旧自动推进 option、`cli.py` 内嵌的 setup/step/shutdown composition、ChatRuntime 两条 public method 的兼容参数、ChatRequest 字段与 API 显式传参。正式 `physical-agent watch`、`physical-agent api --watch` 和 `ApiWatchService` 不变：认知/提案入口不再提供任何“顺手推进一次执行”的形状，执行生命周期只有正式 watch。
+
+旧的“传入参数也忽略”测试被替换为更直接的结构边界：CLI chat 与 HTTP action/task/chat handlers 在 WatchRuntime/driver execute 被设为 exploding stub 时仍完成 proposal-only 流程；CLI help 同时证明旧 option 消失而 `watch`/`api --watch` 保留。提交 `da14064` 的定向 68 tests、最终树全量 Python `403 passed, 1 warning`、Safety 32、frontend build、TUI 59 tests/typecheck/build 与 clean-wheel smoke 全绿；远端 CI run `29234488489` 的 Python full、Safety、frontend+wheel、TUI 与真实 Chromium Playwright 全部成功。R5 仍须先验证 structured streaming + fence 双轨，R4 没有提前触碰 fence 或重复 proposal fields。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -366,7 +373,7 @@ README、state backend/hardware guide、架构 SVG 与 hardware examples 已统�
 32. **ProposalService 是 application use case，不是 Agent runtime**（VNext-0）：它只负责 task/action → proposal → pending board；Chat reply、审批、Gate、执行、观察与自动重规划不应继续塞入该类。
 33. **typed metadata 先兼容 wire，再逐步升级消费者**（VNext-0）：`Action.metadata` 暂时保持 dict/JSON，已知字段经 v1 Pydantic 模型解析且未知扩展保留；不能因为有强类型 view 就声称 frontend/TUI 契约已经统一。
 34. **execution_mode 以实例配置为真源，默认 hardware**（VNext-0）：manifest 只描述 driver 是否支持 simulation，不能替当前连接声明“这是模拟器”；新硬件注册默认 hardware，simulation 必须显式选择。
-35. **ChatRuntime 永不推进 watch**（VNext-0）：`auto_step` 只保留兼容形状，不再有执行语义；driver 动态验证也必须进入未来显式的 watch-side conformance，而不是在 driver coding agent 内 allowlist `execute()`。
+35. **ChatRuntime 永不推进 watch**（VNext-0/R4）：旧自动推进参数先降为无执行语义的兼容形状，再由 R4 完整删除；driver 动态验证也必须进入未来显式的 watch-side conformance，而不是在 driver coding agent 内 allowlist `execute()`。
 36. **AgentOutput 不是 raw model output**（VNext-1）：模型只能产生不可信 decision/action intent；只有 trusted `PlanCompiler` 可以注入系统任务、可信 owner/status 与 Gate 依赖。
 37. **每个物理 Action 必有唯一 GateTask**（VNext-1）：`SafetyGateTask` mandatory、watch-owned，既不是 Action 也不是 tool；caller 提供的 `safety_gate=passed` 或自定义 task graph 不具权威性。
 38. **approval、Gate 与 verification 是三个不同义务**（VNext-1）：approval 决定是否等人，Gate 在执行前裁决，F4 expected 在执行后诊断；三者不能合并成一个泛化 status。

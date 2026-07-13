@@ -196,16 +196,18 @@
 ## R4 `auto_step` 退役
 
 - [x] 删除 legacy GUI auto-step surface（已随 R2 完成；CLI/API/ChatRuntime 兼容形状仍按本节后续任务退役）。
-- [ ] 删除 `physical-agent chat --auto-step` option。
-- [ ] 删除 `physical_agent/cli.py::_run_chat_auto_step()` 与调用/输出。
-- [ ] 删除 `ChatRuntime.respond(... auto_step=...)`。
-- [ ] 删除 `ChatRuntime.respond_stream(... auto_step=...)`。
-- [ ] 删除 `ChatRequest.auto_step`。
-- [ ] 删除 API 的显式 `auto_step=False` 兼容传参。
-- [ ] 更新 README/README.zh-CN/CI/current architecture 口径。
-- [ ] 将兼容测试改为“request/proposal handler 不加载 WatchRuntime/driver”的直接边界测试。
-- [ ] 保留正式 `watch` command 和 `api --watch`；验证没有误删所需 import。
-- [ ] `rg "auto_step|auto-step"` 仅剩历史 REFACTORING。
+- [x] 删除 `physical-agent chat --auto-step` option。
+- [x] 删除 `physical_agent/cli.py::_run_chat_auto_step()` 与调用/输出。
+- [x] 删除 `ChatRuntime.respond(... auto_step=...)`。
+- [x] 删除 `ChatRuntime.respond_stream(... auto_step=...)`。
+- [x] 删除 `ChatRequest.auto_step`。
+- [x] 删除 API 的显式 `auto_step=False` 兼容传参。
+- [x] 更新 README/README.zh-CN/CI/current architecture 口径。
+- [x] 将兼容测试改为 CLI chat 与 HTTP proposal/request handlers 不实例化 WatchRuntime、不调用 driver 的直接边界测试。
+- [x] 保留正式 `watch` command 和 `api --watch`；CLI help 与 watch runtime smoke 证明所需 import 未误删。
+- [x] production/tests/frontend/TUI/README/CI 的 `rg "auto_step|auto-step|_run_chat_auto_step"` 为零；只在规格顺序与历史 REFACTORING 保留经审阅记录。
+- [x] 定向 68 tests、最终树全量 Python `403 passed, 1 warning`、Safety 32 tests、frontend build、TUI 59 tests/typecheck/build 与 clean-wheel smoke 全绿。
+- [x] R4 实现提交 `da14064` 的远端 CI run `29234488489` 五个实际门禁全绿，包含真实 Chromium Playwright；下一阶段进入 R5，不提前删除 fence。
 
 ## R5 structured Chat Turn + 双轨
 

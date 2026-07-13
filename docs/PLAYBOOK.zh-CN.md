@@ -18,6 +18,8 @@
 
 **验收**：每个删除项都有前置正反测试或替代入口；双轨有独立一轮证据；wheel 安装后能启动同一 React Dashboard；全量 pytest、frontend build/e2e、TUI build/test、安全扫描与 docs/CLI grep 全绿。R0 已完成；R1.5 正式栈补缺、thin launcher 与 clean-wheel smoke 经 draft PR #1 / `2d5e909` 独立验证，真实 Chromium 25/25。R2 随后删除 legacy controller/server/static/tests/package-data 与 safety allowlist 例外，保留 `physical-agent gui` 命令作为正式 FastAPI + React launcher。
 
+**当前进度**：R3 已退役当前 Markdown migrator/full Workspace 并保留聚焦 sidecar 与历史救援；R4 `da14064` 已删除 chat 的旧自动推进参数和 CLI 内嵌 watch composition。所有 chat/task/action request 只做认知/提案，执行只能由正式 `physical-agent watch` 或 `physical-agent api --watch` 生命周期承担。下一步 R5 必须先做 structured streaming spike 与双轨，不能直接删除 `action-draft` fence。
+
 ## F0 LLM planner 实验
 
 **思路**：三件事互相独立、并行推进。① 启用：项目 `physical-agent.yaml` 改 `agent.planner: llm`（代码默认值 rule_based 不动）；`agent.model` 保持 `fake/local` 即可——它是"此处未配置"的哨兵值，planner 会转而读 `workspace/.llm.json`（GUI 里配好的模型与 key）。② **本地调用留痕**：在 `openai_compatible` 的调用出口（chat/structured/stream 共用点）加薄封装，每次调用追加一行 JSONL 到 `workspace/llm-trace/`（gitignore）：ts / surface（复用 `metadata.physical_agent_surface`）/ model / messages / 响应 / usage / 延迟 / 错误。约 30 行，零新依赖；环境变量 `PA_LLM_TRACE=0` 可关。③ 实验：固定任务集写成脚本（越界坐标/不存在能力/中文/多步/模糊指令各≥3 条），逐条经 `/api/tasks/submit` 提交 + watch step，记录提案 JSON、gate 判定、feedback。

@@ -12,6 +12,7 @@ from physical_agent.config import write_default_config
 from physical_agent.doctor import doctor_ok, run_doctor
 from physical_agent.protocol.markdown import parse_front_matter
 from physical_agent.state import SqliteStateStore, open_state_store
+from physical_agent.state.sidecars import SIDECAR_FILENAMES, StateSidecars
 
 
 DEFAULT_SAFETY_RULES = {
@@ -36,6 +37,26 @@ def _project(tmp_path: Path) -> tuple[Path, SqliteStateStore]:
 def _audit_json(store: SqliteStateStore, name: str) -> dict:
     out = Path(store.export_human_view()["out_dir"])
     return json.loads((out / f"{name}.json").read_text(encoding="utf-8"))
+
+
+def test_sidecar_adapter_owns_only_safety_and_log_files(tmp_path):
+    sidecars = StateSidecars(tmp_path / "workspace")
+
+    assert SIDECAR_FILENAMES == {"safety": "SAFETY.md", "log": "LOG.md"}
+    assert sidecars.filenames == SIDECAR_FILENAMES
+    assert sidecars.safety_path.name == "SAFETY.md"
+    assert sidecars.log_path.name == "LOG.md"
+    with pytest.raises(KeyError):
+        sidecars.file("task")
+
+
+def test_sqlite_runtime_and_doctor_do_not_reference_full_workspace():
+    project_root = Path(__file__).resolve().parents[1]
+    for relative in ("physical_agent/state/sqlite.py", "physical_agent/doctor.py"):
+        source = (project_root / relative).read_text(encoding="utf-8")
+        assert "physical_agent.protocol.workspace" not in source
+        assert "Workspace.filenames" not in source
+        assert "_file_workspace" not in source
 
 
 def test_safety_sidecar_defaults_override_front_matter_and_revision(tmp_path):

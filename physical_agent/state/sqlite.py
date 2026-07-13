@@ -14,7 +14,6 @@ from physical_agent.protocol.memory import (
     normalize_memory_tags,
 )
 from physical_agent.protocol.expectations import normalize_expected_metadata
-from physical_agent.protocol.markdown import parse_front_matter
 from physical_agent.protocol.retrieval import (
     chunk_source_id_for_memory_note,
     make_chunks_for_text,
@@ -22,8 +21,8 @@ from physical_agent.protocol.retrieval import (
     query_memory_chunks as score_memory_chunks,
 )
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, Observation
-from physical_agent.protocol.workspace import Workspace
 from physical_agent.state.audit import export_audit_documents, read_markdown_log_entries
+from physical_agent.state.sidecars import StateSidecars
 
 
 DOC_SCHEMAS = {
@@ -120,15 +119,29 @@ class ActiveRuntimeLeaseError(RuntimeError):
     """Raised when destructive workspace reset would erase a live executor lease."""
 
 
+LOGICAL_DOCUMENT_FILENAMES = {
+    "task": "TASK.md",
+    "capabilities": "CAPABILITIES.md",
+    "world": "WORLD.md",
+    "actions": "ACTIONS.md",
+    "feedback": "FEEDBACK.md",
+    "safety": "SAFETY.md",
+    "log": "LOG.md",
+    "chat": "CHAT.md",
+    "plan": "PLAN.md",
+    "memory": "MEMORY.md",
+}
+
+
 class SqliteStateStore:
-    filenames = Workspace.filenames
+    filenames = LOGICAL_DOCUMENT_FILENAMES
 
     def __init__(self, path: str | Path):
         self.path = Path(path).resolve()
         self.artifacts_path = self.path / "artifacts"
         self.uploads_path = self.path / "uploads"
         self.db_path = self.path / "state.db"
-        self._file_workspace = Workspace(self.path)
+        self._sidecars = StateSidecars(self.path)
 
     def file(self, name: str) -> Path:
         return self.path / self.filenames[name]
@@ -144,13 +157,7 @@ class SqliteStateStore:
             self._create_schema(conn)
             self._ensure_default_documents(conn)
 
-        if overwrite or not self.file("safety").exists():
-            self._file_workspace.write_safety()
-        if overwrite or not self.file("log").exists():
-            self.file("log").write_text(
-                _render_log_file(),
-                encoding="utf-8",
-            )
+        self._sidecars.initialize(overwrite=overwrite)
 
     def exists(self) -> bool:
         if not self.path.exists() or not self.db_path.exists() or not self.file("safety").exists():
@@ -789,13 +796,12 @@ class SqliteStateStore:
         return payload
 
     def write_safety(self, rules: dict[str, Any] | None = None) -> None:
-        self.path.mkdir(parents=True, exist_ok=True)
-        self._file_workspace.write_safety(rules)
+        self._sidecars.write_safety(rules)
 
     def read_safety(self) -> dict[str, Any]:
         if not self.file("safety").exists():
             self.write_safety()
-        return self._file_workspace.read_safety()
+        return self._sidecars.read_safety()
 
     def write_chat(
         self,
@@ -1082,27 +1088,16 @@ class SqliteStateStore:
                 {"metadata": self._metadata("log", revision)},
                 revision,
             )
-        self._file_workspace.append_log(message, actor=actor)
+        self._sidecars.append_log(message, actor=actor)
 
     def validate_log_mirror(self) -> dict[str, Any]:
         """Validate that the human LOG mirror matches SQLite's committed revision."""
-        target = self.file("log")
-        doc = parse_front_matter(target.read_text(encoding="utf-8"))
         expected = self._read_document("log").get("metadata", {})
         try:
             expected_revision = int(expected.get("revision") or 1)
         except (TypeError, ValueError):
             expected_revision = 1
-        if doc.schema != DOC_SCHEMAS["log"]:
-            raise ValueError(
-                f"LOG.md schema must be `{DOC_SCHEMAS['log']}`, got `{doc.schema}`."
-            )
-        if doc.revision != expected_revision:
-            raise ValueError(
-                "LOG.md mirror revision does not match SQLite log revision: "
-                f"file={doc.revision}, sqlite={expected_revision}."
-            )
-        return dict(doc.metadata)
+        return self._sidecars.validate_log(expected_revision=expected_revision)
 
     def export_human_view(self, out_dir: Path | None = None) -> dict[str, Any]:
         documents = {
@@ -1122,7 +1117,7 @@ class SqliteStateStore:
             backend="sqlite",
             workspace_path=self.path,
             documents=documents,
-            safety_source=self.file("safety"),
+            safety_source=self._sidecars.safety_path,
             out_dir=out_dir,
         )
 
@@ -2396,14 +2391,3 @@ def _lease_timestamp(*, seconds: float = 0.0) -> str:
 
     value = datetime.now(UTC) + timedelta(seconds=seconds)
     return value.isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-
-def _render_log_file() -> str:
-    return (
-        "---\n"
-        "schema: physical-agent/log/v1\n"
-        "owner: system\n"
-        "revision: 1\n"
-        "---\n"
-        "# Physical Agent Log\n"
-    )

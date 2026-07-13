@@ -21,7 +21,7 @@ from physical_agent.protocol.retrieval import (
     query_memory_chunks as score_memory_chunks,
 )
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, Observation
-from physical_agent.state.audit import export_audit_documents, read_markdown_log_entries
+from physical_agent.state.audit import export_audit_documents
 from physical_agent.state.sidecars import StateSidecars
 
 
@@ -1812,117 +1812,6 @@ class SqliteStateStore:
             )
         return recovered
 
-    def _replace_actions_with_revision(
-        self,
-        pending: list[Action | dict[str, Any]],
-        completed: list[Action | dict[str, Any]],
-        cancelled: list[Action | dict[str, Any]],
-        *,
-        revision: int,
-    ) -> None:
-        with self._connect() as conn:
-            self._replace_actions_conn(conn, pending, completed, cancelled)
-            self._upsert_document_conn(
-                conn,
-                "actions",
-                {"metadata": self._metadata("actions", revision)},
-                revision,
-            )
-
-    def _replace_chat_with_revision(
-        self,
-        messages: list[ChatMessage | dict[str, Any]],
-        *,
-        running_summary: str,
-        revision: int,
-    ) -> None:
-        normalized = [
-            item if isinstance(item, ChatMessage) else ChatMessage.model_validate(item)
-            for item in messages
-        ]
-        with self._connect() as conn:
-            conn.execute("DELETE FROM chat_messages")
-            for item in normalized:
-                conn.execute(
-                    """
-                    INSERT INTO chat_messages(role, content, created_at, metadata)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (
-                        item.role,
-                        item.content,
-                        item.created_at,
-                        _json_dumps(item.metadata),
-                    ),
-                )
-            self._upsert_document_conn(
-                conn,
-                "chat",
-                {
-                    "metadata": self._metadata("chat", revision),
-                    "running_summary": running_summary,
-                },
-                revision,
-            )
-
-    def _replace_memory_with_revision(
-        self,
-        notes: list[dict[str, Any]],
-        *,
-        revision: int,
-    ) -> None:
-        with self._connect() as conn:
-            conn.execute("DELETE FROM memory_notes")
-            conn.execute("DELETE FROM memory_chunks WHERE source_type = 'memory'")
-            for note in notes:
-                normalized = self._insert_memory_note_conn(conn, note)
-                self._insert_memory_note_chunks_conn(conn, normalized)
-            self._upsert_document_conn(
-                conn,
-                "memory",
-                {"metadata": self._metadata("memory", revision)},
-                revision,
-            )
-
-    def _replace_uploads_with_revision(
-        self,
-        uploads: list[dict[str, Any]],
-        *,
-        revision: int,
-    ) -> None:
-        with self._connect() as conn:
-            conn.execute("DELETE FROM upload_metadata")
-            for upload in uploads:
-                self._insert_upload_metadata_conn(conn, upload)
-            self._upsert_document_conn(
-                conn,
-                "uploads",
-                {"metadata": self._metadata("uploads", revision)},
-                revision,
-            )
-
-    def _replace_log_entries(self, entries: list[dict[str, Any]], *, revision: int = 1) -> None:
-        with self._connect() as conn:
-            conn.execute("DELETE FROM log_entries")
-            for entry in entries:
-                conn.execute(
-                    """
-                    INSERT INTO log_entries(ts, actor, message)
-                    VALUES (?, ?, ?)
-                    """,
-                    (
-                        entry.get("ts"),
-                        entry.get("actor"),
-                        str(entry.get("message") or ""),
-                    ),
-                )
-            self._upsert_document_conn(
-                conn,
-                "log",
-                {"metadata": self._metadata("log", revision)},
-                revision,
-            )
-
     def _read_log_document(self) -> dict[str, Any]:
         with self._connect() as conn:
             metadata = self._read_metadata_conn(conn, "log")
@@ -2068,76 +1957,6 @@ class SqliteStateStore:
             return int((payload.get("metadata") or {}).get("revision"))
         except (TypeError, ValueError):
             return None
-
-
-def migrate_markdown_workspace_to_sqlite(
-    workspace_path: str | Path,
-    *,
-    overwrite: bool = False,
-) -> dict[str, Any]:
-    from physical_agent.state.legacy_markdown import LegacyMarkdownWorkspaceReader
-
-    source = LegacyMarkdownWorkspaceReader(workspace_path)
-    if not source.exists():
-        raise FileNotFoundError(f"Markdown workspace is not initialized at {source.path}.")
-
-    task = source.read_task()
-    capabilities = source.read_capabilities()
-    world = source.read_world()
-    actions = source.read_actions()
-    feedback = source.read_feedback()
-    source.read_safety()
-    chat = source.read_chat()
-    plan = source.read_plan()
-    memory = source.read_memory()
-    uploads = source.read_uploads()
-    log_entries, log_metadata = read_markdown_log_entries(source.file("log"))
-
-    target = SqliteStateStore(source.path)
-    if target._database_files_exist():
-        if not overwrite:
-            raise FileExistsError(
-                f"{target.db_path} already exists. Re-run with --overwrite to replace it."
-            )
-        target._unlink_database_files()
-
-    target.initialize(overwrite=False)
-    target._replace_document("task", task, revision=_payload_revision(task))
-    target._replace_document("capabilities", capabilities, revision=_payload_revision(capabilities))
-    target._replace_document("world", world, revision=_payload_revision(world))
-    target._replace_actions_with_revision(
-        actions["pending"],
-        actions["completed"],
-        actions["cancelled"],
-        revision=_payload_revision(actions),
-    )
-    target._replace_document("feedback", feedback, revision=_payload_revision(feedback))
-    target._replace_chat_with_revision(
-        chat["messages"],
-        running_summary=chat.get("running_summary", ""),
-        revision=_payload_revision(chat),
-    )
-    target._replace_document("plan", plan, revision=_payload_revision(plan))
-    target._replace_memory_with_revision(memory["notes"], revision=_payload_revision(memory))
-    target._replace_uploads_with_revision(
-        uploads.get("uploads", []),
-        revision=_payload_revision(uploads),
-    )
-    target._replace_log_entries(log_entries, revision=_metadata_revision(log_metadata))
-
-    return {
-        "workspace_path": str(source.path),
-        "db_path": str(target.db_path),
-        "actions": {
-            "pending": len(actions["pending"]),
-            "completed": len(actions["completed"]),
-            "cancelled": len(actions["cancelled"]),
-        },
-        "chat_messages": len(chat["messages"]),
-        "memory_notes": len(memory["notes"]),
-        "uploads": len(uploads.get("uploads", [])),
-        "log_entries": len(log_entries),
-    }
 
 
 def _coerce_action(value: Action | dict[str, Any]) -> Action:
@@ -2321,20 +2140,6 @@ def _coerce_observation(value: Observation | dict[str, Any]) -> Observation:
         observation = value["observation"]
         return observation if isinstance(observation, Observation) else Observation.model_validate(observation)
     return Observation.model_validate(value)
-
-
-def _payload_revision(payload: dict[str, Any]) -> int:
-    try:
-        return int((payload.get("metadata") or {}).get("revision") or 1)
-    except (TypeError, ValueError):
-        return 1
-
-
-def _metadata_revision(metadata: dict[str, Any]) -> int:
-    try:
-        return int(metadata.get("revision") or 1)
-    except (TypeError, ValueError):
-        return 1
 
 
 def _optional_str(value: Any) -> str:

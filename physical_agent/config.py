@@ -162,11 +162,7 @@ def default_config_dict() -> dict[str, Any]:
     }
 
 
-def load_config(
-    path: str | Path = DEFAULT_CONFIG_NAME,
-    *,
-    allow_retired_markdown: bool = False,
-) -> PhysicalAgentConfig:
+def load_config(path: str | Path = DEFAULT_CONFIG_NAME) -> PhysicalAgentConfig:
     config_path = Path(path)
     if not config_path.exists():
         raise FileNotFoundError(
@@ -174,8 +170,7 @@ def load_config(
         )
     with config_path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
-    if not allow_retired_markdown:
-        _reject_retired_markdown_backend(data, config_path)
+    _reject_retired_markdown_backend(data, config_path)
     return PhysicalAgentConfig.model_validate(data)
 
 

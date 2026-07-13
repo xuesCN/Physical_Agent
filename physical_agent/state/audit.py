@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import re
 import shutil
 from typing import Any
-
-from physical_agent.protocol.markdown import parse_front_matter
 
 
 AUDIT_DOCUMENTS = (
@@ -68,55 +65,6 @@ def export_audit_documents(
         "safety": safety_result,
         "manifest": str(manifest_path),
     }
-
-
-def read_markdown_log_document(path: Path) -> dict[str, Any]:
-    entries, metadata = read_markdown_log_entries(path)
-    return {"metadata": metadata, "entries": entries}
-
-
-def read_markdown_log_entries(path: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    default_metadata = {
-        "schema": "physical-agent/log/v1",
-        "owner": "system",
-        "revision": 1,
-    }
-    if not path.exists():
-        return [], default_metadata
-
-    text = path.read_text(encoding="utf-8")
-    try:
-        doc = parse_front_matter(text)
-        body = doc.body
-        metadata = dict(doc.metadata)
-    except Exception:
-        body = text
-        metadata = default_metadata
-
-    headings = list(re.finditer(r"^##\s+(.+?)\s*$", body, re.MULTILINE))
-    entries: list[dict[str, Any]] = []
-    for index, match in enumerate(headings):
-        start = match.end()
-        end = headings[index + 1].start() if index + 1 < len(headings) else len(body)
-        message = body[start:end].strip()
-        actor = None
-        actor_match = re.match(r"^\*\*(.+?)\*\*:\s*(.*)$", message, re.DOTALL)
-        if actor_match:
-            actor = actor_match.group(1)
-            message = actor_match.group(2).strip()
-        entries.append(
-            {
-                key: value
-                for key, value in {
-                    "sequence": index + 1,
-                    "ts": match.group(1).strip(),
-                    "actor": actor,
-                    "message": message,
-                }.items()
-                if value is not None
-            }
-        )
-    return entries, metadata
 
 
 def _write_json(path: Path, value: Any) -> None:

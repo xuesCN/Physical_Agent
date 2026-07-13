@@ -15,9 +15,6 @@ from physical_agent.agent.runtime import AgentRuntime
 from physical_agent.cli import app
 from physical_agent.config import PhysicalAgentConfig, load_config, write_default_config
 from physical_agent.protocol.schemas import Action, ChatPlan, Observation
-from physical_agent.protocol.workspace import Workspace
-from physical_agent.state.base import StateStore
-from physical_agent.state.legacy_markdown import LegacyMarkdownWorkspaceReader
 from physical_agent.state import (
     ActiveRuntimeLeaseError,
     SqliteStateStore,
@@ -95,20 +92,16 @@ def test_open_state_store_sqlite_backend(tmp_path):
     assert store.path == (tmp_path / "workspace").resolve()
 
 
-def test_legacy_markdown_reader_is_migration_only_not_state_store(tmp_path):
-    reader = LegacyMarkdownWorkspaceReader(tmp_path / "workspace")
+def test_cli_help_does_not_expose_retired_markdown_migrator():
+    runner = CliRunner()
 
-    assert not isinstance(reader, StateStore)
-    for runtime_method in (
-        "initialize",
-        "append_pending_action",
-        "claim_next_ready_action",
-        "mark_action_completed",
-        "mark_action_cancelled",
-        "append_log",
-        "export_human_view",
-    ):
-        assert not hasattr(reader, runtime_method)
+    help_result = runner.invoke(app, ["--help"])
+    retired_command = runner.invoke(app, ["migrate-md-to-sqlite"])
+
+    assert help_result.exit_code == 0, help_result.output
+    assert "migrate-md-to-sqlite" not in help_result.output
+    assert retired_command.exit_code != 0
+    assert "No such command" in retired_command.output
 
 
 def test_sqlite_state_store_protocol_roundtrip(tmp_path):
@@ -856,108 +849,6 @@ def test_sqlite_state_store_export_human_view_reads_sqlite_state(tmp_path):
     log_entries = _read_json(audit_dir / "log.json")["entries"]
     assert log_entries[0]["message"] == "db log"
     assert "tampered markdown log" not in (audit_dir / "log.json").read_text(encoding="utf-8")
-
-
-def test_migrate_markdown_to_sqlite_cli_does_not_switch_backend(tmp_path):
-    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    _set_config_backend(config_path, "markdown")
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
-    workspace.write_task("Inspect the table", ["do not execute directly"])
-    workspace.write_actions(
-        [Action(id="act_001", robot="arm_1", capability="observe")],
-        [Action(id="act_002", robot="arm_1", capability="pick")],
-        [Action(id="act_003", robot="arm_1", capability="place")],
-    )
-    workspace.write_chat(
-        [{"role": "user", "content": "hello"}],
-        running_summary="older context",
-        compact=False,
-    )
-    workspace.append_memory_note("remember this", source="test")
-    workspace.append_log("migrated log", actor="test")
-
-    result = CliRunner().invoke(
-        app,
-        ["migrate-md-to-sqlite", "--config", str(config_path)],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "Config was not changed" in result.output
-    assert "workspace.backend: sqlite" in result.output
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert data["workspace"]["backend"] == "markdown"
-
-    store = SqliteStateStore(tmp_path / "workspace")
-    assert store.exists()
-    assert store.read_task()["task"] == "Inspect the table"
-    assert [action.id for action in store.read_actions()["pending"]] == ["act_001"]
-    assert [action.id for action in store.read_actions()["completed"]] == ["act_002"]
-    assert [action.id for action in store.read_actions()["cancelled"]] == ["act_003"]
-    assert store.read_chat()["running_summary"] == "older context"
-    migrated_memory = store.read_memory()["notes"][0]
-    assert migrated_memory["content"] == "remember this"
-    assert migrated_memory["kind"] == "note"
-    assert migrated_memory["tags"] == []
-    assert migrated_memory["importance"] == 0
-
-    with sqlite3.connect(store.db_path) as conn:
-        log_count = conn.execute("SELECT count(*) FROM log_entries").fetchone()[0]
-    assert log_count == 1
-
-
-def test_migrated_sqlite_export_contains_action_board_chat_memory_and_log(tmp_path):
-    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    _set_config_backend(config_path, "markdown")
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
-    workspace.write_actions(
-        [Action(id="act_pending", robot="arm_1", capability="observe")],
-        [Action(id="act_completed", robot="arm_1", capability="pick")],
-        [Action(id="act_cancelled", robot="arm_1", capability="place")],
-    )
-    workspace.write_chat(
-        [{"role": "user", "content": "hello"}],
-        running_summary="migrated summary",
-        compact=False,
-    )
-    workspace.append_memory_note(
-        "migrated memory",
-        source="test",
-        kind="lesson",
-        tags=["migration"],
-        importance=6,
-    )
-    workspace.append_log("migrated log", actor="test")
-
-    migrate_result = CliRunner().invoke(
-        app,
-        ["migrate-md-to-sqlite", "--config", str(config_path)],
-    )
-    assert migrate_result.exit_code == 0, migrate_result.output
-
-    config_data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    config_data["workspace"]["backend"] = "sqlite"
-    config_path.write_text(yaml.safe_dump(config_data, sort_keys=False), encoding="utf-8")
-
-    audit_dir = tmp_path / "audit"
-    export_result = CliRunner().invoke(
-        app,
-        ["export-audit", "--config", str(config_path), "--out", str(audit_dir)],
-    )
-
-    assert export_result.exit_code == 0, export_result.output
-    actions = _read_json(audit_dir / "actions.json")
-    assert [action["id"] for action in actions["pending"]] == ["act_pending"]
-    assert [action["id"] for action in actions["completed"]] == ["act_completed"]
-    assert [action["id"] for action in actions["cancelled"]] == ["act_cancelled"]
-    assert _read_json(audit_dir / "chat.json")["running_summary"] == "migrated summary"
-    memory = _read_json(audit_dir / "memory.json")["notes"][0]
-    assert memory["content"] == "migrated memory"
-    assert memory["kind"] == "lesson"
-    assert memory["tags"] == ["migration"]
-    assert memory["importance"] == 6
-    assert _read_json(audit_dir / "log.json")["entries"][0]["message"] == "migrated log"
 
 
 def test_export_audit_cli_does_not_change_backend_or_action_board(

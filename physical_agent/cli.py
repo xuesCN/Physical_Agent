@@ -25,7 +25,6 @@ from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
 from physical_agent.quickstart import setup_project
 from physical_agent.state import open_state_store
 from physical_agent.state.check import run_state_check, state_check_ok
-from physical_agent.state.sqlite import migrate_markdown_workspace_to_sqlite
 from physical_agent.watch.runtime import WatchRuntime
 
 
@@ -603,51 +602,6 @@ def export_audit(
     typer.echo(f"Workspace: {result['workspace_path']}")
     typer.echo(f"Audit: {result['out_dir']}")
     typer.echo(f"Manifest: {result['manifest']}")
-
-
-@app.command("migrate-md-to-sqlite")
-def migrate_md_to_sqlite(
-    config: Path = typer.Option(Path(DEFAULT_CONFIG_NAME), "--config", "-c", help="Config path."),
-    overwrite: bool = typer.Option(
-        False,
-        "--overwrite",
-        help="Replace an existing workspace/state.db file.",
-    ),
-) -> None:
-    cfg = load_config(config, allow_retired_markdown=True)
-    workspace_path = cfg.workspace_path(config.resolve().parent)
-    try:
-        result = migrate_markdown_workspace_to_sqlite(
-            workspace_path,
-            overwrite=overwrite,
-        )
-    except FileExistsError as exc:
-        typer.echo(str(exc))
-        raise typer.Exit(code=1) from exc
-    except FileNotFoundError as exc:
-        typer.echo(str(exc))
-        raise typer.Exit(code=1) from exc
-
-    typer.echo("Migrated Markdown workspace to SQLite.")
-    typer.echo(f"Workspace: {result['workspace_path']}")
-    typer.echo(f"SQLite DB: {result['db_path']}")
-    typer.echo(
-        "Actions: "
-        f"{result['actions']['pending']} pending, "
-        f"{result['actions']['completed']} completed, "
-        f"{result['actions']['cancelled']} cancelled"
-    )
-    typer.echo(
-        f"Chat messages: {result['chat_messages']}; "
-        f"memory notes: {result['memory_notes']}; "
-        f"uploads: {result['uploads']}; "
-        f"log entries: {result['log_entries']}"
-    )
-    typer.echo(
-        "Config was not changed. To use this SQLite database, set "
-        "`workspace.backend: sqlite` in physical-agent.yaml before starting "
-        "CLI/API/GUI/watch."
-    )
 
 
 @skill_app.command("list")

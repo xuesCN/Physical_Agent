@@ -13,7 +13,7 @@ import physical_agent.cli as cli_module
 from physical_agent.agent.chat_runtime import ChatRuntime
 from physical_agent.config import RETIRED_MARKDOWN_BACKEND_GUIDANCE, load_config, write_default_config
 from physical_agent.mcp.server import PhysicalAgentMCP
-from physical_agent.protocol.schemas import Action, Observation
+from physical_agent.protocol.schemas import Action
 from physical_agent.protocol.workspace import Workspace
 from physical_agent.state import SqliteStateStore, open_state_store
 from physical_agent.watch.runtime import WatchRuntime
@@ -245,134 +245,6 @@ def test_backend_matrix_watch_success_rejection_and_driver_exception(
     by_id = {item["action_id"]: item for item in feedback["history"]}
     assert "does not expose capability" in by_id["act_reject"]["message"]
     assert by_id["act_success"]["status"] == "completed"
-
-
-def test_markdown_to_sqlite_migration_preserves_readiness_state_and_audit(tmp_path):
-    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    data["workspace"]["backend"] = "markdown"
-    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
-    workspace.write_task("Inspect readiness", ["preserve state"])
-    workspace.write_capabilities(
-        {
-            "arm_1": {
-                "kind": "arm",
-                "driver": "mock_arm",
-                "status": "connected",
-                "capabilities": [{"name": "observe", "params_schema": {"type": "object"}}],
-            }
-        }
-    )
-    workspace.write_world(
-        Observation(
-            summary="readiness world",
-            robots={"arm_1": {"status": "idle"}},
-            objects={"red_block": {"location": "table"}},
-        )
-    )
-    workspace.write_actions(
-        [Action(id="act_pending", robot="arm_1", capability="observe")],
-        [Action(id="act_completed", robot="arm_1", capability="pick")],
-        [Action(id="act_cancelled", robot="arm_1", capability="place")],
-    )
-    workspace.write_feedback(
-        {"action_id": "act_completed", "status": "completed"},
-        [{"action_id": "act_completed", "status": "completed"}],
-    )
-    workspace.write_chat(
-        [{"role": "user", "content": "hello readiness"}],
-        running_summary="readiness summary",
-        compact=False,
-    )
-    workspace.write_memory(
-        [
-            {
-                "content": "readiness memory",
-                "source": "test",
-                "kind": "lesson",
-                "tags": ["readiness"],
-                "importance": 7,
-            }
-        ]
-    )
-    workspace.append_log("readiness log", actor="test")
-
-    migrate_result = CliRunner().invoke(
-        cli_module.app,
-        ["migrate-md-to-sqlite", "--config", str(config_path)],
-    )
-
-    assert migrate_result.exit_code == 0, migrate_result.output
-    assert "workspace.backend: sqlite" in migrate_result.output
-    assert yaml.safe_load(config_path.read_text(encoding="utf-8"))["workspace"]["backend"] == "markdown"
-
-    sqlite_store = SqliteStateStore(tmp_path / "workspace")
-    assert sqlite_store.exists()
-    assert sqlite_store.read_task()["task"] == "Inspect readiness"
-    assert sqlite_store.read_capabilities()["robots"]["arm_1"]["driver"] == "mock_arm"
-    assert sqlite_store.read_world()["state"]["objects"]["red_block"]["location"] == "table"
-    assert _ids(sqlite_store.read_actions()["pending"]) == ["act_pending"]
-    assert _ids(sqlite_store.read_actions()["completed"]) == ["act_completed"]
-    assert _ids(sqlite_store.read_actions()["cancelled"]) == ["act_cancelled"]
-    assert sqlite_store.read_feedback()["latest"]["action_id"] == "act_completed"
-    assert sqlite_store.read_chat()["running_summary"] == "readiness summary"
-    assert sqlite_store.read_chat()["messages"][0].content == "hello readiness"
-    memory = sqlite_store.read_memory()["notes"][0]
-    assert memory["content"] == "readiness memory"
-    assert memory["kind"] == "lesson"
-    assert memory["tags"] == ["readiness"]
-    assert memory["importance"] == 7
-
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    data["workspace"]["backend"] = "sqlite"
-    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-    audit_dir = tmp_path / "sqlite-audit"
-    export_result = CliRunner().invoke(
-        cli_module.app,
-        ["export-audit", "--config", str(config_path), "--out", str(audit_dir)],
-    )
-
-    assert export_result.exit_code == 0, export_result.output
-    assert _read_json(audit_dir / "task.json")["task"] == "Inspect readiness"
-    assert _read_json(audit_dir / "world.json")["state"]["objects"]["red_block"]["location"] == "table"
-    assert _read_json(audit_dir / "actions.json")["pending"][0]["id"] == "act_pending"
-    assert _read_json(audit_dir / "feedback.json")["latest"]["action_id"] == "act_completed"
-    assert _read_json(audit_dir / "chat.json")["running_summary"] == "readiness summary"
-    audit_memory = _read_json(audit_dir / "memory.json")["notes"][0]
-    assert audit_memory["content"] == "readiness memory"
-    assert audit_memory["kind"] == "lesson"
-    assert audit_memory["tags"] == ["readiness"]
-    assert audit_memory["importance"] == 7
-    assert _read_json(audit_dir / "log.json")["entries"][0]["message"] == "readiness log"
-
-
-def test_markdown_to_sqlite_migration_reads_legacy_workspace_when_backend_omitted(
-    tmp_path,
-):
-    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    del data["workspace"]["backend"]
-    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
-    workspace.write_task("Migrate omitted backend", ["legacy reader only"])
-    workspace.write_actions([Action(id="act_omitted", robot="arm_1", capability="observe")])
-
-    migrate_result = CliRunner().invoke(
-        cli_module.app,
-        ["migrate-md-to-sqlite", "--config", str(config_path)],
-    )
-
-    assert migrate_result.exit_code == 0, migrate_result.output
-    assert "workspace.backend: sqlite" in migrate_result.output
-    assert "backend" not in yaml.safe_load(config_path.read_text(encoding="utf-8"))[
-        "workspace"
-    ]
-    sqlite_store = SqliteStateStore(tmp_path / "workspace")
-    assert sqlite_store.read_task()["task"] == "Migrate omitted backend"
-    assert _ids(sqlite_store.read_actions()["pending"]) == ["act_omitted"]
 
 
 @pytest.mark.parametrize("backend", BACKENDS)

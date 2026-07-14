@@ -71,6 +71,8 @@ CHAT_RESPONSE_SCHEMA: dict[str, Any] = {
     },
 }
 
+CHAT_CONTRACT_VERSION = "structured_v1"
+
 
 class ChatReplyTurn(StrictModel):
     kind: Literal["reply"] = "reply"
@@ -349,6 +351,8 @@ class ChatRuntime:
                 "refusal_reason": turn.refusal_reason,
                 "needs_watch": plan.needs_watch,
                 "executed": executed,
+                "chat_contract": CHAT_CONTRACT_VERSION,
+                "has_structured_draft": agent_output is not None,
             },
         )
         workspace.append_log("Chat agent replied.", actor="agent")
@@ -371,6 +375,8 @@ class ChatRuntime:
             "code_result": None,
             "refusal_reason": turn.refusal_reason,
             "skills": self._skills_summary(),
+            "chat_contract": CHAT_CONTRACT_VERSION,
+            "has_structured_draft": agent_output is not None,
         }
 
     def respond_stream(
@@ -378,6 +384,9 @@ class ChatRuntime:
         message: str,
         *,
         cancel_check: Callable[[], bool] | None = None,
+        transport_observer: (
+            Callable[[Callable[[], None] | None], None] | None
+        ) = None,
     ) -> Iterator[dict[str, Any]]:
         """Stream one proposal-only ChatTurn without starting watch.
 
@@ -404,6 +413,7 @@ class ChatRuntime:
         intent = "chat"
         steps: list[Any] = []
         decision_stream: Iterator[dict[str, Any]] | None = None
+        terminal_persisted = False
         try:
             if mode == "llm":
                 provider_progress = False
@@ -419,6 +429,7 @@ class ChatRuntime:
                             memory=memory,
                             retrieved_context=retrieved_context,
                             cancel_check=cancel_check,
+                            transport_observer=transport_observer,
                         )
                     )
                     response: dict[str, Any] | None = None
@@ -538,6 +549,7 @@ class ChatRuntime:
                 steps=turn.steps,
                 turn=turn,
             )
+            terminal_persisted = True
             yield {"type": "done", **result}
         except _ChatStreamAborted:
             result = self._finish_stream_reply(
@@ -550,13 +562,14 @@ class ChatRuntime:
             yield {"type": "aborted", **result}
         except GeneratorExit:
             _close_iterator(decision_stream)
-            self._finish_stream_reply(
-                reply="".join(reply_parts),
-                mode=mode,
-                status="cancelled",
-                intent=intent,
-                steps=steps,
-            )
+            if not terminal_persisted:
+                self._finish_stream_reply(
+                    reply="".join(reply_parts),
+                    mode=mode,
+                    status="cancelled",
+                    intent=intent,
+                    steps=steps,
+                )
             raise
         except Exception as exc:
             result = self._finish_stream_reply(
@@ -581,6 +594,9 @@ class ChatRuntime:
         memory: dict[str, Any],
         retrieved_context: dict[str, Any] | None,
         cancel_check: Callable[[], bool] | None = None,
+        transport_observer: (
+            Callable[[Callable[[], None] | None], None] | None
+        ) = None,
     ) -> Iterator[dict[str, Any]]:
         client = self._llm_client()
         bundle = build_context(
@@ -603,6 +619,7 @@ class ChatRuntime:
                 temperature=bundle.temperature,
                 max_tokens=bundle.max_tokens,
                 metadata={"physical_agent_surface": "chat_stream"},
+                transport_observer=transport_observer,
             )
         )
         parser = _IncrementalJsonReply()
@@ -709,6 +726,8 @@ class ChatRuntime:
             "streamed": True,
             "stream_status": status,
             "partial": status != "completed",
+            "chat_contract": CHAT_CONTRACT_VERSION,
+            "has_structured_draft": agent_output is not None,
         }
         if error:
             metadata["error"] = _truncate(error, 500)
@@ -736,6 +755,8 @@ class ChatRuntime:
             "code_result": None,
             "skills": [],
             "stream_status": status,
+            "chat_contract": CHAT_CONTRACT_VERSION,
+            "has_structured_draft": agent_output is not None,
         }
 
     def _maybe_handle_code_task(self, message: str):
@@ -1125,7 +1146,7 @@ class ChatRuntime:
             status="draft",
             decision="propose",
             lifecycle="draft",
-            message=reply,
+            message=normalized["reply"],
             capabilities=capabilities,
             safety_rules=safety_rules,
         )

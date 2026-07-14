@@ -1,6 +1,6 @@
 # 001：架构减法与兼容面退役
 
-状态：执行中（R0、R1.5、R2、R2.1、R3、R4 完成；R5 实现/本地门禁完成，独立 CI 待确认）
+状态：执行中（R0、R1.5、R2、R2.1、R3、R4 完成；R5 实现与 review-fix 定向门禁完成，独立 CI 待确认）
 
 日期：2026-07-10
 
@@ -87,6 +87,8 @@ R2 阶段 review 发现 React/TUI 仍会从 raw feedback/Action Board 二次推�
 
 - 先让 streaming `done` 事件携带 compiler 生成的 `agent_output`，并让 React 优先消费结构化字段、文本 fence 仅作 fallback。可信的是 compiler 注入的 topology/owner/Gate 义务；其中 draft actions 仍是不可信 proposal intents，不代表已通过 SafetyGate 或可直接执行。
 - 双轨期间后端仍写 fence；验证 streaming chat → draft card → Add to Actions → pending Action Board 全链路，以及旧客户端 fallback。
+- 新 structured 消息用显式 contract/provenance 区分历史 fallback：reply-only turn 中模型自行输出的 fence 只能是文本；只有 compiler 声明本轮存在 structured draft 时，fence 才可作为 envelope 丢失/损坏的双轨灾备。
+- canonical `AgentOutput.message` 不含 fence；streaming 使用 JSON mode + 本地 schema 校验，并把 Stop best-effort 传到实际 provider stream close。terminal result 只允许落盘一次。
 - 经过至少一轮独立验证后，才删除 fence 生产、parser、fixture 和文案。
 
 理由：当前 streaming 是 reply-only，F1 主链靠 fence 传 draft；直接删 fence 会造成无报错的功能断链。

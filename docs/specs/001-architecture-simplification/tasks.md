@@ -226,12 +226,24 @@
 - [x] 增加“structured producer 仍在进行时 abort”的专项测试，验证无 done/draft persistence 与资源释放。
 - [x] 每个 draft action 有唯一 mandatory、watch-owned Gate task。
 
+### Review-fix
+
+- [x] terminal persistence exactly-once：收到 `done` 后关闭 iterator 不追加 cancelled assistant，不覆盖 answered plan。
+- [x] canonical `AgentOutput.message` 只含 base reply；兼容 `action-draft` fence 只写 wire reply。
+- [x] structured stream 首选 JSON mode + 本地 schema 校验；只在零 byte 且 format unsupported 时退回 plain JSON prompt。
+- [x] API stream state 注册实际 SDK transport closer；abort endpoint 除置位外会 best-effort close provider transport。
+- [x] 新消息写 `chat_contract=structured_v1` 与 `has_structured_draft`；reply-only structured turn 不把模型 fence 变成卡片。
+- [x] 历史无版本消息仍可 fence fallback；声明存在 structured draft 但 envelope 丢失/损坏时，R5 双轨 fallback 仍可用。
+- [x] review-fix 定向门禁：backend/API/provider `97 passed`；frontend production build 通过。
+- [x] review-fix 本地门禁：Python `413 passed`、Safety `32 passed`、TUI typecheck/build + `60 passed`、frontend production build、clean-wheel smoke 全绿；Playwright 26 cases 发现通过。
+- [ ] review-fix 真实 Chromium 与独立远端 CI 证据完成（本地缺 Playwright browser binary）。
+
 ### 双轨 consumer
 
 - [x] 兼容 fence 由 structured actions 生成；禁止 fence → canonical output。
 - [x] React 增加 type guard，验证 schema/lifecycle/decision 和合法 action 数组。
 - [x] type guard 通过后，React 优先 `message.metadata.agent_output.actions` / SSE `payload.agent_output.actions`。
-- [x] structured 缺失或不合法时才 fallback `parseActionDrafts()`。
+- [x] 历史消息在 structured 缺失/不合法时 fallback；新 structured 消息只有 compiler 声明存在 draft 时才允许兼容 fence fallback。
 - [x] structured + fence 只显示一组；冲突时 structured 胜出。
 - [x] refresh 后从 assistant metadata 恢复 Draft 卡片。
 - [x] Add to Actions 提交 structured action，并补 `source=chat_draft` provenance。

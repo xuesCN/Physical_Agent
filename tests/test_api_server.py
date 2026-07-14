@@ -859,6 +859,7 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
             calls["respond"] = {
                 "message": message,
                 "has_cancel_check": "cancel_check" in kwargs,
+                "has_transport_observer": "transport_observer" in kwargs,
             }
             yield {"type": "delta", "delta": "hel"}
             yield {"type": "delta", "delta": "lo"}
@@ -880,6 +881,8 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
                 "memory": [],
                 "plan": {"status": "answered"},
                 "executed": 0,
+                "chat_contract": "structured_v1",
+                "has_structured_draft": True,
             }
 
     def fake_new_runtime(config, **kwargs):
@@ -911,6 +914,8 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
     )
     assert events[3]["payload"]["plan"] == {"status": "answered"}
     assert events[3]["payload"]["draft_actions"] == [{"id": "draft_001"}]
+    assert events[3]["payload"]["chat_contract"] == "structured_v1"
+    assert events[3]["payload"]["has_structured_draft"] is True
     assert events[3]["payload"]["state"]["chat"]["messages"] == []
     assert calls["runtime"] == {
         "config": config_path.resolve(),
@@ -921,6 +926,7 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
     assert calls["respond"] == {
         "message": "hello",
         "has_cancel_check": True,
+        "has_transport_observer": True,
     }
 
 
@@ -961,7 +967,12 @@ def test_api_chat_stream_abort_registry_stops_before_consuming_runtime(tmp_path,
     stream_state = controller.register_chat_stream(
         ChatRequest(message="hello", stream_id="stream-abort", request_id="req-abort")
     )
+    transport = {"closed": 0}
+    stream_state.observe_transport(
+        lambda: transport.__setitem__("closed", transport["closed"] + 1)
+    )
     assert controller.abort_chat_stream("stream-abort", reason="test") is True
+    assert transport["closed"] == 1
 
     class FakeRuntime:
         def respond_stream(self, message, **kwargs):

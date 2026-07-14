@@ -498,7 +498,7 @@ def test_stream_chat_text_aggregates_chat_completion_deltas(fake_openai):
     assert "extra_body" not in call["payload"]
 
 
-def test_stream_structured_json_uses_chat_completion_schema_format(fake_openai):
+def test_stream_structured_json_uses_chat_completion_json_mode(fake_openai):
     fake_openai.chat_outputs = [[_chat_delta('{"reply":"hello"}')]]
     settings = OpenAICompatibleSettings(
         api_key="test-key",
@@ -521,19 +521,15 @@ def test_stream_structured_json_uses_chat_completion_schema_format(fake_openai):
 
     assert chunks == ['{"reply":"hello"}']
     payload = fake_openai.instances[0].calls[0]["payload"]
-    assert payload["response_format"] == {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "chat_turn",
-            "strict": True,
-            "schema": schema,
-        },
-    }
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["messages"][0]["role"] == "system"
+    assert "JSON Schema named `chat_turn`" in payload["messages"][0]["content"]
+    assert json.dumps(schema) in payload["messages"][0]["content"]
 
 
 def test_stream_structured_json_falls_back_only_before_provider_bytes(fake_openai):
     fake_openai.chat_outputs = [
-        FakeBadRequestError("response_format json_schema unsupported"),
+        FakeBadRequestError("response_format json_object unsupported"),
         [_chat_delta('{"reply":"fallback"}')],
     ]
     settings = OpenAICompatibleSettings(
@@ -558,14 +554,14 @@ def test_stream_structured_json_falls_back_only_before_provider_bytes(fake_opena
     assert chunks == ['{"reply":"fallback"}']
     calls = fake_openai.instances[0].calls
     assert len(calls) == 2
-    assert calls[0]["payload"]["response_format"]["type"] == "json_schema"
-    assert calls[1]["payload"]["response_format"] == {"type": "json_object"}
+    assert calls[0]["payload"]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in calls[1]["payload"]
 
 
 def test_stream_structured_json_never_retries_after_provider_bytes(fake_openai):
     def broken_stream():
         yield _chat_delta('{"reply":"partial')
-        raise FakeBadRequestError("response_format json_schema unsupported")
+        raise FakeBadRequestError("response_format json_object unsupported")
 
     fake_openai.chat_outputs = [broken_stream()]
     settings = OpenAICompatibleSettings(
@@ -642,7 +638,7 @@ def test_stream_chat_text_aggregates_responses_deltas(fake_openai):
     assert call["payload"]["reasoning"] == {"effort": "medium", "summary": "auto"}
 
 
-def test_stream_structured_json_uses_responses_schema_format(fake_openai):
+def test_stream_structured_json_uses_responses_json_mode(fake_openai):
     fake_openai.responses_outputs = [
         [_responses_delta('{"reply":"hello"}'), {"type": "response.completed"}]
     ]
@@ -668,12 +664,41 @@ def test_stream_structured_json_uses_responses_schema_format(fake_openai):
 
     assert chunks == ['{"reply":"hello"}']
     payload = fake_openai.instances[0].calls[0]["payload"]
-    assert payload["text"]["format"] == {
-        "type": "json_schema",
-        "name": "chat_turn",
-        "strict": True,
-        "schema": schema,
-    }
+    assert payload["text"]["format"] == {"type": "json_object"}
+    assert "JSON Schema named `chat_turn`" in payload["instructions"]
+    assert json.dumps(schema) in payload["instructions"]
+
+
+def test_stream_chat_text_exposes_and_clears_transport_closer(fake_openai):
+    closed = {"count": 0}
+
+    class CloseAwareStream:
+        def __iter__(self):
+            yield _chat_delta("hello")
+
+        def close(self):
+            closed["count"] += 1
+
+    fake_openai.chat_outputs = [CloseAwareStream()]
+    observed = []
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    stream = OpenAICompatibleClient(settings).stream_chat_text(
+        [{"role": "user", "content": "ping"}],
+        transport_observer=observed.append,
+    )
+
+    assert next(stream) == "hello"
+    assert callable(observed[0])
+    observed[0]()
+    assert closed["count"] == 1
+    stream.close()
+    assert observed[-1] is None
+    assert closed["count"] >= 1
 
 
 def test_stream_chat_text_error_redacts_api_key(fake_openai):

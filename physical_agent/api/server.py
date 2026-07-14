@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 import re
 import tempfile
 import threading
-from typing import Any, Iterator, Literal
+from typing import Any, Callable, Iterator, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -168,6 +168,34 @@ class ChatStreamState:
     stream_id: str
     request_id: str
     abort_event: threading.Event
+    _transport_closer: Callable[[], None] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _transport_lock: threading.Lock = field(
+        default_factory=threading.Lock,
+        init=False,
+        repr=False,
+    )
+
+    def observe_transport(self, closer: Callable[[], None] | None) -> None:
+        close_now: Callable[[], None] | None = None
+        with self._transport_lock:
+            if closer is None:
+                self._transport_closer = None
+            elif self.abort_event.is_set():
+                close_now = closer
+            else:
+                self._transport_closer = closer
+        _best_effort_close(close_now)
+
+    def abort(self) -> None:
+        self.abort_event.set()
+        with self._transport_lock:
+            closer = self._transport_closer
+            self._transport_closer = None
+        _best_effort_close(closer)
 
 
 def create_app(
@@ -929,6 +957,8 @@ class ApiController:
             "plan": _json_safe(response.get("plan")),
             "executed": 0,
             "refusal_reason": response.get("refusal_reason"),
+            "chat_contract": response.get("chat_contract"),
+            "has_structured_draft": bool(response.get("has_structured_draft")),
             "state": state,
         }
 
@@ -970,7 +1000,7 @@ class ApiController:
             stream_state = self._chat_streams.get(stream_id)
         if stream_state is None:
             return False
-        stream_state.abort_event.set()
+        stream_state.abort()
         try:
             _, store = self._store(require_exists=True)
             store.append_log(f"API chat stream `{stream_id}` abort requested: {reason}.", actor="api")
@@ -1004,6 +1034,7 @@ class ApiController:
         runtime_stream = runtime.respond_stream(
             message,
             cancel_check=stream_state.abort_event.is_set,
+            transport_observer=stream_state.observe_transport,
         )
         try:
             while True:
@@ -1048,6 +1079,10 @@ class ApiController:
                             "draft_actions": _json_safe(
                                 item.get("draft_actions", [])
                             ),
+                            "chat_contract": item.get("chat_contract"),
+                            "has_structured_draft": bool(
+                                item.get("has_structured_draft")
+                            ),
                             "state": _json_safe(state),
                         }
                     )
@@ -1067,8 +1102,11 @@ class ApiController:
                 else:
                     payload_data.update(_json_safe(item))
                 yield {"type": event_type, "payload": payload_data}
-        except Exception:
-            raise
+        finally:
+            close = getattr(runtime_stream, "close", None)
+            if callable(close):
+                close()
+            stream_state.observe_transport(None)
 
     def safe_resolved_llm_settings_values(self) -> dict[str, str]:
         try:
@@ -1673,6 +1711,15 @@ def _close_iterator(iterator: Any) -> None:
     close = getattr(iterator, "close", None)
     if callable(close):
         close()
+
+
+def _best_effort_close(closer: Callable[[], None] | None) -> None:
+    if closer is None:
+        return
+    try:
+        closer()
+    except Exception:
+        pass
 
 
 def _validate_action(payload: dict[str, Any]) -> Action:

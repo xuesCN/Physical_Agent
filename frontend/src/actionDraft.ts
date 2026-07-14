@@ -28,12 +28,15 @@ export function parseActionDrafts(content: string): ParsedActionDrafts {
 
 export function resolveActionDrafts(
   content: string,
-  agentOutput: unknown
+  agentOutput: unknown,
+  options: { allowFenceFallback?: boolean } = {}
 ): ParsedActionDrafts {
   const compatibility = parseActionDrafts(content);
   const structured = structuredDraftActions(agentOutput);
   if (structured === null) {
-    return compatibility;
+    return options.allowFenceFallback === false
+      ? { markdown: content, drafts: [] }
+      : compatibility;
   }
   return {
     markdown: compatibility.drafts.length ? compatibility.markdown : content,

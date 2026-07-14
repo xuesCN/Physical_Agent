@@ -1332,18 +1332,44 @@ test("chat drafts prefer structured output and retain fence fallback after refre
           created_at: "2026-07-01T01:00:07Z",
           metadata: { agent_output: draftAgentOutput([structuredConflict]) },
         },
+        { role: "user", content: "new reply-only fence", created_at: "2026-07-01T01:00:08Z" },
+        {
+          role: "assistant",
+          content: `Model fence is text only.${fence(fenceConflict)}`,
+          created_at: "2026-07-01T01:00:09Z",
+          metadata: {
+            chat_contract: "structured_v1",
+            has_structured_draft: false,
+            agent_output: null,
+          },
+        },
+        { role: "user", content: "new compatibility fallback", created_at: "2026-07-01T01:00:10Z" },
+        {
+          role: "assistant",
+          content: `Compatibility fallback.${fence(fenceOnly)}`,
+          created_at: "2026-07-01T01:00:11Z",
+          metadata: {
+            chat_contract: "structured_v1",
+            has_structured_draft: true,
+            agent_output: {
+              ...draftAgentOutput([structuredConflict]),
+              schema: "physical-agent/agent-output/v0",
+            },
+          },
+        },
       ],
     },
   });
 
   await page.goto("/");
   const cards = page.getByTestId("draft-action-card");
-  await expect(cards).toHaveCount(4);
+  await expect(cards).toHaveCount(5);
   await expect(cards.nth(0)).toContainText("arm_1.observe");
   await expect(cards.nth(1)).toContainText("arm_1.pick");
   await expect(cards.nth(2)).toContainText("arm_1.place");
   await expect(cards.nth(3)).toContainText("arm_1.observe");
   await expect(cards.nth(3)).not.toContainText("arm_1.pick");
+  await expect(cards.nth(4)).toContainText("arm_1.pick");
   expectNoConsoleErrors(consoleErrors);
 });
 

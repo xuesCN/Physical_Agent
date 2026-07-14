@@ -134,13 +134,25 @@ Rollback：单独提交，恢复参数不会改变 SQLite schema。
 
 1. 后端从结构化 `agent_output.actions` 生成兼容 fence；禁止再从 fence 反推 AgentOutput。
 2. API SSE `done` 转发 `agent_output`/plan，不再丢字段。
-3. React 用 type guard 验证 `schema=physical-agent/agent-output/v1`、`lifecycle=draft`、`decision=propose` 和合法 action 数组后才消费 SSE/assistant metadata；仅在 structured output 缺失或不合法时 fallback 到 fence；两者同时存在只显示 structured，冲突时 structured 胜出。
+3. React 用 type guard 验证 `schema=physical-agent/agent-output/v1`、`lifecycle=draft`、`decision=propose` 和合法 action 数组后才消费 SSE/assistant metadata；历史消息在 structured output 缺失或不合法时 fallback 到 fence，新 structured 消息还必须由 compiler provenance 声明本轮存在 draft 才可 fallback；两者同时存在只显示 structured，冲突时 structured 胜出。
 4. TUI 类型补 `AgentOutput.actions`，draft 与 Action Board 分开展示。
 5. 完成一轮 backend/API/React/TUI/e2e 正反验证，保留证据后只允许进入步骤 6；步骤 7 还必须等待步骤 6 的官方 consumer migration 完成。
 
 Go：structured-only、fence-only、两者一致、两者冲突、refresh 恢复、structured-call abort/error、Add to Actions 全部通过；draft IDs/dependencies 在四份表示中一致；draft 不直接进入 pending board；每个 draft action 仍有 mandatory Gate task。
 
 Rollback：双轨期随时切回 fence consumer；producer 已结构化，不需要回退心智模型。
+
+### 5.3 review-fix 门禁
+
+R5 独立验收前先修复以下跨层缺口，不把它们推迟到 R6/R7：
+
+1. terminal persistence 必须 exactly-once；consumer 在收到 `done` 后关闭 iterator 不得再追加 cancelled assistant 或把 answered plan 降级。
+2. canonical `AgentOutput.message` 只保存 provider base reply；双轨 fence 只存在于兼容 wire reply，不能污染 compiler output。
+3. R5 streaming 使用 provider JSON mode + 本地 JSON Schema 校验；不先发送与当前开放 schema 不兼容、注定 400 的 strict-schema 请求。format fallback 仍只允许在零 byte 阶段发生。
+4. abort 除 cooperative flag 外，还要把 best-effort closer 注册到实际 SDK stream；API Stop 可主动关闭正在阻塞读取的 provider transport。
+5. 新 structured turn 写显式 contract/provenance。只有 compiler 确认本轮存在 structured draft 时才允许 fence 作双轨灾备；新 reply-only turn 中模型自行输出的 fence 不得变成可点击卡片。没有版本标记的历史消息仍保留 R5 fallback。
+
+Go：done-then-close、mid-delta abort、provider transport close、canonical message/fence 分离、new reply-only fence 负例与 historical/declared compatibility fallback 全部有回归证据；之后仍需独立 CI/真实 Chromium 才能关闭 R5。
 
 ## 6. 收敛 application/read-model 职责和官方消费者
 

@@ -281,7 +281,35 @@ def test_chat_runtime_stream_writes_completed_assistant_message(tmp_path, monkey
     assert messages[-1].content == "hello"
     assert messages[-1].metadata["stream_status"] == "completed"
     assert messages[-1].metadata["partial"] is False
+    assert messages[-1].metadata["chat_contract"] == "structured_v1"
+    assert messages[-1].metadata["has_structured_draft"] is False
     assert store.read_actions()["pending"] == []
+
+
+def test_chat_runtime_stream_close_after_done_does_not_persist_cancelled(tmp_path):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="rule_based",
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+
+    stream = runtime.respond_stream("pick the red block")
+    done = None
+    while done is None:
+        event = next(stream)
+        if event["type"] == "done":
+            done = event
+    stream.close()
+
+    store = open_state_store(config_path=config_path)
+    messages = store.read_chat()["messages"]
+    assert [item.role for item in messages] == ["user", "assistant"]
+    assert messages[-1].metadata["stream_status"] == "completed"
+    assert store.read_plan()["plan"].status == "answered"
+    assert store.read_plan()["plan"].agent_output is not None
 
 
 def test_chat_runtime_stream_abort_writes_partial_without_actions(tmp_path, monkeypatch):
@@ -441,6 +469,11 @@ def test_chat_runtime_structured_stream_is_early_and_has_one_draft_truth(
     output_actions = done["agent_output"]["actions"]
     assert done["draft_actions"] == output_actions
     assert done["plan"]["agent_output"]["actions"] == output_actions
+    assert done["agent_output"]["message"] == "I drafted two actions."
+    assert "```action-draft" not in done["agent_output"]["message"]
+    assert "```action-draft" in done["reply"]
+    assert done["chat_contract"] == "structured_v1"
+    assert done["has_structured_draft"] is True
     assert output_actions[1]["depends_on"] == [output_actions[0]["id"]]
     fence = chat_runtime_module._extract_action_drafts_from_reply(done["reply"])
     assert [
@@ -461,6 +494,8 @@ def test_chat_runtime_structured_stream_is_early_and_has_one_draft_truth(
     assistant = store.read_chat()["messages"][-1]
     assert assistant.metadata["draft_actions"] == output_actions
     assert assistant.metadata["agent_output"]["actions"] == output_actions
+    assert assistant.metadata["chat_contract"] == "structured_v1"
+    assert assistant.metadata["has_structured_draft"] is True
     assert store.read_actions()["pending"] == []
 
 

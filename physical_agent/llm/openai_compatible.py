@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from jsonschema import SchemaError, ValidationError, validate as validate_json_schema
 
@@ -204,6 +204,9 @@ class OpenAICompatibleClient:
         max_tokens: int = 1024,
         response_format: dict[str, Any] | None = None,
         metadata: dict[str, str] | None = None,
+        transport_observer: (
+            Callable[[Callable[[], None] | None], None] | None
+        ) = None,
     ) -> Iterator[str]:
         """Yield assistant text deltas from the configured compatible API mode."""
 
@@ -214,6 +217,7 @@ class OpenAICompatibleClient:
                 max_tokens=max_tokens,
                 text_format=_responses_text_format(response_format),
                 metadata=metadata,
+                transport_observer=transport_observer,
             )
             return
 
@@ -223,6 +227,7 @@ class OpenAICompatibleClient:
             max_tokens=max_tokens,
             response_format=response_format,
             metadata=metadata,
+            transport_observer=transport_observer,
         )
 
     def stream_structured_json(
@@ -234,42 +239,15 @@ class OpenAICompatibleClient:
         temperature: float = 0.0,
         max_tokens: int = 1024,
         metadata: dict[str, str] | None = None,
+        transport_observer: (
+            Callable[[Callable[[], None] | None], None] | None
+        ) = None,
     ) -> Iterator[str]:
         """Yield one authoritative JSON object from a real provider stream.
 
         Format fallbacks are allowed only before the provider has yielded any
         bytes, so callers never splice together two competing decisions.
         """
-
-        strict_format = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": schema_name,
-                "strict": True,
-                "schema": schema,
-            },
-        }
-        yielded = False
-        strict_stream: Iterator[str] | None = None
-        try:
-            strict_stream = iter(
-                self.stream_chat_text(
-                    messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    response_format=strict_format,
-                    metadata=metadata,
-                )
-            )
-            for delta in strict_stream:
-                yielded = True
-                yield delta
-            return
-        except OpenAICompatibleError as exc:
-            if yielded or not exc.is_bad_request:
-                raise
-        finally:
-            _close_stream(strict_stream)
 
         fallback_messages = _messages_with_json_mode_instruction(
             messages,
@@ -286,6 +264,7 @@ class OpenAICompatibleClient:
                     max_tokens=max_tokens,
                     response_format={"type": "json_object"},
                     metadata=metadata,
+                    transport_observer=transport_observer,
                 )
             )
             for delta in json_stream:
@@ -304,6 +283,7 @@ class OpenAICompatibleClient:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 metadata=metadata,
+                transport_observer=transport_observer,
             )
         )
         try:
@@ -477,6 +457,9 @@ class OpenAICompatibleClient:
         max_tokens: int,
         response_format: dict[str, Any] | None,
         metadata: dict[str, str] | None,
+        transport_observer: (
+            Callable[[Callable[[], None] | None], None] | None
+        ),
     ) -> Iterator[str]:
         payload: dict[str, Any] = {
             "model": self.settings.model,
@@ -499,6 +482,7 @@ class OpenAICompatibleClient:
         trace_error: str | None = None
         try:
             stream = self._client.chat.completions.create(**payload)
+            _observe_transport(transport_observer, stream)
             for chunk in stream:
                 usage = _extract_usage(chunk) or usage
                 for content in _chat_delta_contents(chunk):
@@ -511,6 +495,7 @@ class OpenAICompatibleClient:
             if reasoning_applied and not yielded and _is_reasoning_unsupported_error(error):
                 _close_stream(stream)
                 stream = self._retry_chat_stream_without_reasoning(payload)
+                _observe_transport(transport_observer, stream)
                 try:
                     for chunk in stream:
                         usage = _extract_usage(chunk) or usage
@@ -526,6 +511,7 @@ class OpenAICompatibleClient:
             trace_error = str(error)
             raise error from exc
         finally:
+            _observe_transport(transport_observer, None)
             _close_stream(stream)
             _write_llm_trace(
                 surface=_surface_from_metadata(metadata),
@@ -619,6 +605,9 @@ class OpenAICompatibleClient:
         max_tokens: int,
         text_format: dict[str, Any] | None,
         metadata: dict[str, str] | None,
+        transport_observer: (
+            Callable[[Callable[[], None] | None], None] | None
+        ),
     ) -> Iterator[str]:
         instructions, input_items = _messages_to_responses_parts(messages)
         payload: dict[str, Any] = {
@@ -644,6 +633,7 @@ class OpenAICompatibleClient:
         trace_error: str | None = None
         try:
             stream = self._client.responses.create(**payload)
+            _observe_transport(transport_observer, stream)
             for event in stream:
                 usage = _extract_usage(event) or usage
                 event_type = _event_type(event)
@@ -661,6 +651,7 @@ class OpenAICompatibleClient:
             if reasoning_applied and not yielded and _is_reasoning_unsupported_error(exc):
                 _close_stream(stream)
                 stream = self._retry_responses_stream_without_reasoning(payload)
+                _observe_transport(transport_observer, stream)
                 try:
                     for event in stream:
                         usage = _extract_usage(event) or usage
@@ -689,6 +680,7 @@ class OpenAICompatibleClient:
             if reasoning_applied and not yielded and _is_reasoning_unsupported_error(error):
                 _close_stream(stream)
                 stream = self._retry_responses_stream_without_reasoning(payload)
+                _observe_transport(transport_observer, stream)
                 try:
                     for event in stream:
                         usage = _extract_usage(event) or usage
@@ -713,6 +705,7 @@ class OpenAICompatibleClient:
             trace_error = str(error)
             raise error from exc
         finally:
+            _observe_transport(transport_observer, None)
             _close_stream(stream)
             _write_llm_trace(
                 surface=_surface_from_metadata(metadata),
@@ -1202,6 +1195,19 @@ def _close_stream(stream: Any) -> None:
     close = getattr(stream, "close", None)
     if callable(close):
         close()
+
+
+def _observe_transport(
+    observer: Callable[[Callable[[], None] | None], None] | None,
+    stream: Any,
+) -> None:
+    if observer is None:
+        return
+    closer = None if stream is None else lambda current=stream: _close_stream(current)
+    try:
+        observer(closer)
+    except Exception:
+        pass
 
 
 def _sdk_error_kind(exc: Exception, *, status_code: int | None) -> str:

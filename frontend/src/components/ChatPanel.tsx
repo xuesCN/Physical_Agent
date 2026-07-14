@@ -182,9 +182,14 @@ function MessageContent({
   onEditDraft
 }: MessageContentProps) {
   const labels = useMessages();
+  const isStructuredContract = message.metadata?.chat_contract === "structured_v1";
+  const allowFenceFallback =
+    !isStructuredContract || message.metadata?.has_structured_draft === true;
   const parsed =
     message.role === "assistant"
-      ? resolveActionDrafts(message.content, message.metadata?.agent_output)
+      ? resolveActionDrafts(message.content, message.metadata?.agent_output, {
+          allowFenceFallback
+        })
       : null;
   const markdown = parsed?.markdown ?? message.content;
   return (

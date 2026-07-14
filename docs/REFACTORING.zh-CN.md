@@ -340,13 +340,15 @@ README、state backend/hardware guide、架构 SVG 与 hardware examples 已统�
 
 ### R5：single-call structured Chat Turn + 双轨
 
-受限 spike 选择“一次 provider structured stream + 增量解码顶层 `reply` 字符串”：Chat Completions 使用 `response_format.json_schema`，Responses 使用 `text.format`；provider 不支持 strict format 时，只能在尚未产生任何 byte 前依次降级 JSON mode/JSON-only instruction。任一真实 byte 产生后禁止重试第二次决策调用，避免 reply 与 actions 来自两个互相矛盾的 turn。完整 JSON 到齐并通过本地 schema 后，raw actions 只分配一次 draft IDs、经 trusted `PlanCompiler` 编译一次；普通 reply、draft proposal、tool-loop submitted proposal 以 discriminated Chat Turn 表达。
+受限 spike 选择“一次 provider JSON stream + 增量解码顶层 `reply` 字符串”：Chat Completions 使用 `response_format=json_object`，Responses 使用对应 `text.format=json_object`，完整结果统一由本地 JSON Schema 校验；provider 不支持 JSON mode 时，只能在尚未产生任何 byte 前降级 JSON-only instruction。任一真实 byte 产生后禁止重试第二次决策调用，避免 reply 与 actions 来自两个互相矛盾的 turn。完整 JSON 到齐并通过本地 schema 后，raw actions 只分配一次 draft IDs、经 trusted `PlanCompiler` 编译一次；普通 reply、draft proposal、tool-loop submitted proposal 以 discriminated Chat Turn 表达。
 
 streaming reply delta 直接来自上游 JSON 字符串的增量 decoder；只有结构完成后追加的兼容 fence 是确定性本地后缀。done、ChatPlan、assistant metadata、`AgentOutput.actions` 与 fence 共用同一组 IDs/dependencies，后端不再从 fence 反向解析 canonical output。abort/GeneratorExit 会显式关闭 ChatRuntime/provider 两层 iterator，并在 compile、persist、done 前复查 cancellation；partial/error turn 只保存明确标记的普通 partial assistant 文本，不保存 draft output，也不写 pending Action Board。
 
 API SSE done 现在转发 `agent_output`/plan。React 在 render 时由 type guard 派生 Draft 卡片，严格验证 schema/lifecycle/decision/actions，structured 缺失或不合法才 fallback fence；一致或冲突都只显示 structured 一组。这遵循 React 重构纪律，没有为同一 draft 再建 effect/state 副本；只有 mock/旧服务未返回完整 state 时，才把 done envelope 附到本地 assistant metadata。TUI 补 `AgentOutput.actions`，把结构化 draft 写成独立 `draft` transcript，文案明确“不属于 Action Board”。Add 仍逐卡调用 proposal API并写 `source=chat_draft`；prerequisite-first 保留 dependency，dependent-first 422 且 board 无部分写入，本轮没有增加 batch endpoint。
 
 本地门禁：Python 全量按文件拆分运行 `157 + 254 = 411 passed`（沙盒单命令约 27 秒被截断，拆分覆盖全部测试文件；增量根级 `reply` 回归在对应分组单独复验）；Safety smoke `32 passed`；后端 R5 专项/API/provider `95 passed`；frontend production build 与 26 个 Playwright 用例发现通过；TUI typecheck/build 与 `60 passed`。本地缺 Playwright Chromium，真实 structured-only/fence-only/一致/冲突/refresh/Add 浏览器门禁和 clean-wheel 最终结果交给本轮独立远端 CI，确认前 R5 保持执行中。R5 不删除 fence、顶层兼容字段或 `_append_actions`，通过后只能进入 R6。
+
+阶段 review 暴露五个必须在 R5 内关闭的边界：`done` 后 consumer close 会二次落 cancelled 并覆盖 plan；compiler message 被兼容 fence 污染；开放 action params/metadata schema 与 strict Structured Outputs 约束不相容却每次先尝试；Stop 只置 cooperative flag、无法触达阻塞中的 SDK stream；新 reply-only JSON decision 里的模型 fence 仍可能被历史 parser 变成卡片。review-fix 因此引入 terminal exactly-once 标记、base reply / wire reply 分离、JSON mode + 本地 schema 校验、SDK transport closer 注册，以及 `chat_contract`/`has_structured_draft` provenance。历史消息和 compiler 声明过 draft 的损坏 envelope 仍保留双轨 fallback；新 reply-only turn 不再信任正文 fence。本轮本地门禁为 backend/API/provider `97 passed`、Python full `413 passed`、Safety `32 passed`、TUI typecheck/build + `60 passed`、frontend production build、26 个 Playwright cases 发现与 clean-wheel smoke 全绿；本地缺 Playwright Chromium binary，R5 仍等待独立真实 Chromium/CI 证据。
 
 ## 3. 关键决策与偏离（跨阶段汇总）
 
@@ -419,6 +421,9 @@ API SSE done 现在转发 `agent_output`/plan。React 在 render 时由 type gua
 67. **structured streaming 只能有一次权威决策调用**（R5）：同一 provider stream 同时承载 reply 与 action intents；format fallback 只允许发生在零 byte 阶段，已经产生 byte 后失败就终止该 turn，不能再调用模型拼接第二份 actions。
 68. **兼容 fence 是 structured output 的投影，不是输入**（R5/R7）：draft IDs/dependencies 先稳定、compiler 后注入 Gate，再从同一 actions 写 fence；React 冲突时 structured 胜出，后端永不 fence → AgentOutput。
 69. **Stop 的语义包含上游资源释放和零 draft persistence**（R5）：只停浏览器渲染不够；abort 必须 close provider iterator，并在 compile/persist/done 前复查，partial assistant 可留审计但不能带可提交 draft metadata。
+70. **terminal persistence 必须 exactly-once**（R5）：SSE `done` 已落 completed 后，consumer close 只是资源清理，不能再落 cancelled 或降级 ChatPlan。
+71. **compatibility projection 不能污染 canonical message**（R5/R7）：`AgentOutput.message` 保存 base reply；fence 只属于双轨 wire reply，便于 R7 单独切除。
+72. **历史 fallback 必须有版本边界**（R5/R7）：无标记历史消息可继续解析 fence；新 structured reply-only 消息不得把模型正文提升成 proposal，只有 compiler 声明存在 draft 时才允许双轨灾备。
 
 ## 4. 经验教训（流程侧）
 

@@ -236,7 +236,8 @@
 - [x] 历史无版本消息仍可 fence fallback；声明存在 structured draft 但 envelope 丢失/损坏时，R5 双轨 fallback 仍可用。
 - [x] review-fix 定向门禁：backend/API/provider `97 passed`；frontend production build 通过。
 - [x] review-fix 本地门禁：Python `413 passed`、Safety `32 passed`、TUI typecheck/build + `60 passed`、frontend production build、clean-wheel smoke 全绿；Playwright 26 cases 发现通过。
-- [ ] review-fix 真实 Chromium 与独立远端 CI 证据完成（本地缺 Playwright browser binary）。
+- [x] review-fix 真实 Chromium 证据完成：2026-07-14 本机 Playwright 1.61.1 / Chrome for Testing 149.0.7827.55（revision 1228）实际启动，最终完整套件 27/27 通过。
+- [ ] review-fix 独立远端 CI 证据（本提交推送后核验）。
 
 ### 双轨 consumer
 
@@ -254,16 +255,31 @@
 ### 双轨验收
 
 - [x] backend：done/ChatPlan/assistant metadata/compat fence 四者 actions IDs/dependencies 相等。
-- [ ] React：structured-only（用例已写，待远端真实 Chromium）。
-- [ ] React：fence-only 历史 fallback（用例已写，待远端真实 Chromium）。
-- [ ] React：structured + fence 一致（用例已写，待远端真实 Chromium）。
-- [ ] React：structured + fence 冲突，structured 胜出（用例已写，待远端真实 Chromium）。
-- [ ] React：Add → pending，未隐式 approve/execute（用例已写，待远端真实 Chromium）。
-- [ ] e2e：stream → structured card → Add → pending board（本地缺 Chromium，待远端门禁）。
+- [x] React：structured-only；真实 Chromium 从 assistant metadata 的 canonical `agent_output.actions` 恢复一张 Draft 卡片。
+- [x] React：fence-only 历史 fallback；真实 Chromium 渲染卡片并实际点击 Add，Action Board/API 均只出现一条 pending action。
+- [x] React：structured + fence 一致；真实 Chromium 只渲染一组卡片。
+- [x] React：structured + fence 冲突，structured 胜出；兼容 fence 内容未进入卡片。
+- [x] React：Add → pending，未隐式 approve/execute；pending 唯一、`source=chat_draft`，completed/cancelled 均无该 action，Gate 未被预填 `passed`、PhysicalAction 未被预填 `completed`。
+- [x] e2e：真实后端 stream → canonical `AgentOutput`/`ChatPlan.agent_output` → structured card → Add → pending board；SSE 有多个 delta，`AgentOutput.message` 不含 fence，ChatPlan draft 不写 Action Board。
+- [x] e2e：受控增量验证 partial fence 时 0 卡、完整 fence 时 1 卡、structured done 后仍为 1 卡且 structured 内容替换 fallback；全过程无临时 error card/framework overlay。
+- [x] e2e：reply-only 增量消息正常显示；新 `structured_v1` reply-only 正文 fence 只作文本、不生成卡片。
+- [x] e2e：Safety/task 状态只信任服务端规范化 `AgentOutput`；伪造 raw feedback=`passed` 不能覆盖服务端 task=`failed`。
 - [x] TUI：done/state 不丢 output，不把 draft 当 pending（60 tests）。
 - [x] fake provider 延迟测试证明首个 delta 在最终 structured output 前到达；中途 abort 停止后续 transport/持久化。
 - [x] 安全扫描：API/chat request path 不实例化 watch/driver（Safety smoke 32 tests）。
-- [ ] 双轨以独立提交/CI 轮次运行并记录证据；R5 完成后只能进入 R6，R7 还必须等待 R6 consumer migration。
+- [x] 双轨以独立本地真实 Chromium 轮次运行并记录证据；2026-07-14 最终 `CI=1 npm run test:e2e -- --project=chromium` 为 27/27 passed（2.0m），不是 discovery。
+- [ ] 本提交的独立远端 CI 证据；本轮 commit/push 已获用户确认，推送后核验。
+
+### 2026-07-14 真实 Chromium 验证记录
+
+- `cd frontend && npx playwright --version && npx playwright install chromium`：Playwright `1.61.1`；确认 Chrome for Testing `149.0.7827.55`、Chromium/headless-shell revision `1228` 已安装。
+- 基线 `npm run test:e2e -- --project=chromium`：真实 Chromium 26/26 passed（2.4m）；随后只补强双轨浏览器断言，不改生产消费逻辑。
+- 定向 `$env:CI='1'; npx playwright test e2e/dashboard.spec.ts --project=chromium --grep 'real streaming|streaming draft increments|chat drafts prefer'`：3/3 passed（28.9s）。
+- 最终 `$env:CI='1'; npm run test:e2e -- --project=chromium`：27/27 passed（2.0m）；`CI=1` 禁止复用 5173/8766 的旧服务，Playwright 自动启动 FastAPI 与 Vite。
+- `cd frontend && npm run build`：`tsc -b && vite build` 通过；仓库无独立 frontend unit-test script，交互测试由上述 Playwright 套件承担。
+- `.\.venv\Scripts\python.exe -m pytest -q tests/test_chat_runtime.py tests/test_api_server.py tests/test_openai_compatible.py tests/test_plan_compiler.py tests/test_output_projection.py tests/test_proposal_service.py tests/test_safety.py tests/test_safety_boundaries.py`：161 passed，1 个既有 StarletteDeprecationWarning。
+- Safety smoke：32 passed，1 个同上既有 warning；Python full：414 passed，1 warning；TUI typecheck/build + 60/60 tests；`scripts/smoke_dashboard_wheel.py` clean-wheel smoke 通过。
+- 本轮仍保留后端 fence 生产、`_extract_action_drafts_from_reply()`、React `actionDraft.ts`、fixtures/tests 与 proposal 顶层兼容字段；未开始 R7 删除。
 
 ## R6 职责/read-model 去重（含点名死代码）
 
@@ -284,11 +300,12 @@
 - [x] React/TUI formatter 继续各自保留；API/MCP 同状态投影一致性测试通过。
 - [x] 本地门禁：Python `414 passed`、Safety `32 passed`、frontend production build、TUI typecheck/build + `60 passed`、clean-wheel smoke 全绿；Playwright 26 cases 发现通过。
 - [x] R6 未删除 fence、proposal 顶层 `actions/action/draft_actions`、approve/reject mutation `action` 或 `/api/state.actions`；这些仍属于 R7 边界。
-- [ ] 独立远端 CI/真实 Chromium 证据（本轮按用户要求不推送；不以 discovery 冒充浏览器运行）。
+- [x] R6 当前树的本地真实 Chromium 证据：2026-07-14 完整 27/27 passed；正式 consumers/read-model 收敛与 R5 双轨同树运行。
+- [ ] R6 独立远端 CI 证据（随本提交推送后核验）。
 
 ## R7 wire compatibility 切断
 
-- [ ] R5 双轨验证证据已完成。
+- [x] R5 双轨真实 Chromium 验证证据已完成（2026-07-14 本地独立轮次 27/27）；独立远端 CI 随本提交推送后核验，但不再缺浏览器运行证据。
 - [x] R6 官方 consumer migration 已完成。
 - [ ] 停止后端 prompt/rule path 产生 `action-draft` fence。
 - [ ] 删除 `_extract_action_drafts_from_reply()` 及 fence formatter/parser。

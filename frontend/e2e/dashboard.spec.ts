@@ -1,7 +1,9 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const TOUR_STORAGE_KEY = "physical-agent-tour-dismissed";
 const LANGUAGE_STORAGE_KEY = "physical-agent-language";
@@ -1186,51 +1188,59 @@ test("executor status distinguishes an external lease from embedded configuratio
   expectNoConsoleErrors(consoleErrors);
 });
 
-test("streaming action draft can be persisted to pending Actions", async ({ page, request }) => {
+test("real streaming AgentOutput and ChatPlan can be persisted to pending Actions", async ({
+  page,
+  request,
+}) => {
   const consoleErrors = collectConsoleErrors(page);
-  const actionId = `stream-draft-observe-${Date.now()}`;
-  const reply = [
-    "I drafted an observation for review.",
-    "```action-draft",
-    JSON.stringify({
-      id: actionId,
-      robot: "arm_1",
-      capability: "observe",
-      params: {},
-      reason: "Inspect the workspace before moving.",
-      depends_on: [],
-    }),
-    "```",
-  ].join("\n");
-  await installMockChatStream(page, [
-    sseEvent(30, "start", { stream_id: "draft-e2e", request_id: "draft-e2e" }),
-    sseEvent(31, "delta", {
-      stream_id: "draft-e2e",
-      request_id: "draft-e2e",
-      delta: reply,
-    }),
-    sseEvent(32, "done", {
-      stream_id: "draft-e2e",
-      request_id: "draft-e2e",
-      reply,
-      mode: "llm",
-      agent_output: draftAgentOutput([
-        {
-          id: actionId,
-          robot: "arm_1",
-          capability: "observe",
-          params: {},
-          reason: "Inspect the workspace before moving.",
-          depends_on: [],
-        },
-      ]),
-    }),
-  ], 20);
-
+  publishE2eCapabilities();
   await page.goto("/");
+  const streamResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().includes("/api/chat/stream") &&
+      response.request().method() === "POST",
+  );
   await page.getByPlaceholder("Message the agent").fill("observe the workspace");
   await page.getByPlaceholder("Message the agent").press("Enter");
-  await expect(page.getByTestId("draft-action-card")).toContainText("arm_1.observe");
+  const streamResponse = await streamResponsePromise;
+  expect(streamResponse.ok()).toBeTruthy();
+  const streamEvents = parseSseEvents(await streamResponse.text());
+  expect(streamEvents.filter((event) => event.type === "delta").length).toBeGreaterThan(1);
+  const done = streamEvents.find((event) => event.type === "done");
+  expect(done).toBeTruthy();
+  const agentOutput = done?.payload.agent_output as {
+    schema?: string;
+    message?: string;
+    actions?: Array<{ id?: string }>;
+    tasks?: Array<Record<string, unknown>>;
+  };
+  const chatPlan = done?.payload.plan as {
+    agent_output?: unknown;
+    actions?: Array<{ id?: string }>;
+    needs_watch?: boolean;
+  };
+  expect(done?.payload.chat_contract).toBe("structured_v1");
+  expect(done?.payload.has_structured_draft).toBe(true);
+  expect(agentOutput.schema).toBe("physical-agent/agent-output/v1");
+  expect(agentOutput.message).not.toContain("```action-draft");
+  expect(chatPlan.agent_output).toEqual(agentOutput);
+  expect(chatPlan.actions).toEqual([]);
+  expect(chatPlan.needs_watch).toBe(false);
+  expect(
+    agentOutput.tasks?.some(
+      (task) =>
+        task.kind === "safety_gate" &&
+        task.owner === "watch" &&
+        task.mandatory === true &&
+        task.policy_source === "SAFETY.md",
+    ),
+  ).toBe(true);
+  const actionId = agentOutput.actions?.[0]?.id;
+  expect(actionId).toBeTruthy();
+
+  const cards = page.getByTestId("draft-action-card");
+  await expect(cards).toHaveCount(1);
+  await expect(cards).toContainText("arm_1.observe");
   await page.getByTestId("add-draft-to-actions").click();
   await expect(page.getByTestId("action-board")).toContainText(actionId);
   await expect(page.getByTestId("action-board")).toContainText("observe");
@@ -1243,11 +1253,152 @@ test("streaming action draft can be persisted to pending Actions", async ({ page
       return state.actions?.pending?.map((action) => action.id) ?? [];
     })
     .toContain(actionId);
+
+  const stateResponse = await request.get("/api/state");
+  expect(stateResponse.ok()).toBeTruthy();
+  const state = (await stateResponse.json()) as {
+    actions?: {
+      pending?: Array<{
+        id?: string;
+        metadata?: {
+          source?: string;
+          approval?: { status?: string };
+        };
+      }>;
+      completed?: Array<{ id?: string }>;
+      cancelled?: Array<{ id?: string }>;
+    };
+    plan?: {
+      plan?: {
+        agent_output?: {
+          actions?: Array<{ id?: string }>;
+          tasks?: Array<{
+            kind?: string;
+            action_id?: string;
+            owner?: string;
+            status?: string;
+            mandatory?: boolean;
+            policy_source?: string | null;
+          }>;
+        };
+      };
+    };
+  };
+  const pending = state.actions?.pending?.filter((action) => action.id === actionId) ?? [];
+  expect(pending).toHaveLength(1);
+  expect(pending[0]?.metadata?.source).toBe("chat_draft");
+  expect(pending[0]?.metadata?.approval?.status).not.toBe("approved");
+  expect(state.actions?.completed?.some((action) => action.id === actionId)).toBe(false);
+  expect(state.actions?.cancelled?.some((action) => action.id === actionId)).toBe(false);
+
+  const formalOutput = state.plan?.plan?.agent_output;
+  expect(formalOutput?.actions?.map((action) => action.id)).toContain(actionId);
+  const gate = formalOutput?.tasks?.find(
+    (task) => task.kind === "safety_gate" && task.action_id === actionId,
+  );
+  expect(gate).toMatchObject({
+    owner: "watch",
+    mandatory: true,
+    policy_source: "SAFETY.md",
+  });
+  expect(gate?.status).not.toBe("passed");
+  const physicalAction = formalOutput?.tasks?.find(
+    (task) => task.kind === "physical_action" && task.action_id === actionId,
+  );
+  expect(physicalAction?.status).not.toBe("completed");
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("streaming draft increments replace fence fallback without duplicate or error cards", async ({
+  page,
+}) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await mockReadyApiWithRobot(page);
+  const action = {
+    id: "draft-incremental-dual-track",
+    robot: "arm_1",
+    capability: "observe",
+    params: {},
+    reason: "Compatibility incremental draft.",
+    depends_on: [],
+  };
+  const structuredAction = {
+    ...action,
+    reason: "Structured terminal draft.",
+  };
+  const structuredOutput = draftAgentOutput([structuredAction]);
+  const replyPrefix = "I drafted an observation incrementally.";
+  const partialFence = `\n\n\`\`\`action-draft\n${JSON.stringify(action).slice(0, -2)}`;
+  const completedFence = `${JSON.stringify(action).slice(-2)}\n\`\`\``;
+  const reply = `${replyPrefix}${partialFence}${completedFence}`;
+  await installGatedChatStream(
+    page,
+    [
+      sseEvent(40, "start", { stream_id: "draft-incremental", request_id: "draft-incremental" }),
+      sseEvent(41, "delta", {
+        stream_id: "draft-incremental",
+        request_id: "draft-incremental",
+        delta: replyPrefix,
+      }),
+      sseEvent(42, "delta", {
+        stream_id: "draft-incremental",
+        request_id: "draft-incremental",
+        delta: partialFence,
+      }),
+      sseEvent(43, "delta", {
+        stream_id: "draft-incremental",
+        request_id: "draft-incremental",
+        delta: completedFence,
+      }),
+      sseEvent(44, "done", {
+        stream_id: "draft-incremental",
+        request_id: "draft-incremental",
+        reply,
+        mode: "llm",
+        agent_output: structuredOutput,
+        plan: {
+          status: "proposed_actions",
+          intent: "act",
+          summary: replyPrefix,
+          steps: [],
+          actions: [structuredAction],
+          needs_watch: false,
+          agent_output: structuredOutput,
+        },
+        chat_contract: "structured_v1",
+        has_structured_draft: true,
+      }),
+    ],
+    [3, 4],
+  );
+
+  await page.goto("/");
+  await page.getByPlaceholder("Message the agent").fill("observe incrementally");
+  await page.getByPlaceholder("Message the agent").press("Enter");
+  await expect(page.getByTestId("chat-panel")).toContainText(replyPrefix);
+  const cards = page.getByTestId("draft-action-card");
+  await expect(cards).toHaveCount(0);
+  await expect(page.getByTestId("chat-stream-error")).toHaveCount(0);
+
+  await releaseNextChatChunk(page);
+  await expect(cards).toHaveCount(1);
+  await expect(cards).toContainText("Compatibility incremental draft.");
+  await expect(page.getByTestId("stop-chat-stream")).toBeEnabled();
+  await expect(page.getByTestId("chat-stream-error")).toHaveCount(0);
+
+  await releaseNextChatChunk(page);
+  await expect(page.getByTestId("stop-chat-stream")).toBeDisabled();
+  await expect(cards).toHaveCount(1);
+  await expect(cards).toContainText("Structured terminal draft.");
+  await expect(cards).not.toContainText("Compatibility incremental draft.");
+  await expect(page.getByTestId("chat-stream-error")).toHaveCount(0);
+  await expect(page.locator("vite-error-overlay")).toHaveCount(0);
   expectNoConsoleErrors(consoleErrors);
 });
 
 test("chat drafts prefer structured output and retain fence fallback after refresh", async ({
   page,
+  request,
 }) => {
   const consoleErrors = collectConsoleErrors(page);
   const fenceOnly = {
@@ -1370,6 +1521,25 @@ test("chat drafts prefer structured output and retain fence fallback after refre
   await expect(cards.nth(3)).toContainText("arm_1.observe");
   await expect(cards.nth(3)).not.toContainText("arm_1.pick");
   await expect(cards.nth(4)).toContainText("arm_1.pick");
+
+  await cards.nth(1).getByTestId("add-draft-to-actions").click();
+  await expect(page.getByTestId("action-board")).toContainText(fenceOnly.id);
+  await expect
+    .poll(async () => {
+      const response = await request.get("/api/state");
+      const state = (await response.json()) as {
+        actions?: {
+          pending?: Array<{ id?: string }>;
+          completed?: Array<{ id?: string }>;
+        };
+      };
+      return {
+        pending: state.actions?.pending?.filter((action) => action.id === fenceOnly.id).length ?? 0,
+        completed:
+          state.actions?.completed?.filter((action) => action.id === fenceOnly.id).length ?? 0,
+      };
+    })
+    .toEqual({ pending: 1, completed: 0 });
   expectNoConsoleErrors(consoleErrors);
 });
 
@@ -1816,6 +1986,54 @@ function sseEvent(id: number, type: string, payload: Record<string, unknown>) {
   })}\n\n`;
 }
 
+function parseSseEvents(body: string): Array<{
+  type: string;
+  payload: Record<string, unknown>;
+}> {
+  const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+  for (const block of body.split(/\r?\n\r?\n/)) {
+    const data = block
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n");
+    if (!data) {
+      continue;
+    }
+    const parsed = JSON.parse(data) as {
+      type?: unknown;
+      payload?: unknown;
+    };
+    if (
+      typeof parsed.type === "string" &&
+      parsed.payload !== null &&
+      typeof parsed.payload === "object" &&
+      !Array.isArray(parsed.payload)
+    ) {
+      events.push({
+        type: parsed.type,
+        payload: parsed.payload as Record<string, unknown>,
+      });
+    }
+  }
+  return events;
+}
+
+function publishE2eCapabilities() {
+  const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const configPath = path.join(projectRoot, ".tmp", "e2e", "physical-agent.yaml");
+  const executable =
+    process.env.PA_E2E_CLI ??
+    (process.platform === "win32"
+      ? path.join(projectRoot, ".venv", "Scripts", "physical-agent.exe")
+      : "physical-agent");
+  execFileSync(executable, ["setup", "--config", configPath], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+}
+
 async function installMockChatStream(
   page: Page,
   chunks: string[],
@@ -1919,6 +2137,70 @@ async function installControlledChatStream(
     },
     { chunks, releaseAfter },
   );
+}
+
+async function installGatedChatStream(
+  page: Page,
+  chunks: string[],
+  gatedBefore: number[],
+) {
+  await page.addInitScript(
+    ({ chunks, gatedBefore }) => {
+      const originalFetch = window.fetch.bind(window);
+      let release: (() => void) | null = null;
+      (
+        window as typeof window & { __releaseNextChatChunk?: () => void }
+      ).__releaseNextChatChunk = () => {
+        const current = release;
+        release = null;
+        current?.();
+      };
+      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.href
+              : input.url;
+        if (!url.includes("/api/chat/stream")) {
+          return originalFetch(input, init);
+        }
+        const encoder = new TextEncoder();
+        const gatedIndexes = new Set(gatedBefore);
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            init?.signal?.addEventListener("abort", () => {
+              controller.error(new DOMException("Aborted", "AbortError"));
+            });
+            for (let index = 0; index < chunks.length; index += 1) {
+              if (gatedIndexes.has(index)) {
+                await new Promise<void>((resolve) => {
+                  release = resolve;
+                });
+              }
+              controller.enqueue(encoder.encode(chunks[index]));
+            }
+            controller.close();
+          },
+        });
+        return Promise.resolve(
+          new Response(stream, {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          }),
+        );
+      };
+    },
+    { chunks, gatedBefore },
+  );
+}
+
+async function releaseNextChatChunk(page: Page) {
+  await page.evaluate(() => {
+    (
+      window as typeof window & { __releaseNextChatChunk?: () => void }
+    ).__releaseNextChatChunk?.();
+  });
 }
 
 async function installUnavailableChatStream(page: Page) {

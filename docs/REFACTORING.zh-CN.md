@@ -53,6 +53,7 @@
 | R4 | 删除 chat 自动推进兼容面与 CLI 内嵌 watch | `da14064` |
 | R5 | 单调用 structured Chat Turn + fence 双轨消费者 | 本轮实现；独立 CI 待确认 |
 | R6 | application/read-model 去重 + 正式 consumer 收敛到 AgentOutput | 本地完成；未推送 |
+| R5-browser-gate | structured/fence 双轨真实 Chromium、增量去重与 Add→pending 独立验证 | 本提交发布；远端 CI 待核验 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -359,6 +360,14 @@ CLI run/chat、AgentRuntime、MCP、API task/manual proposal、tool-loop 与 Cha
 
 API 与 MCP current plan 都继续调用 `application.output_projection.project_chat_plan()`，没有为了 R6 新建第二 query/read-model；新增一致性测试证明同一 workspace 的两种 adapter 得到相同 materialized `AgentOutput`。本地门禁为 Python `414 passed`、Safety `32 passed`、frontend production build、TUI typecheck/build + `60 passed`、clean-wheel smoke 全绿，Playwright 26 cases 发现通过。本轮按用户要求未推送，也没有真实 Chromium/远端 CI 证据；R5 的独立双轨门槛仍未关闭，因此 R7 保持 No-Go。
 
+### R5-browser-gate：structured/fence 双轨真实 Chromium 验证
+
+2026-07-14 在 Windows 本机使用仓库锁定的 Playwright 1.61.1 与 Chrome for Testing 149.0.7827.55（revision 1228）执行真实 `chromium` project。先以原树完整运行 26/26，确认 FastAPI 8766、Vite 5173 与 `chrome-headless-shell` 实际启动；随后只补 E2E 证据，不改生产消费逻辑：真实后端 rule-based stream 先通过 `physical-agent setup` 发布可规划 capabilities，随即关闭 setup runtime，再由无 embedded watch 的 API 返回多 delta、canonical `AgentOutput` 与 `ChatPlan.agent_output`。页面从 structured 字段渲染一张卡，Add 后只产生唯一 pending action；`source=chat_draft`、mandatory watch-owned `SAFETY.md` Gate 与未完成 PhysicalAction 都由服务端 projection 断言，未隐式 approve/execute。
+
+新增受控流式用例把 partial fence、完整 fence、structured done 分成三个可观察阶段：卡片数严格为 0→1→1，terminal structured 内容替换 compatibility 内容，全程无 error card、console error 或 framework overlay。历史 fence-only 卡也实际点击 Add 并验证 pending；既有同一用例继续覆盖 structured-only、双轨一致去重、冲突 structured 胜出、新 reply-only fence 不升级为卡片与 declared compatibility fallback。最终强制 `CI=1` 禁止复用旧 webServer，完整 Chromium 27/27 passed（2.0m）。
+
+同一当前树的最终门禁为 frontend `tsc -b && vite build`、R5/AgentOutput/Safety 定向 `161 passed`、Safety smoke `32 passed`、Python full `414 passed`、TUI typecheck/build + `60 passed`、clean-wheel Dashboard smoke 全绿。首次 full pytest/wheel smoke 只因本地 `.venv` 缺 `build` 模块失败；安装 CI 已要求的 `build/setuptools/wheel` 后失败项与完整门禁均通过。后端 fence 生产/parser、React `actionDraft.ts`、兼容 fixtures/tests 与 proposal 顶层字段均保留，R7 删除实现未开始；本提交只发布浏览器验证与正式状态文档，远端 CI 待推送后核验。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -434,6 +443,7 @@ API 与 MCP current plan 都继续调用 `application.output_projection.project_
 71. **compatibility projection 不能污染 canonical message**（R5/R7）：`AgentOutput.message` 保存 base reply；fence 只属于双轨 wire reply，便于 R7 单独切除。
 72. **历史 fallback 必须有版本边界**（R5/R7）：无标记历史消息可继续解析 fence；新 structured reply-only 消息不得把模型正文提升成 proposal，只有 compiler 声明存在 draft 时才允许双轨灾备。
 73. **turn correlation 读 tool result，不读 Action Board 差分**（R6）：tool-loop 的 submitted actions 由每个 tool step 的 `AgentOutput.actions` 明确归属；Action Board 只负责运行事实，不能用前后 diff 猜本轮输出，否则并发 proposal 会串入错误 turn。
+74. **真实 structured browser fixture 先发布 capabilities、再关闭 setup runtime**（R5-browser-gate）：默认 E2E 的 `init + api` 不发布 runtime capabilities，rule-based chat 会正确返回 reply-only。真实主链验证选择调用正式 `physical-agent setup` 让 watch-owned setup 发布 capabilities 并立即 shutdown，再由不带 watch 的 API 完成 chat/Add；这样既不伪造后端 `AgentOutput`，也不让 executor 抢走刚 Add 的 pending action。
 
 ## 4. 经验教训（流程侧）
 
@@ -461,5 +471,6 @@ API 与 MCP current plan 都继续调用 `application.output_projection.project_
 - **带 hash 的前端产物要防增量构建残留**（R1.5 的教训）：只让 Vite `emptyOutDir` 不够，setuptools 的 `build/lib` 仍可能保存旧 chunk；wheel 测试必须比较资源全集，而不是只断言“有 index 和任意 asset”。
 - **浏览器验收不可用 discovery 冒充 runtime**（R1.5 的教训）：`playwright --list` 能抓语法/发现问题，但不能证明 route handler、SSE 与 DOM 交互实际成立；浏览器二进制不可用时应保留删除 No-Go，而不是为了收工勾绿。
 - **源码删除不等于发布物删除**（R2 的教训）：setuptools 增量 staging 会保留已经从源码树移除的 package；退役模块必须增加 wheel member 负断言，并在 build hook 中清理对应 staging 目录。
+- **真实浏览器证据要同时锁服务新鲜度与增量中间态**（R5-browser-gate 的教训）：最终取证设置 `CI=1` 禁止 Playwright 复用 5173/8766 的陈旧服务；只断言 terminal 卡片数还不够，partial fence→完整 fallback→structured done 必须逐阶段检查 0→1→1，才能排除瞬时重复和错误卡。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

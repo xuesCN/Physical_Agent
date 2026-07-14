@@ -18,7 +18,7 @@
 
 **验收**：每个删除项都有前置正反测试或替代入口；双轨有独立一轮证据；wheel 安装后能启动同一 React Dashboard；全量 pytest、frontend build/e2e、TUI build/test、安全扫描与 docs/CLI grep 全绿。R0 已完成；R1.5 正式栈补缺、thin launcher 与 clean-wheel smoke 经 draft PR #1 / `2d5e909` 独立验证，真实 Chromium 25/25。R2 随后删除 legacy controller/server/static/tests/package-data 与 safety allowlist 例外，保留 `physical-agent gui` 命令作为正式 FastAPI + React launcher。
 
-**当前进度**：R3 已退役当前 Markdown migrator/full Workspace 并保留聚焦 sidecar 与历史救援；R4 `da14064` 已删除 chat 的旧自动推进参数和 CLI 内嵌 watch composition。R5 已完成受限 spike、实现与 review-fix 本地门禁，仍等待独立远端 CI/真实 Chromium 双轨证据。R6 已完成本地收敛：删除 ChatRuntime 重复编号/append 死路径与三个零消费者 wrapper；React/TUI/API/MCP/CLI/AgentRuntime/tool-loop 的正式 proposal consumer 统一到 `AgentOutput.actions`；API/MCP current status 共用 application projection。R6 仍保留并从 canonical output 单向派生顶层兼容字段，未触碰 fence、Action Board 或 approve/reject mutation；本轮按要求未推送，R7 保持 No-Go。
+**当前进度**：R3 已退役当前 Markdown migrator/full Workspace 并保留聚焦 sidecar 与历史救援；R4 `da14064` 已删除 chat 的旧自动推进参数和 CLI 内嵌 watch composition。R5 已完成受限 spike、实现、review-fix 与 2026-07-14 本地真实 Chromium 双轨验证（完整 27/27，覆盖实际 structured stream/ChatPlan、增量 0→1→1 去重、历史 fence Add 与 structured 冲突胜出）；本提交按用户确认发布，远端 CI 待推送后核验。R6 已完成同树本地收敛：删除 ChatRuntime 重复编号/append 死路径与三个零消费者 wrapper；React/TUI/API/MCP/CLI/AgentRuntime/tool-loop 的正式 proposal consumer 统一到 `AgentOutput.actions`；API/MCP current status 共用 application projection。R6 仍保留并从 canonical output 单向派生顶层兼容字段，未触碰 fence、Action Board 或 approve/reject mutation；R7 删除实现未开始。
 
 ## F0 LLM planner 实验
 

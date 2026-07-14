@@ -119,6 +119,9 @@ def test_tool_loop_chat_completions_proposes_action_only(tmp_path, fake_openai):
     second_request = fake_openai.instances[0].calls[1]["payload"]
     assert second_request["messages"][-1]["role"] == "tool"
     assert second_request["messages"][-1]["tool_call_id"] == "call_1"
+    tool_result = json.loads(second_request["messages"][-1]["content"])
+    assert "actions" not in tool_result
+    assert tool_result["agent_output"]["actions"][0]["id"] == "act_tool_001"
 
 
 def test_tool_loop_chat_completions_proposes_action_only_sqlite(tmp_path, fake_openai):
@@ -310,7 +313,10 @@ def test_chat_runtime_tool_loop_submit_task_writes_pending_only(
     assert [step["name"] for step in result["tool_steps"]] == [
         "physical_agent_submit_task"
     ]
-    assert [action["capability"] for action in result["actions"]] == ["observe"]
+    assert [
+        action["capability"] for action in result["agent_output"]["actions"]
+    ] == ["observe"]
+    assert result["actions"] == result["agent_output"]["actions"]
     actions = store.read_actions()
     assert [action.id for action in actions["pending"]] == ["act_007"]
     assert [action.id for action in actions["completed"]] == ["act_005"]
@@ -333,6 +339,9 @@ def test_chat_runtime_tool_loop_submit_task_writes_pending_only(
     assert "unsafe_execute" not in json.dumps(context["capabilities"])
     assert first_request["tools"][0]["function"]["name"] == "physical_agent_submit_task"
     assert second_request["messages"][-1]["role"] == "tool"
+    tool_result = json.loads(second_request["messages"][-1]["content"])
+    assert "actions" not in tool_result
+    assert tool_result["agent_output"]["actions"][0]["id"] == "act_007"
 
 
 def test_tool_loop_responses_api_round_trips_function_output(tmp_path, fake_openai):

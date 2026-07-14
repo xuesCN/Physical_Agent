@@ -2,7 +2,7 @@
 
 > 配套 `SPEC.zh-CN.md` §4 矩阵使用：矩阵管"做什么/状态"，本册管"怎么做"。每项含：思路、关键文件、坑、验收。
 > 写给后续执行者（人或 agent）。动工前先读 SPEC §0 不变量与 REFACTORING §3 决策先例；每项动工时按惯例先出一份轮次 brief。
-> 最后更新：2026-07-10
+> 最后更新：2026-07-14
 
 ---
 
@@ -18,7 +18,7 @@
 
 **验收**：每个删除项都有前置正反测试或替代入口；双轨有独立一轮证据；wheel 安装后能启动同一 React Dashboard；全量 pytest、frontend build/e2e、TUI build/test、安全扫描与 docs/CLI grep 全绿。R0 已完成；R1.5 正式栈补缺、thin launcher 与 clean-wheel smoke 经 draft PR #1 / `2d5e909` 独立验证，真实 Chromium 25/25。R2 随后删除 legacy controller/server/static/tests/package-data 与 safety allowlist 例外，保留 `physical-agent gui` 命令作为正式 FastAPI + React launcher。
 
-**当前进度**：R3 已退役当前 Markdown migrator/full Workspace 并保留聚焦 sidecar 与历史救援；R4 `da14064` 已删除 chat 的旧自动推进参数和 CLI 内嵌 watch composition。R5 已完成受限 spike、实现与 review-fix 定向门禁：一次 provider JSON stream 增量解码 reply，完整 decision 到齐后本地校验并只编译一次 draft `AgentOutput`；SSE/plan/metadata/fence 共享 action IDs/dependencies，但 canonical message 不含 fence。terminal persistence exactly-once，Stop 可 best-effort close SDK transport；React 用消息 contract 区分历史/声明过 draft 的 fallback 与新 reply-only model fence。当前等待全量及独立远端 CI 双轨证据；通过后进入 R6，不提前删 fence 或顶层兼容字段。
+**当前进度**：R3 已退役当前 Markdown migrator/full Workspace 并保留聚焦 sidecar 与历史救援；R4 `da14064` 已删除 chat 的旧自动推进参数和 CLI 内嵌 watch composition。R5 已完成受限 spike、实现与 review-fix 本地门禁，仍等待独立远端 CI/真实 Chromium 双轨证据。R6 已完成本地收敛：删除 ChatRuntime 重复编号/append 死路径与三个零消费者 wrapper；React/TUI/API/MCP/CLI/AgentRuntime/tool-loop 的正式 proposal consumer 统一到 `AgentOutput.actions`；API/MCP current status 共用 application projection。R6 仍保留并从 canonical output 单向派生顶层兼容字段，未触碰 fence、Action Board 或 approve/reject mutation；本轮按要求未推送，R7 保持 No-Go。
 
 ## F0 LLM planner 实验
 

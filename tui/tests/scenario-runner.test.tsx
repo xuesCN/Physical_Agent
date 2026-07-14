@@ -7,6 +7,7 @@ import React from "react";
 import { render as inkRender } from "ink";
 import { App, type TuiClient } from "../src/App.js";
 import type {
+  AgentOutput,
   AgentState,
   ApiEvent,
   ConfigResponse,
@@ -386,11 +387,21 @@ class ScenarioClient implements TuiClient {
     return { ...clone(llmOk), message: "LLM connection test passed." };
   }
 
-  async submitTask(task: string): Promise<{ ok: boolean; message: string; state: AgentState }> {
+  async submitTask(task: string): Promise<{
+    ok: boolean;
+    message: string;
+    agent_output: AgentOutput;
+    state: AgentState;
+  }> {
     this.record("submitTask", task);
     const response = this.nextResponse("submitTask");
     const state = this.applyState(response.state ?? "afterTask");
-    return { ok: true, message: response.message ?? "Task submitted.", state };
+    return {
+      ok: true,
+      message: response.message ?? "Task submitted.",
+      agent_output: state.plan?.plan?.agent_output ?? {},
+      state
+    };
   }
 
   async approveAction(actionId: string): Promise<{ ok: boolean; message: string; state: AgentState }> {

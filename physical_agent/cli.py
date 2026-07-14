@@ -22,6 +22,8 @@ from physical_agent.doctor import doctor_ok, run_doctor
 from physical_agent.drivers.templates import create_driver_template
 from physical_agent.ingest.files import FileIngestionError, ingest_file as ingest_local_file
 from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
+from physical_agent.protocol.agent_output import AgentOutput
+from physical_agent.protocol.schemas import Action
 from physical_agent.quickstart import setup_project
 from physical_agent.state import open_state_store
 from physical_agent.state.check import run_state_check, state_check_ok
@@ -33,6 +35,13 @@ driver_app = typer.Typer(help="Driver utilities.")
 app.add_typer(driver_app, name="driver")
 skill_app = typer.Typer(help="Skill utilities.")
 app.add_typer(skill_app, name="skill")
+
+
+def _result_actions(result: dict[str, Any]) -> list[Action]:
+    raw_output = result.get("agent_output")
+    if raw_output is None:
+        return []
+    return AgentOutput.model_validate(raw_output).actions
 
 
 @app.command("init")
@@ -213,7 +222,7 @@ def run(
         return
     result = asyncio.run(runtime.run_task(task, wait_for_feedback=not no_wait))
     typer.echo(result["message"])
-    actions = result.get("actions", [])
+    actions = _result_actions(result)
     if actions:
         typer.echo("Actions:")
         for action in actions:
@@ -257,10 +266,11 @@ def chat(
         typer.echo(result["reply"])
         if show_code_result and result.get("code_result"):
             _echo_code_result(dict(result["code_result"]))
-        if result["actions"]:
+        actions = _result_actions(result)
+        if actions:
             typer.echo("Proposed actions:")
-            for action in result["actions"]:
-                typer.echo(f"- {action['id']}: {action['robot']}.{action['capability']}")
+            for action in actions:
+                typer.echo(f"- {action.id}: {action.robot}.{action.capability}")
         if result["executed"]:
             typer.echo(f"Watch step executed {result['executed']} action(s).")
         return
@@ -278,10 +288,11 @@ def chat(
         typer.echo(f"agent> {result['reply']}")
         if show_code_result and result.get("code_result"):
             _echo_code_result(dict(result["code_result"]), prefix="agent> ")
-        if result["actions"]:
+        actions = _result_actions(result)
+        if actions:
             typer.echo("agent> Proposed actions:")
-            for action in result["actions"]:
-                typer.echo(f"  - {action['id']}: {action['robot']}.{action['capability']}")
+            for action in actions:
+                typer.echo(f"  - {action.id}: {action.robot}.{action.capability}")
         if result["executed"]:
             typer.echo(f"agent> Watch step executed {result['executed']} action(s).")
 

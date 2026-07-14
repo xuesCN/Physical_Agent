@@ -187,6 +187,7 @@ def test_api_controller_contract_runs_without_fastapi(tmp_path):
         )
     )
     assert proposed["action"]["id"] == "act_controller_direct"
+    assert proposed["action"] == proposed["agent_output"]["actions"][0]
     assert proposed["agent_output"]["schema"] == "physical-agent/agent-output/v1"
     assert any(
         task["kind"] == "safety_gate"
@@ -197,6 +198,7 @@ def test_api_controller_contract_runs_without_fastapi(tmp_path):
         SubmitTaskRequest(task="pick the red block and place it on the tray")
     )
     assert [item["capability"] for item in submitted["actions"]] == ["pick", "place"]
+    assert submitted["actions"] == submitted["agent_output"]["actions"]
     assert submitted["agent_output"]["proposal_id"] == submitted["proposal_id"]
     persisted_output = submitted["state"]["plan"]["plan"]["agent_output"]
     assert persisted_output["proposal_id"] is None
@@ -868,7 +870,7 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
                 "mode": "llm",
                 "reply": "hello",
                 "actions": [],
-                "draft_actions": [{"id": "draft_001"}],
+                "draft_actions": [{"id": "stale_compatibility_draft"}],
                 "agent_output": {
                     "schema": "physical-agent/agent-output/v1",
                     "status": "draft",
@@ -876,7 +878,7 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
                     "lifecycle": "draft",
                     "message": "hello",
                     "tasks": [],
-                    "actions": [],
+                    "actions": [{"id": "canonical_001"}],
                 },
                 "memory": [],
                 "plan": {"status": "answered"},
@@ -913,7 +915,7 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
         "physical-agent/agent-output/v1"
     )
     assert events[3]["payload"]["plan"] == {"status": "answered"}
-    assert events[3]["payload"]["draft_actions"] == [{"id": "draft_001"}]
+    assert events[3]["payload"]["draft_actions"] == [{"id": "canonical_001"}]
     assert events[3]["payload"]["chat_contract"] == "structured_v1"
     assert events[3]["payload"]["has_structured_draft"] is True
     assert events[3]["payload"]["state"]["chat"]["messages"] == []

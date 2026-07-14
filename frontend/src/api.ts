@@ -1,6 +1,7 @@
 import type {
   ActionItem,
   ActionMutationResponse,
+  AgentOutput,
   AgentState,
   ApiEvent,
   ConfigResponse,
@@ -219,7 +220,7 @@ export function testLLMSettings(): Promise<LLMSettingsResponse> {
 export function submitTask(task: string): Promise<{
   ok: boolean;
   message: string;
-  actions: ActionItem[];
+  agent_output: AgentOutput;
   state: AgentState;
 }> {
   return apiJson("/api/tasks/submit", {
@@ -231,7 +232,7 @@ export function submitTask(task: string): Promise<{
 export function proposeAction(action: ActionItem): Promise<{
   ok: boolean;
   message: string;
-  action: ActionItem;
+  agent_output: AgentOutput;
   state: AgentState;
 }> {
   return apiJson("/api/actions/propose", {

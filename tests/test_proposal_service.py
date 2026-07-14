@@ -169,11 +169,12 @@ def test_proposal_ingress_cannot_forge_execution_approval_or_provenance(tmp_path
         },
     )
 
-    appended = ProposalService(store).propose_action(
+    result = ProposalService(store).propose_action_result(
         forged,
         source="mcp",
         proposed_by="mcp",
     )
+    appended = result.actions[0]
 
     metadata = parse_action_metadata(appended.metadata)
     assert metadata.source == "mcp"

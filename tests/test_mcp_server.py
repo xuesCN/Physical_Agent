@@ -1,4 +1,5 @@
 from physical_agent.config import write_default_config
+from physical_agent.api.server import ApiController
 from physical_agent.mcp.server import PhysicalAgentMCP
 from physical_agent.state import open_state_store
 
@@ -72,6 +73,9 @@ def test_mcp_get_state_includes_safety_and_compiled_plan(tmp_path):
 
     assert state["safety"]["rules"]
     assert state["plan"]["plan"].agent_output is not None
+    api_output = ApiController(config_path).state()["plan"]["plan"]["agent_output"]
+    mcp_output = state["plan"]["plan"].agent_output
+    assert api_output == mcp_output
 
 
 def test_mcp_duplicate_action_id_returns_structured_error(tmp_path):

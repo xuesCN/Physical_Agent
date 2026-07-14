@@ -40,15 +40,16 @@ class PhysicalAgentMCP:
             task,
             proposed_by="mcp",
         )
-        actions = proposal.actions
-        self._write_agent_plan(workspace, task, proposal.agent_output)
+        agent_output = proposal.agent_output
+        actions = agent_output.actions
+        self._write_agent_plan(workspace, task, agent_output)
         if not proposal.ok:
             workspace.append_log(proposal.message, actor="mcp")
             return {
                 "ok": False,
                 "message": proposal.message,
-                "actions": [],
-                "agent_output": proposal.agent_output.model_dump(
+                "actions": agent_output.actions,
+                "agent_output": agent_output.model_dump(
                     mode="json", by_alias=True
                 ),
                 "refusal_reason": proposal.refusal_reason,
@@ -63,8 +64,8 @@ class PhysicalAgentMCP:
         return {
             "ok": True,
             "message": proposal.message,
-            "actions": actions,
-            "agent_output": proposal.agent_output.model_dump(
+            "actions": agent_output.actions,
+            "agent_output": agent_output.model_dump(
                 mode="json", by_alias=True
             ),
             "feedback": [],
@@ -113,8 +114,8 @@ class PhysicalAgentMCP:
                 "message": f"Invalid action proposal: {exc}",
                 "error": "invalid_proposal",
             }
-        parsed = proposal.actions[0]
         agent_output = proposal.agent_output
+        parsed = agent_output.actions[0]
         self._write_agent_plan(workspace, parsed.reason or parsed.id, agent_output)
         workspace.append_log(
             f"MCP proposed action `{parsed.id}`.",
@@ -126,11 +127,6 @@ class PhysicalAgentMCP:
             "action_id": parsed.id,
             "agent_output": agent_output.model_dump(mode="json", by_alias=True),
         }
-
-    def run_action(self, action: dict[str, Any]) -> dict[str, Any]:
-        """Backward-compatible alias for propose_action."""
-
-        return self.propose_action(action)
 
     def tool_specs(self) -> list[dict[str, Any]]:
         """Return safe tool specs for agent frameworks.

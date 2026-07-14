@@ -791,12 +791,11 @@ class ApiController:
                 f"Invalid action proposal: {exc}",
                 status_code=422,
             ) from exc
-        appended = proposal.actions[0]
         agent_output = proposal.agent_output
+        appended = agent_output.actions[0]
         _write_plan(
             store,
             appended.reason or f"Propose {appended.id}",
-            [appended],
             intent="act",
             agent_output=agent_output,
         )
@@ -901,13 +900,13 @@ class ApiController:
                 f"Task produced an invalid action proposal: {exc}",
                 status_code=422,
             ) from exc
-        actions = proposal.actions
+        agent_output = proposal.agent_output
+        actions = agent_output.actions
         _write_plan(
             store,
             task,
-            actions,
             intent="act" if actions else "task",
-            agent_output=proposal.agent_output,
+            agent_output=agent_output,
         )
         if actions:
             store.append_log(
@@ -921,8 +920,8 @@ class ApiController:
         return {
             "ok": proposal.ok,
             "message": proposal.message,
-            "actions": _json_safe(actions),
-            "agent_output": proposal.agent_output.model_dump(
+            "actions": _json_safe(agent_output.actions),
+            "agent_output": agent_output.model_dump(
                 mode="json", by_alias=True
             ),
             "refusal_reason": proposal.refusal_reason,
@@ -1070,15 +1069,19 @@ class ApiController:
                     store.append_log("API chat stream completed without executing watch.", actor="api")
                     state = self._state(config, store)
                     self._publish_state("chat_stream", state)
+                    agent_output = _json_safe(item.get("agent_output"))
+                    draft_actions = (
+                        agent_output.get("actions", [])
+                        if isinstance(agent_output, dict)
+                        else []
+                    )
                     payload_data.update(
                         {
                             "reply": item.get("reply", ""),
                             "mode": item.get("mode", "rule_based"),
-                            "agent_output": _json_safe(item.get("agent_output")),
+                            "agent_output": agent_output,
                             "plan": _json_safe(item.get("plan")),
-                            "draft_actions": _json_safe(
-                                item.get("draft_actions", [])
-                            ),
+                            "draft_actions": draft_actions,
                             "chat_contract": item.get("chat_contract"),
                             "has_structured_draft": bool(
                                 item.get("has_structured_draft")
@@ -1790,19 +1793,15 @@ def _sanitize_api_message(message: str, settings: dict[str, str]) -> str:
 def _write_plan(
     store: StateStore,
     summary: str,
-    actions: list[Action],
     *,
     intent: str,
-    agent_output: AgentOutput | None = None,
+    agent_output: AgentOutput,
 ) -> None:
+    actions = agent_output.actions
     steps = (
         task_graph_steps(agent_output)
-        if agent_output is not None and agent_output.tasks
-        else (
-            ["Record task.", "Compile mandatory assurance and execution tasks."]
-            if actions
-            else ["Record task."]
-        )
+        if agent_output.tasks
+        else ["Record task."]
     )
     store.write_plan(
         ChatPlan(

@@ -14,6 +14,7 @@ import { Transcript } from "./components/Transcript.js";
 import { UploadsPanel } from "./components/UploadsPanel.js";
 import type {
   AgentState,
+  AgentOutput,
   ApiEvent,
   ChatMessage,
   ConfigResponse,
@@ -35,7 +36,12 @@ export interface TuiClient {
   config(): Promise<ConfigResponse>;
   llmSettings(): Promise<LLMSettingsResponse>;
   testLlmSettings(): Promise<LLMSettingsResponse>;
-  submitTask(task: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
+  submitTask(task: string): Promise<{
+    ok: boolean;
+    message: string;
+    agent_output: AgentOutput;
+    state: AgentState;
+  }>;
   approveAction(actionId: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
   rejectAction(actionId: string, reason: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
   resetWorkspace(confirm: string): Promise<{ ok: boolean; message: string; state: AgentState }>;

@@ -12,7 +12,6 @@ from physical_agent.agent.code_runtime import CodeSkillRuntime
 from physical_agent.agent.code_router import CodeIntentRouter
 from physical_agent.agent.context_builder import build_context
 from physical_agent.agent.driver_coder import DriverCodingAgent
-from physical_agent.agent.llm_planner import _normalize_depends_on
 from physical_agent.agent.onboarding import HardwareIntegrationAssistant
 from physical_agent.agent.rule_based import RuleBasedPlanner
 from physical_agent.agent.skills import SkillRouter
@@ -893,16 +892,6 @@ class ChatRuntime:
         retrieved_context: dict[str, Any] | None,
     ) -> dict[str, Any]:
         workspace = self._workspace()
-        before = workspace.read_actions()
-        known_ids = {
-            action.id
-            for action in (
-                before["pending"]
-                + before.get("in_progress", [])
-                + before["completed"]
-                + before["cancelled"]
-            )
-        }
         loop = OpenAIToolLoop(self.config_path)
 
         import asyncio
@@ -928,17 +917,17 @@ class ChatRuntime:
             )
         )
 
+        proposed_actions: list[Action] = []
+        proposed_ids: set[str] = set()
+        for step in result.steps:
+            raw_output = step.result.get("agent_output")
+            if not isinstance(raw_output, dict):
+                continue
+            for action in AgentOutput.model_validate(raw_output).actions:
+                if action.id not in proposed_ids:
+                    proposed_actions.append(action)
+                    proposed_ids.add(action.id)
         after = workspace.read_actions()
-        proposed_actions = [
-            action
-            for action in (
-                after["pending"]
-                + after.get("in_progress", [])
-                + after["completed"]
-                + after["cancelled"]
-            )
-            if action.id not in known_ids
-        ]
         executed = 0
 
         step_summaries = [f"Called {step.name}." for step in result.steps]
@@ -1004,7 +993,7 @@ class ChatRuntime:
                 intent="act",
                 steps=step_summaries,
                 agent_output=agent_output,
-                actions=proposed_actions,
+                actions=agent_output.actions,
             )
         else:
             turn = ChatReplyTurn(
@@ -1021,7 +1010,11 @@ class ChatRuntime:
                 *turn.steps,
                 *(task_graph_steps(agent_output) if agent_output is not None else []),
             ],
-            actions=turn.actions,
+            actions=(
+                turn.agent_output.actions
+                if turn.agent_output is not None
+                else []
+            ),
             needs_watch=needs_watch,
             agent_output=turn.agent_output,
         )
@@ -1031,7 +1024,14 @@ class ChatRuntime:
             turn.reply,
             metadata={
                 "intent": plan.intent,
-                "actions": [action.model_dump(mode="json") for action in turn.actions],
+                "actions": [
+                    action.model_dump(mode="json")
+                    for action in (
+                        turn.agent_output.actions
+                        if turn.agent_output is not None
+                        else []
+                    )
+                ],
                 "tool_steps": [
                     {
                         "name": step.name,
@@ -1056,7 +1056,14 @@ class ChatRuntime:
             "ok": True,
             "mode": "tool_loop",
             "reply": assistant.content,
-            "actions": [action.model_dump(mode="json") for action in turn.actions],
+            "actions": [
+                action.model_dump(mode="json")
+                for action in (
+                    turn.agent_output.actions
+                    if turn.agent_output is not None
+                    else []
+                )
+            ],
             "memory": turn.memory,
             "agent_output": (
                 turn.agent_output.model_dump(mode="json", by_alias=True)
@@ -1231,42 +1238,6 @@ class ChatRuntime:
             "memory": [],
             "refusal_reason": "No matching robot capability was found for this chat message.",
         }
-
-    def _append_actions(self, actions_data: list[dict[str, Any]]) -> list[Action]:
-        if not actions_data:
-            return []
-        workspace = self._workspace()
-        board = workspace.read_actions()
-        existing = (
-            board["pending"]
-            + board.get("in_progress", [])
-            + board["completed"]
-            + board["cancelled"]
-        )
-        used_ids = {action.id for action in existing}
-        for item in workspace.read_feedback().get("history", []):
-            action_id = item.get("action_id")
-            if action_id:
-                used_ids.add(str(action_id))
-        start = _max_action_number(used_ids) + 1
-        normalized: list[dict[str, Any]] = []
-        for offset, item in enumerate(actions_data):
-            action_item = dict(item)
-            action_item["id"] = f"act_{start + offset:03d}"
-            action_item.setdefault("params", {})
-            normalized.append(action_item)
-        action_ids = [item["id"] for item in normalized]
-        actions = []
-        for index, item in enumerate(normalized):
-            item["depends_on"] = _normalize_depends_on(
-                item.get("depends_on", []),
-                action_ids,
-                current_index=index,
-            )
-            actions.append(Action.model_validate(item))
-        for action in actions:
-            workspace.append_pending_action(action)
-        return actions
 
     def _mode(self) -> str:
         config = self._config()
@@ -1896,17 +1867,6 @@ def _truncate(text: str, limit: int) -> str:
 
 def _looks_like_chinese(text: str) -> bool:
     return bool(re.search(r"[\u4e00-\u9fff]", text))
-
-
-def _max_action_number(action_ids: set[str]) -> int:
-    maximum = 0
-    for action_id in action_ids:
-        if action_id.startswith("act_"):
-            try:
-                maximum = max(maximum, int(action_id.removeprefix("act_")))
-            except ValueError:
-                continue
-    return maximum
 
 
 def _looks_like_code_followup(text: str) -> bool:

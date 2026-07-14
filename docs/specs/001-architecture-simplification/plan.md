@@ -13,7 +13,7 @@
 | 3 | 退役 Markdown migration，缩成 safety/log sidecar | ✅ R3-A `e7f878b`、R3-B `a64be59`、R3-C `d1713a0`、R3-D `6309a1b`、R3-E `4a8ec86`、R3-F `9698b3e` 完成 | 当前树与 wheel 均无 migrator/full Workspace；sidecar 等价；旧目录 fail closed；历史救援可执行 |
 | 4 | 删除 `auto_step` 与 embedded watch composition | ✅ `da14064` 完成；下一步 R5 | proposal/chat 入口不拥有 watch；正式 `watch` 与 `api --watch` 保留并通过边界回归 |
 | 5 | 结构化 Chat Turn + `action-draft` 双轨 | 🟡 实现与本地门禁完成；独立 CI 待确认 | 独立一轮验证 structured/fence 一致，F1 主链与旧 fallback 全绿 |
-| 6 | 收敛 application/read-model 职责和官方消费者 | ⚪ | `_append_actions` 等死代码为零；消费者只读 canonical projection/output |
+| 6 | 收敛 application/read-model 职责和官方消费者 | ✅ 本地完成，未推送 | `_append_actions` 等死代码为零；消费者只读 canonical projection/output；R7 仍等待 R5 独立双轨证据 |
 | 7 | 切断旧 wire compatibility | ⚪ | 停产/删除 fence；删除 proposal 顶层 `actions/action/draft_actions`，不动 state board |
 | 8 | 文档、发布形态与全量验证收口 | ⚪ | 全量测试、wheel、docs/CLI/README grep 和安全扫描全绿 |
 

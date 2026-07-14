@@ -267,26 +267,29 @@
 
 ## R6 职责/read-model 去重（含点名死代码）
 
-- [ ] 删除 `physical_agent/agent/chat_runtime.py::_append_actions`（当前确认零调用）。
-- [ ] 删除其专属 `from physical_agent.agent.llm_planner import _normalize_depends_on`。
-- [ ] 删除其专属 `_max_action_number()`。
-- [ ] `rg "_append_actions|_max_action_number" physical_agent/agent/chat_runtime.py` 为零；保留 `application/proposals.py` 的 canonical 编号 helper。
-- [ ] `tests/test_proposal_service.py` 通过。
-- [ ] `tests/test_chat_runtime.py` 通过。
-- [ ] action batch all-or-nothing 与 dependency remap tests 通过。
-- [ ] React `submitTask/proposeAction` types/tests 改读 `agent_output.actions`。
-- [ ] TUI/MCP/CLI `run/chat`/AgentRuntime/tool-loop 正式消费者改读 `agent_output.actions`。
-- [ ] 保留 `ProposalResult.actions` 等 application 内部 typed command result，不强迫内部代码序列化后再反读 AgentOutput。
-- [ ] 此阶段暂留 API 顶层 proposal compatibility 字段，只用于旧 consumer 验证。
-- [ ] API/MCP current status/task graph 统一经 application projection/query。
-- [ ] ChatPlan 可以保留最后一次 `agent_output` snapshot，但不重复 materialize Gate/status；current status 只来自 application projection。
-- [ ] 删除无消费者的 projection/compat wrapper；每项删除前有 `rg` 证据。
-- [ ] React/TUI formatter 继续各自保留；后端 owner/status 语义一致性测试通过。
+- [x] 删除 `physical_agent/agent/chat_runtime.py::_append_actions`（删除前确认零调用）。
+- [x] 删除其专属 `from physical_agent.agent.llm_planner import _normalize_depends_on`。
+- [x] 删除其专属 `_max_action_number()`。
+- [x] `rg "_append_actions|_max_action_number" physical_agent/agent/chat_runtime.py` 为零；保留 `application/proposals.py` 的 canonical 编号 helper。
+- [x] `tests/test_proposal_service.py` 通过。
+- [x] `tests/test_chat_runtime.py` 通过。
+- [x] action batch all-or-nothing 与 dependency remap tests 通过。
+- [x] React `submitTask/proposeAction` types 改为只暴露 `agent_output`；production build 通过。
+- [x] TUI/MCP/CLI `run/chat`/AgentRuntime/tool-loop 正式消费者改读 `agent_output.actions`。
+- [x] 保留 `ProposalResult.actions` 等 application 内部 typed command result；内部使用 Pydantic object，没有先序列化再反读。
+- [x] 此阶段暂留 API 顶层 proposal compatibility 字段，并由 `agent_output.actions` 单向派生。
+- [x] API/MCP current status/task graph 统一经 `application.output_projection.project_chat_plan()`。
+- [x] ChatPlan 保留最后一次 `agent_output` snapshot；API/MCP current status 由 application projection 重建。
+- [x] 删除无消费者的 `AgentRuntime._renumber_actions`、`PhysicalAgentMCP.run_action` 与 `ProposalService.propose_action` compatibility wrapper；每项删除前均确认零生产调用。
+- [x] React/TUI formatter 继续各自保留；API/MCP 同状态投影一致性测试通过。
+- [x] 本地门禁：Python `414 passed`、Safety `32 passed`、frontend production build、TUI typecheck/build + `60 passed`、clean-wheel smoke 全绿；Playwright 26 cases 发现通过。
+- [x] R6 未删除 fence、proposal 顶层 `actions/action/draft_actions`、approve/reject mutation `action` 或 `/api/state.actions`；这些仍属于 R7 边界。
+- [ ] 独立远端 CI/真实 Chromium 证据（本轮按用户要求不推送；不以 discovery 冒充浏览器运行）。
 
 ## R7 wire compatibility 切断
 
 - [ ] R5 双轨验证证据已完成。
-- [ ] R6 官方 consumer migration 已完成。
+- [x] R6 官方 consumer migration 已完成。
 - [ ] 停止后端 prompt/rule path 产生 `action-draft` fence。
 - [ ] 删除 `_extract_action_drafts_from_reply()` 及 fence formatter/parser。
 - [ ] 删除 React `actionDraft.ts` 与 fence 专用 tests/fixtures；保留 structured Draft 卡片组件、交互测试和 `.draft-action-card` 样式。

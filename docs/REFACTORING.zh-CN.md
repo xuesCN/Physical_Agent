@@ -1,7 +1,7 @@
 # 重构过程
 
 > 本文浓缩自原 33 份 session-handoff 与 22 份 brief（已删除，git 历史可查）。姊妹文档：`SPEC.zh-CN.md`（目标与待办矩阵）。
-> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-13。
+> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-14。
 
 ## 0. 基线与纪律
 
@@ -52,6 +52,7 @@
 | R3-F | 当前文档、示例与发布包收口 | `9698b3e` |
 | R4 | 删除 chat 自动推进兼容面与 CLI 内嵌 watch | `da14064` |
 | R5 | 单调用 structured Chat Turn + fence 双轨消费者 | 本轮实现；独立 CI 待确认 |
+| R6 | application/read-model 去重 + 正式 consumer 收敛到 AgentOutput | 本地完成；未推送 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -350,6 +351,14 @@ API SSE done 现在转发 `agent_output`/plan。React 在 render 时由 type gua
 
 阶段 review 暴露五个必须在 R5 内关闭的边界：`done` 后 consumer close 会二次落 cancelled 并覆盖 plan；compiler message 被兼容 fence 污染；开放 action params/metadata schema 与 strict Structured Outputs 约束不相容却每次先尝试；Stop 只置 cooperative flag、无法触达阻塞中的 SDK stream；新 reply-only JSON decision 里的模型 fence 仍可能被历史 parser 变成卡片。review-fix 因此引入 terminal exactly-once 标记、base reply / wire reply 分离、JSON mode + 本地 schema 校验、SDK transport closer 注册，以及 `chat_contract`/`has_structured_draft` provenance。历史消息和 compiler 声明过 draft 的损坏 envelope 仍保留双轨 fallback；新 reply-only turn 不再信任正文 fence。本轮本地门禁为 backend/API/provider `97 passed`、Python full `413 passed`、Safety `32 passed`、TUI typecheck/build + `60 passed`、frontend production build、26 个 Playwright cases 发现与 clean-wheel smoke 全绿；本地缺 Playwright Chromium binary，R5 仍等待独立真实 Chromium/CI 证据。
 
+### R6：application/read-model 与正式 consumer 收敛
+
+删除零调用的 `ChatRuntime._append_actions`、其专属 `_normalize_depends_on` import 和本地 `_max_action_number`，action 编号、dependency remap 与原子 batch 只保留在 `ProposalService`/StateStore。同步删除逐项确认无生产消费者的 `AgentRuntime._renumber_actions`、`PhysicalAgentMCP.run_action` 与只返回裸 Action 的 `ProposalService.propose_action`；单 Action proposal 现在也只走完整 `ProposalResult → AgentOutput` 契约。
+
+CLI run/chat、AgentRuntime、MCP、API task/manual proposal、tool-loop 与 ChatRuntime tool-loop submitted turn 都改读 `AgentOutput.actions`。tool-loop 送回模型的内部结果会去掉顶层 proposal convenience fields，ChatRuntime 从每个 tool step 的 structured output 收集动作，不再用 Action Board 前后 diff 猜“本轮新增”；这也避免并发 proposal 被误归入当前 turn。React `submitTask/proposeAction` 与 TUI task response 类型不再把顶层 action payload 当正式契约。R7 尚未开始：API/MCP/AgentRuntime/ChatRuntime 顶层兼容字段仍保留，并由 canonical output 单向派生；`action-draft`、approve/reject mutation `action` 与 `/api/state.actions` 均未删除。
+
+API 与 MCP current plan 都继续调用 `application.output_projection.project_chat_plan()`，没有为了 R6 新建第二 query/read-model；新增一致性测试证明同一 workspace 的两种 adapter 得到相同 materialized `AgentOutput`。本地门禁为 Python `414 passed`、Safety `32 passed`、frontend production build、TUI typecheck/build + `60 passed`、clean-wheel smoke 全绿，Playwright 26 cases 发现通过。本轮按用户要求未推送，也没有真实 Chromium/远端 CI 证据；R5 的独立双轨门槛仍未关闭，因此 R7 保持 No-Go。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -424,6 +433,7 @@ API SSE done 现在转发 `agent_output`/plan。React 在 render 时由 type gua
 70. **terminal persistence 必须 exactly-once**（R5）：SSE `done` 已落 completed 后，consumer close 只是资源清理，不能再落 cancelled 或降级 ChatPlan。
 71. **compatibility projection 不能污染 canonical message**（R5/R7）：`AgentOutput.message` 保存 base reply；fence 只属于双轨 wire reply，便于 R7 单独切除。
 72. **历史 fallback 必须有版本边界**（R5/R7）：无标记历史消息可继续解析 fence；新 structured reply-only 消息不得把模型正文提升成 proposal，只有 compiler 声明存在 draft 时才允许双轨灾备。
+73. **turn correlation 读 tool result，不读 Action Board 差分**（R6）：tool-loop 的 submitted actions 由每个 tool step 的 `AgentOutput.actions` 明确归属；Action Board 只负责运行事实，不能用前后 diff 猜本轮输出，否则并发 proposal 会串入错误 turn。
 
 ## 4. 经验教训（流程侧）
 

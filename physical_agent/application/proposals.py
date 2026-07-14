@@ -192,28 +192,6 @@ class ProposalService:
             ),
         )
 
-    def propose_action(
-        self,
-        action: Action | dict,
-        *,
-        proposed_by: str,
-        source: str,
-        correlation: ActionCorrelation | None = None,
-        user_message: str | None = None,
-        draft_reason: str | None = None,
-    ) -> Action:
-        parsed = action if isinstance(action, Action) else Action.model_validate(action)
-        _validate_external_dependencies([parsed], self.store)
-        _validate_compilable_graph([parsed])
-        context = ProposalContext(
-            source=source,
-            proposed_by=proposed_by,
-            user_message=user_message,
-            draft_reason=draft_reason,
-            correlation=correlation or ActionCorrelation.create(),
-        )
-        return self.store.append_pending_action(with_proposal_metadata(parsed, context))
-
     def propose_action_result(
         self,
         action: Action | dict,
@@ -224,21 +202,21 @@ class ProposalService:
         user_message: str | None = None,
         draft_reason: str | None = None,
     ) -> ProposalResult:
-        """Append one intent and return the same compiled contract as submit_task.
-
-        ``propose_action`` remains as the narrow compatibility method for
-        callers that only need the appended Action. New adapters should use
-        this result method so status/correlation/AgentOutput cannot drift.
-        """
+        """Append one intent and return the same compiled contract as submit_task."""
 
         correlation = correlation or ActionCorrelation.create()
-        appended = self.propose_action(
-            action,
-            proposed_by=proposed_by,
+        parsed = action if isinstance(action, Action) else Action.model_validate(action)
+        _validate_external_dependencies([parsed], self.store)
+        _validate_compilable_graph([parsed])
+        context = ProposalContext(
             source=source,
-            correlation=correlation,
+            proposed_by=proposed_by,
             user_message=user_message,
             draft_reason=draft_reason,
+            correlation=correlation,
+        )
+        appended = self.store.append_pending_action(
+            with_proposal_metadata(parsed, context)
         )
         metadata = parse_action_metadata(appended.metadata)
         waiting_approval = bool(

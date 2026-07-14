@@ -212,11 +212,11 @@ class OpenAIToolLoop:
             if not isinstance(task, str) or not task.strip():
                 raise ToolLoopError("physical_agent_submit_task requires a non-empty task.")
             result = await self.mcp.submit_task(task)
-            return _jsonable_dict(result)
+            return _canonical_proposal_result(result)
 
         if name == "physical_agent_propose_action":
             action = arguments.get("action") if isinstance(arguments.get("action"), dict) else arguments
-            return _jsonable_dict(self.mcp.propose_action(action))
+            return _canonical_proposal_result(self.mcp.propose_action(action))
 
         if name == "physical_agent_get_state":
             return _jsonable_dict(self.mcp.get_state())
@@ -272,6 +272,17 @@ def _chat_completion_tools(specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return tools
+
+
+def _canonical_proposal_result(value: Any) -> dict[str, Any]:
+    """Keep the tool loop on AgentOutput while public adapters remain compatible."""
+
+    result = _jsonable_dict(value)
+    if isinstance(result.get("agent_output"), dict):
+        result.pop("actions", None)
+        result.pop("action", None)
+        result.pop("draft_actions", None)
+    return result
 
 
 def _chat_message(raw: dict[str, Any]) -> dict[str, Any]:

@@ -6,7 +6,7 @@ from typing import Any
 
 from physical_agent.application.plan_compiler import task_graph_steps
 from physical_agent.application.output_projection import materialize_agent_output
-from physical_agent.application.proposals import ProposalService, renumber_actions
+from physical_agent.application.proposals import ProposalService
 from physical_agent.agent.planner import Planner
 from physical_agent.agent.planner_factory import create_planner
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config
@@ -47,7 +47,7 @@ class AgentRuntime:
             task,
             proposed_by="agent",
         )
-        actions = proposal.actions
+        actions = proposal.agent_output.actions
         workspace.write_plan(
             ChatPlan(
                 status="proposed_actions" if actions else "answered",
@@ -64,7 +64,7 @@ class AgentRuntime:
             return {
                 "ok": False,
                 "message": proposal.message,
-                "actions": [],
+                "actions": proposal.agent_output.actions,
                 "agent_output": proposal.agent_output.model_dump(
                     mode="json", by_alias=True
                 ),
@@ -82,7 +82,7 @@ class AgentRuntime:
             return {
                 "ok": True,
                 "message": proposal.message,
-                "actions": actions,
+                "actions": proposal.agent_output.actions,
                 "agent_output": proposal.agent_output.model_dump(
                     mode="json", by_alias=True
                 ),
@@ -121,7 +121,7 @@ class AgentRuntime:
         return {
             "ok": all_done,
             "message": final_message,
-            "actions": actions,
+            "actions": materialized_output.actions,
             "agent_output": materialized_output.model_dump(
                 mode="json", by_alias=True
             ),
@@ -190,8 +190,3 @@ class AgentRuntime:
             model=self.model,
         )
         return self.planner
-
-    def _renumber_actions(self, actions: list[Action], workspace: StateStore) -> list[Action]:
-        """Compatibility wrapper; new entrypoints use ProposalService directly."""
-
-        return renumber_actions(actions, workspace)

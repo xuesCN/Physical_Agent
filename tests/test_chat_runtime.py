@@ -6,6 +6,7 @@ import physical_agent.cli as cli_module
 from typer.testing import CliRunner
 
 from physical_agent.agent.chat_runtime import ChatRuntime
+from physical_agent.application.proposals import ProposalService
 from physical_agent.drivers.mock_arm import MockArmDriver
 from physical_agent.llm import llm_settings_path, write_llm_settings_file
 from physical_agent.quickstart import setup_project
@@ -95,16 +96,28 @@ def test_chat_runtime_tool_loop_submits_proposal_without_executing(tmp_path, mon
 
         async def run(self, messages, **kwargs):
             store = open_state_store(config_path=self.config_path)
-            store.append_pending_action(
+            proposal = ProposalService(store).propose_action_result(
                 Action(
                     id="act_tool_loop",
                     robot="arm_1",
                     capability="observe",
                     params={},
                     reason="Observe through the proposal-only tool loop.",
-                )
+                ),
+                source="tool_loop",
+                proposed_by="mcp",
             )
-            return SimpleNamespace(content="Action proposed.", steps=[])
+            step = SimpleNamespace(
+                name="physical_agent_propose_action",
+                arguments={},
+                result={
+                    "agent_output": proposal.agent_output.model_dump(
+                        mode="json", by_alias=True
+                    )
+                },
+                call_id="call_test",
+            )
+            return SimpleNamespace(content="Action proposed.", steps=[step])
 
     monkeypatch.setattr(chat_runtime_module, "OpenAIToolLoop", FakeToolLoop)
     runtime = ChatRuntime(
@@ -118,7 +131,10 @@ def test_chat_runtime_tool_loop_submits_proposal_without_executing(tmp_path, mon
 
     assert result["executed"] == 0
     assert result["plan"]["needs_watch"] is True
-    assert [action["id"] for action in result["actions"]] == ["act_tool_loop"]
+    assert [action["id"] for action in result["agent_output"]["actions"]] == [
+        "act_tool_loop"
+    ]
+    assert result["actions"] == result["agent_output"]["actions"]
     store = open_state_store(config_path=config_path)
     assert [action.id for action in store.read_actions()["pending"]] == ["act_tool_loop"]
     assert store.read_actions()["completed"] == []

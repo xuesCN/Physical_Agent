@@ -48,7 +48,6 @@ class PhysicalAgentMCP:
             return {
                 "ok": False,
                 "message": proposal.message,
-                "actions": agent_output.actions,
                 "agent_output": agent_output.model_dump(
                     mode="json", by_alias=True
                 ),
@@ -64,7 +63,6 @@ class PhysicalAgentMCP:
         return {
             "ok": True,
             "message": proposal.message,
-            "actions": agent_output.actions,
             "agent_output": agent_output.model_dump(
                 mode="json", by_alias=True
             ),

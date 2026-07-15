@@ -279,7 +279,7 @@
 - `cd frontend && npm run build`：`tsc -b && vite build` 通过；仓库无独立 frontend unit-test script，交互测试由上述 Playwright 套件承担。
 - `.\.venv\Scripts\python.exe -m pytest -q tests/test_chat_runtime.py tests/test_api_server.py tests/test_openai_compatible.py tests/test_plan_compiler.py tests/test_output_projection.py tests/test_proposal_service.py tests/test_safety.py tests/test_safety_boundaries.py`：161 passed，1 个既有 StarletteDeprecationWarning。
 - Safety smoke：32 passed，1 个同上既有 warning；Python full：414 passed，1 warning；TUI typecheck/build + 60/60 tests；`scripts/smoke_dashboard_wheel.py` clean-wheel smoke 通过。
-- 本轮仍保留后端 fence 生产、`_extract_action_drafts_from_reply()`、React `actionDraft.ts`、fixtures/tests 与 proposal 顶层兼容字段；未开始 R7 删除。
+- R5 收尾时仍保留后端 fence 生产、`_extract_action_drafts_from_reply()`、React `actionDraft.ts`、fixtures/tests 与 proposal 顶层兼容字段；这些已在 R7 删除。
 
 ## R6 职责/read-model 去重（含点名死代码）
 
@@ -299,28 +299,29 @@
 - [x] 删除无消费者的 `AgentRuntime._renumber_actions`、`PhysicalAgentMCP.run_action` 与 `ProposalService.propose_action` compatibility wrapper；每项删除前均确认零生产调用。
 - [x] React/TUI formatter 继续各自保留；API/MCP 同状态投影一致性测试通过。
 - [x] 本地门禁：Python `414 passed`、Safety `32 passed`、frontend production build、TUI typecheck/build + `60 passed`、clean-wheel smoke 全绿；Playwright 26 cases 发现通过。
-- [x] R6 未删除 fence、proposal 顶层 `actions/action/draft_actions`、approve/reject mutation `action` 或 `/api/state.actions`；这些仍属于 R7 边界。
+- [x] R6 收尾时未删除 fence、proposal 顶层 `actions/action/draft_actions`、approve/reject mutation `action` 或 `/api/state.actions`；R7 已删除前两类，后两类按边界保留。
 - [x] R6 当前树的本地真实 Chromium 证据：2026-07-14 完整 27/27 passed；正式 consumers/read-model 收敛与 R5 双轨同树运行。
-- [ ] R6 独立远端 CI 证据（随本提交推送后核验）。
+- [x] R6 独立远端 CI 证据：fork Push CI 与 fork PR CI 均成功。
 
 ## R7 wire compatibility 切断
 
-- [x] R5 双轨真实 Chromium 验证证据已完成（2026-07-14 本地独立轮次 27/27）；独立远端 CI 随本提交推送后核验，但不再缺浏览器运行证据。
+- [x] R5 双轨真实 Chromium 验证证据已完成（2026-07-14 本地独立轮次 27/27）；fork Push CI 与 fork PR CI 均成功。
 - [x] R6 官方 consumer migration 已完成。
-- [ ] 停止后端 prompt/rule path 产生 `action-draft` fence。
-- [ ] 删除 `_extract_action_drafts_from_reply()` 及 fence formatter/parser。
-- [ ] 删除 React `actionDraft.ts` 与 fence 专用 tests/fixtures；保留 structured Draft 卡片组件、交互测试和 `.draft-action-card` 样式。
-- [ ] 旧 chat fence 作为普通可读文本保留，不再承诺历史可点击 draft；upgrade note 已写。
-- [ ] 删除 `POST /api/tasks/submit` 顶层 `actions`。
-- [ ] 删除 `POST /api/actions/propose` 顶层 `action`。
-- [ ] 删除 `POST /api/chat` 顶层 proposal `actions`。
-- [ ] 删除 ChatRuntime result/assistant metadata 的顶层 `draft_actions`。
-- [ ] 删除 MCP submit_task、AgentRuntime/tool-loop 等对等公开 action convenience fields；保留 envelope/status/correlation 和内部 `ProposalResult.actions`。
-- [ ] 保留 approve/reject mutation response 的 `action`。
-- [ ] 永久保留 `/api/state.actions` 和 SQLite Action Board。
-- [ ] 更新 README/API 示例、breaking-change note、OpenAPI/schema/types。
-- [ ] 更新 frontend Playwright mocked responses、TUI scenario mocks、MCP tool tests、CLI output tests。
-- [ ] 全仓旧字段 consumer grep 经逐项审阅，API/official clients/positive-negative tests 全绿。
+- [x] 停止后端 prompt/rule path 产生 `action-draft` fence。
+- [x] 删除 `_extract_action_drafts_from_reply()` 及 fence formatter/parser。
+- [x] 删除 React `actionDraft.ts` 与 fence 专用 tests/fixtures；保留 structured Draft 卡片组件、交互测试和 `.draft-action-card` 样式。
+- [x] 旧 chat fence 作为普通可读文本保留，不再承诺历史可点击 draft；upgrade note 已写。
+- [x] 删除 `POST /api/tasks/submit` 顶层 `actions`。
+- [x] 删除 `POST /api/actions/propose` 顶层 `action`。
+- [x] 删除 `POST /api/chat` 顶层 proposal `actions`。
+- [x] 删除 ChatRuntime result/assistant metadata 的顶层 `draft_actions`。
+- [x] 删除 MCP submit_task、AgentRuntime/tool-loop 等对等公开 action convenience fields；保留 envelope/status/correlation 和内部 `ProposalResult.actions`。
+- [x] 保留 approve/reject mutation response 的 `action`。
+- [x] 永久保留 `/api/state.actions` 和 SQLite Action Board。
+- [x] 更新 README/API 示例与 breaking-change note；复核 OpenAPI/schema/types，它们已是 canonical shape，无需额外改动。
+- [x] 更新 frontend Playwright mocks、MCP tool tests 与 TUI fence 负例；复核 TUI scenario mocks/CLI output tests，它们已只消费 structured output，无需改动。
+- [x] 全仓旧字段 consumer grep 经逐项审阅，API/official clients/positive-negative tests 全绿。
+- [x] 2026-07-15 最终本地门禁：Python `415 passed`、Safety `32 passed`、frontend build、真实 Chromium `27/27`、TUI typecheck/build + `61 passed`、clean-wheel smoke、文档/golden `11 passed`、`git diff --check` 与生产残留扫描全绿；按用户要求未 commit/push。
 
 ## R8 收口
 

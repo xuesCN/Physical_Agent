@@ -805,7 +805,6 @@ class ApiController:
         return {
             "ok": True,
             "message": proposal.message,
-            "action": _json_safe(appended),
             "agent_output": agent_output.model_dump(mode="json", by_alias=True),
             "state": state,
         }
@@ -920,7 +919,6 @@ class ApiController:
         return {
             "ok": proposal.ok,
             "message": proposal.message,
-            "actions": _json_safe(agent_output.actions),
             "agent_output": agent_output.model_dump(
                 mode="json", by_alias=True
             ),
@@ -950,14 +948,11 @@ class ApiController:
             "ok": True,
             "mode": response.get("mode", "rule_based"),
             "reply": response.get("reply", ""),
-            "actions": _json_safe(response.get("actions", [])),
             "agent_output": _json_safe(response.get("agent_output")),
             "memory": _json_safe(response.get("memory", [])),
             "plan": _json_safe(response.get("plan")),
             "executed": 0,
             "refusal_reason": response.get("refusal_reason"),
-            "chat_contract": response.get("chat_contract"),
-            "has_structured_draft": bool(response.get("has_structured_draft")),
             "state": state,
         }
 
@@ -1070,22 +1065,12 @@ class ApiController:
                     state = self._state(config, store)
                     self._publish_state("chat_stream", state)
                     agent_output = _json_safe(item.get("agent_output"))
-                    draft_actions = (
-                        agent_output.get("actions", [])
-                        if isinstance(agent_output, dict)
-                        else []
-                    )
                     payload_data.update(
                         {
                             "reply": item.get("reply", ""),
                             "mode": item.get("mode", "rule_based"),
                             "agent_output": agent_output,
                             "plan": _json_safe(item.get("plan")),
-                            "draft_actions": draft_actions,
-                            "chat_contract": item.get("chat_contract"),
-                            "has_structured_draft": bool(
-                                item.get("has_structured_draft")
-                            ),
                             "state": _json_safe(state),
                         }
                     )

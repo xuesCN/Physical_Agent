@@ -320,6 +320,12 @@ v1 的第一个 planner 是本地、确定性的：
 
 Physical Agent 可以使用 OpenAI-compatible Chat Completions 接口做规划和对话，同时保持同样安全边界：LLM 只写 proposed actions 或 watch 侧 driver 草稿，watch 仍然负责校验和执行。
 
+### 升级说明：Chat action draft wire
+
+当前版本只通过结构化 `AgentOutput.actions` 传递可操作的 Chat Draft；assistant reply 是普通用户文本，不再生成或解析旧的 `action-draft` fence。升级前已经持久化的 fence-only chat 仍会按 Markdown 文本显示，但不会恢复 Draft 卡片或 Add to Actions。已经写入 Action Board 的 pending/approved action 不受影响；本次变化没有新增兼容迁移层，也没有改变审批或 SafetyGate。
+
+proposal/chat/task 响应（含 MCP `submit_task`）也不再通过顶层 `action`、`actions` 或 `draft_actions` convenience field 重复动作；调用方必须读取 `agent_output.actions`。approve/reject mutation 响应仍保留 `action`，`/api/state.actions` 仍是 Action Board read model。
+
 创建本地 `.env` 文件。它会被 git 忽略：
 
 ```bash
@@ -394,7 +400,9 @@ physical_agent/mcp/server.py
 - `submit_task`
 - `get_state`
 - `list_robots`
-- `run_action`
+- `propose_action`
+
+`submit_task` 与 `propose_action` 都只提案、不执行硬件；动作 payload 从结构化 `agent_output.actions` 读取。
 
 v1 不把完整 MCP 依赖放进核心运行时，避免影响 watch / agent / SQLite 状态主链的稳定性。
 

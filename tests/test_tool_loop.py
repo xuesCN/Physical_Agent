@@ -316,7 +316,8 @@ def test_chat_runtime_tool_loop_submit_task_writes_pending_only(
     assert [
         action["capability"] for action in result["agent_output"]["actions"]
     ] == ["observe"]
-    assert result["actions"] == result["agent_output"]["actions"]
+    assert "actions" not in result
+    assert "draft_actions" not in result
     actions = store.read_actions()
     assert [action.id for action in actions["pending"]] == ["act_007"]
     assert [action.id for action in actions["completed"]] == ["act_005"]

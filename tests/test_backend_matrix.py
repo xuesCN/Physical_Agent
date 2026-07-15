@@ -197,8 +197,11 @@ def test_backend_matrix_chat_runtime_drafts_actions_only(tmp_path, monkeypatch, 
 
     assert result["ok"] is True
     assert result["executed"] == 0
-    assert result["actions"] == []
-    assert [action["capability"] for action in result["draft_actions"]] == ["observe"]
+    assert "actions" not in result
+    assert "draft_actions" not in result
+    assert [
+        action["capability"] for action in result["agent_output"]["actions"]
+    ] == ["observe"]
     assert _ids(actions["pending"]) == []
     assert actions["completed"] == []
     assert actions["cancelled"] == []

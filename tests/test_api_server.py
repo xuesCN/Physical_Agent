@@ -186,8 +186,8 @@ def test_api_controller_contract_runs_without_fastapi(tmp_path):
             depends_on=[],
         )
     )
-    assert proposed["action"]["id"] == "act_controller_direct"
-    assert proposed["action"] == proposed["agent_output"]["actions"][0]
+    assert "action" not in proposed
+    assert proposed["agent_output"]["actions"][0]["id"] == "act_controller_direct"
     assert proposed["agent_output"]["schema"] == "physical-agent/agent-output/v1"
     assert any(
         task["kind"] == "safety_gate"
@@ -197,8 +197,10 @@ def test_api_controller_contract_runs_without_fastapi(tmp_path):
     submitted = controller.submit_task(
         SubmitTaskRequest(task="pick the red block and place it on the tray")
     )
-    assert [item["capability"] for item in submitted["actions"]] == ["pick", "place"]
-    assert submitted["actions"] == submitted["agent_output"]["actions"]
+    assert "actions" not in submitted
+    assert [
+        item["capability"] for item in submitted["agent_output"]["actions"]
+    ] == ["pick", "place"]
     assert submitted["agent_output"]["proposal_id"] == submitted["proposal_id"]
     persisted_output = submitted["state"]["plan"]["plan"]["agent_output"]
     assert persisted_output["proposal_id"] is None
@@ -211,6 +213,10 @@ def test_api_controller_contract_runs_without_fastapi(tmp_path):
     chat = controller.chat(ChatRequest(message="remember that controller memory is safe"))
     assert chat["executed"] == 0
     assert chat["memory"][0]["content"] == "controller memory is safe"
+    assert "actions" not in chat
+    assert "draft_actions" not in chat
+    assert "chat_contract" not in chat
+    assert "has_structured_draft" not in chat
     assert controller.state()["chat"]["messages"]
 
     reset = controller.reset_chat()
@@ -384,7 +390,8 @@ def test_api_task_reports_unavailable_before_initializing_planner(tmp_path):
 
     assert result["ok"] is False
     assert result["proposal_status"] == "unavailable"
-    assert result["actions"] == []
+    assert "actions" not in result
+    assert result["agent_output"]["actions"] == []
 
 
 def test_api_invalid_dependency_returns_client_error_without_partial_action(tmp_path):
@@ -434,8 +441,12 @@ def test_api_chat_draft_dependency_requires_prerequisite_first(tmp_path):
     )
     second = controller.propose_action(dependent)
 
-    assert first["action"]["id"] == "draft_prerequisite"
-    assert second["action"]["depends_on"] == ["draft_prerequisite"]
+    assert "action" not in first
+    assert "action" not in second
+    assert first["agent_output"]["actions"][0]["id"] == "draft_prerequisite"
+    assert second["agent_output"]["actions"][0]["depends_on"] == [
+        "draft_prerequisite"
+    ]
     assert [action.id for action in store.read_actions()["pending"]] == [
         "draft_prerequisite",
         "draft_dependent",
@@ -470,22 +481,29 @@ def test_api_endpoints_cover_state_proposals_memory_ingest_search_and_audit(tmp_
         },
     )
     assert proposed.status_code == 200
-    assert proposed.json()["action"]["id"] == "act_api_direct"
+    assert "action" not in proposed.json()
+    assert proposed.json()["agent_output"]["actions"][0]["id"] == "act_api_direct"
 
     submitted = client.post(
         "/api/tasks/submit",
         json={"task": "pick the red block and place it on the tray"},
     )
     assert submitted.status_code == 200
-    assert [item["capability"] for item in submitted.json()["actions"]] == ["pick", "place"]
-    assert [item["id"] for item in submitted.json()["actions"]] == ["act_001", "act_002"]
-    assert submitted.json()["actions"][1]["depends_on"] == ["act_001"]
+    assert "actions" not in submitted.json()
+    output_actions = submitted.json()["agent_output"]["actions"]
+    assert [item["capability"] for item in output_actions] == ["pick", "place"]
+    assert [item["id"] for item in output_actions] == ["act_001", "act_002"]
+    assert output_actions[1]["depends_on"] == ["act_001"]
 
     chat = client.post("/api/chat", json={"message": "remember that API memory is safe"})
     assert chat.status_code == 200
     assert chat.json()["executed"] == 0
     assert "I will remember" in chat.json()["reply"]
     assert chat.json()["memory"][0]["content"] == "API memory is safe"
+    assert "actions" not in chat.json()
+    assert "draft_actions" not in chat.json()
+    assert "chat_contract" not in chat.json()
+    assert "has_structured_draft" not in chat.json()
 
     reset = client.post("/api/chat/reset")
     assert reset.status_code == 200
@@ -565,7 +583,8 @@ def test_api_approve_reject_actions_are_idempotent_and_state_protected(tmp_path)
         },
     )
     assert proposed.status_code == 200
-    action = proposed.json()["action"]
+    assert "action" not in proposed.json()
+    action = proposed.json()["agent_output"]["actions"][0]
     assert action["metadata"]["source"] == "chat_draft"
     assert action["metadata"]["approval"]["required"] is True
     assert action["metadata"]["approval"]["status"] == "pending"
@@ -622,6 +641,8 @@ def test_api_reject_pending_action_moves_to_cancelled_with_reason(tmp_path):
     )
 
     assert rejected.status_code == 200
+    assert rejected.json()["action"]["id"] == "act_reject_me"
+    assert rejected.json()["action"]["metadata"]["approval"]["status"] == "rejected"
     cancelled = rejected.json()["state"]["actions"]["cancelled"][0]
     assert cancelled["id"] == "act_reject_me"
     assert cancelled["metadata"]["approval"]["status"] == "rejected"
@@ -869,8 +890,6 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
                 "type": "done",
                 "mode": "llm",
                 "reply": "hello",
-                "actions": [],
-                "draft_actions": [{"id": "stale_compatibility_draft"}],
                 "agent_output": {
                     "schema": "physical-agent/agent-output/v1",
                     "status": "draft",
@@ -883,8 +902,6 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
                 "memory": [],
                 "plan": {"status": "answered"},
                 "executed": 0,
-                "chat_contract": "structured_v1",
-                "has_structured_draft": True,
             }
 
     def fake_new_runtime(config, **kwargs):
@@ -915,9 +932,10 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
         "physical-agent/agent-output/v1"
     )
     assert events[3]["payload"]["plan"] == {"status": "answered"}
-    assert events[3]["payload"]["draft_actions"] == [{"id": "canonical_001"}]
-    assert events[3]["payload"]["chat_contract"] == "structured_v1"
-    assert events[3]["payload"]["has_structured_draft"] is True
+    assert "actions" not in events[3]["payload"]
+    assert "draft_actions" not in events[3]["payload"]
+    assert "chat_contract" not in events[3]["payload"]
+    assert "has_structured_draft" not in events[3]["payload"]
     assert events[3]["payload"]["state"]["chat"]["messages"] == []
     assert calls["runtime"] == {
         "config": config_path.resolve(),

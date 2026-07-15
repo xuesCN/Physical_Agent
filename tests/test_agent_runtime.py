@@ -62,9 +62,8 @@ def test_agent_runtime_timeout_without_feedback_is_not_success(tmp_path):
     assert result["feedback"] == []
     assert result["message"] == "Task did not complete successfully."
     assert result["agent_output"]["schema"] == "physical-agent/agent-output/v1"
-    assert [
-        action.model_dump(mode="json") for action in result["actions"]
-    ] == result["agent_output"]["actions"]
+    assert "actions" not in result
+    assert result["agent_output"]["actions"]
     plan = store.read_plan()["plan"]
     assert plan.agent_output is not None
     assert plan.agent_output["proposal_id"] == result["proposal_id"]

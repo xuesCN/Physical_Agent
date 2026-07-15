@@ -176,6 +176,36 @@ test("chat stream renders structured draft separately from Action Board", async 
   assert.deepEqual(calls.states[0].actions?.pending, []);
 });
 
+test("chat stream keeps legacy action-draft fence as ordinary reply text", async () => {
+  const calls = createChatCalls({ includeTranscript: true });
+  const reply = [
+    "Historical draft:",
+    "```action-draft",
+    '{"id":"legacy_001","robot":"arm_1","capability":"observe","params":{}}',
+    "```"
+  ].join("\n");
+
+  await runTuiChatStream(
+    {
+      sendChatStream: async (_message, onEvent) => {
+        onEvent({ type: "delta", payload: { delta: reply } });
+        onEvent({
+          type: "done",
+          payload: {
+            reply,
+            state: createReadyState()
+          }
+        });
+      }
+    },
+    "show history",
+    calls.handlers
+  );
+
+  assert.deepEqual(calls.transcript, [{ role: "assistant", content: reply }]);
+  assert.deepEqual(calls.states[0].actions?.pending, []);
+});
+
 test("SSE summary state does not overwrite full TUI state", () => {
   const states: AgentState[] = [];
   const result = applyEvent(

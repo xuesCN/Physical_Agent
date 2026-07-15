@@ -1219,10 +1219,14 @@ test("real streaming AgentOutput and ChatPlan can be persisted to pending Action
     actions?: Array<{ id?: string }>;
     needs_watch?: boolean;
   };
-  expect(done?.payload.chat_contract).toBe("structured_v1");
-  expect(done?.payload.has_structured_draft).toBe(true);
+  expect(done?.payload).not.toHaveProperty("actions");
+  expect(done?.payload).not.toHaveProperty("draft_actions");
+  expect(done?.payload).not.toHaveProperty("chat_contract");
+  expect(done?.payload).not.toHaveProperty("has_structured_draft");
   expect(agentOutput.schema).toBe("physical-agent/agent-output/v1");
   expect(agentOutput.message).not.toContain("```action-draft");
+  expect(done?.payload.reply).toBe(agentOutput.message);
+  expect(done?.payload.reply).not.toContain("```action-draft");
   expect(chatPlan.agent_output).toEqual(agentOutput);
   expect(chatPlan.actions).toEqual([]);
   expect(chatPlan.needs_watch).toBe(false);
@@ -1309,7 +1313,7 @@ test("real streaming AgentOutput and ChatPlan can be persisted to pending Action
   expectNoConsoleErrors(consoleErrors);
 });
 
-test("streaming draft increments replace fence fallback without duplicate or error cards", async ({
+test("streaming fence-like text stays inert until structured AgentOutput arrives", async ({
   page,
 }) => {
   const consoleErrors = collectConsoleErrors(page);
@@ -1319,7 +1323,7 @@ test("streaming draft increments replace fence fallback without duplicate or err
     robot: "arm_1",
     capability: "observe",
     params: {},
-    reason: "Compatibility incremental draft.",
+    reason: "Legacy text must stay inert.",
     depends_on: [],
   };
   const structuredAction = {
@@ -1327,7 +1331,7 @@ test("streaming draft increments replace fence fallback without duplicate or err
     reason: "Structured terminal draft.",
   };
   const structuredOutput = draftAgentOutput([structuredAction]);
-  const replyPrefix = "I drafted an observation incrementally.";
+  const replyPrefix = "Historical action draft text follows.";
   const partialFence = `\n\n\`\`\`action-draft\n${JSON.stringify(action).slice(0, -2)}`;
   const completedFence = `${JSON.stringify(action).slice(-2)}\n\`\`\``;
   const reply = `${replyPrefix}${partialFence}${completedFence}`;
@@ -1361,12 +1365,10 @@ test("streaming draft increments replace fence fallback without duplicate or err
           intent: "act",
           summary: replyPrefix,
           steps: [],
-          actions: [structuredAction],
+          actions: [],
           needs_watch: false,
           agent_output: structuredOutput,
         },
-        chat_contract: "structured_v1",
-        has_structured_draft: true,
       }),
     ],
     [3, 4],
@@ -1381,8 +1383,8 @@ test("streaming draft increments replace fence fallback without duplicate or err
   await expect(page.getByTestId("chat-stream-error")).toHaveCount(0);
 
   await releaseNextChatChunk(page);
-  await expect(cards).toHaveCount(1);
-  await expect(cards).toContainText("Compatibility incremental draft.");
+  await expect(cards).toHaveCount(0);
+  await expect(page.getByTestId("chat-panel")).toContainText(action.id);
   await expect(page.getByTestId("stop-chat-stream")).toBeEnabled();
   await expect(page.getByTestId("chat-stream-error")).toHaveCount(0);
 
@@ -1390,31 +1392,31 @@ test("streaming draft increments replace fence fallback without duplicate or err
   await expect(page.getByTestId("stop-chat-stream")).toBeDisabled();
   await expect(cards).toHaveCount(1);
   await expect(cards).toContainText("Structured terminal draft.");
-  await expect(cards).not.toContainText("Compatibility incremental draft.");
+  await expect(cards).not.toContainText("Legacy text must stay inert.");
   await expect(page.getByTestId("chat-stream-error")).toHaveCount(0);
   await expect(page.locator("vite-error-overlay")).toHaveCount(0);
   expectNoConsoleErrors(consoleErrors);
 });
 
-test("chat drafts prefer structured output and retain fence fallback after refresh", async ({
+test("historical action-draft fences remain text and only structured output is actionable", async ({
   page,
   request,
 }) => {
   const consoleErrors = collectConsoleErrors(page);
+  const structuredOnly = {
+    id: "draft-structured-only",
+    robot: "arm_1",
+    capability: "observe",
+    params: {},
+    reason: "Structured only.",
+    depends_on: [],
+  };
   const fenceOnly = {
     id: "draft-fence-only",
     robot: "arm_1",
     capability: "pick",
     params: { object: "red_block" },
-    reason: "Historical fallback.",
-    depends_on: [],
-  };
-  const consistent = {
-    id: "draft-consistent",
-    robot: "arm_1",
-    capability: "place",
-    params: { object: "red_block", target: "tray" },
-    reason: "Both tracks agree.",
+    reason: "Historical text only.",
     depends_on: [],
   };
   const structuredConflict = {
@@ -1430,7 +1432,7 @@ test("chat drafts prefer structured output and retain fence fallback after refre
     robot: "arm_1",
     capability: "pick",
     params: { object: "wrong_block" },
-    reason: "Compatibility conflict.",
+    reason: "Historical conflict text.",
     depends_on: [],
   };
   const fence = (action: Record<string, unknown>) =>
@@ -1445,16 +1447,7 @@ test("chat drafts prefer structured output and retain fence fallback after refre
           content: "Structured-only reply.",
           created_at: "2026-07-01T01:00:01Z",
           metadata: {
-            agent_output: draftAgentOutput([
-              {
-                id: "draft-structured-only",
-                robot: "arm_1",
-                capability: "observe",
-                params: {},
-                reason: "Structured only.",
-                depends_on: [],
-              },
-            ]),
+            agent_output: draftAgentOutput([structuredOnly]),
           },
         },
         { role: "user", content: "historical fence", created_at: "2026-07-01T01:00:02Z" },
@@ -1462,46 +1455,20 @@ test("chat drafts prefer structured output and retain fence fallback after refre
           role: "assistant",
           content: `Fence-only reply.${fence(fenceOnly)}`,
           created_at: "2026-07-01T01:00:03Z",
-          metadata: {
-            agent_output: {
-              ...draftAgentOutput([structuredConflict]),
-              schema: "physical-agent/agent-output/v0",
-            },
-          },
         },
-        { role: "user", content: "consistent tracks", created_at: "2026-07-01T01:00:04Z" },
-        {
-          role: "assistant",
-          content: `Consistent reply.${fence(consistent)}`,
-          created_at: "2026-07-01T01:00:05Z",
-          metadata: { agent_output: draftAgentOutput([consistent]) },
-        },
-        { role: "user", content: "conflicting tracks", created_at: "2026-07-01T01:00:06Z" },
+        { role: "user", content: "conflicting tracks", created_at: "2026-07-01T01:00:04Z" },
         {
           role: "assistant",
           content: `Conflict reply.${fence(fenceConflict)}`,
-          created_at: "2026-07-01T01:00:07Z",
+          created_at: "2026-07-01T01:00:05Z",
           metadata: { agent_output: draftAgentOutput([structuredConflict]) },
         },
-        { role: "user", content: "new reply-only fence", created_at: "2026-07-01T01:00:08Z" },
+        { role: "user", content: "old-schema metadata", created_at: "2026-07-01T01:00:06Z" },
         {
           role: "assistant",
-          content: `Model fence is text only.${fence(fenceConflict)}`,
-          created_at: "2026-07-01T01:00:09Z",
+          content: `Old schema is not canonical.${fence(fenceOnly)}`,
+          created_at: "2026-07-01T01:00:07Z",
           metadata: {
-            chat_contract: "structured_v1",
-            has_structured_draft: false,
-            agent_output: null,
-          },
-        },
-        { role: "user", content: "new compatibility fallback", created_at: "2026-07-01T01:00:10Z" },
-        {
-          role: "assistant",
-          content: `Compatibility fallback.${fence(fenceOnly)}`,
-          created_at: "2026-07-01T01:00:11Z",
-          metadata: {
-            chat_contract: "structured_v1",
-            has_structured_draft: true,
             agent_output: {
               ...draftAgentOutput([structuredConflict]),
               schema: "physical-agent/agent-output/v0",
@@ -1514,32 +1481,35 @@ test("chat drafts prefer structured output and retain fence fallback after refre
 
   await page.goto("/");
   const cards = page.getByTestId("draft-action-card");
-  await expect(cards).toHaveCount(5);
+  await expect(cards).toHaveCount(2);
   await expect(cards.nth(0)).toContainText("arm_1.observe");
-  await expect(cards.nth(1)).toContainText("arm_1.pick");
-  await expect(cards.nth(2)).toContainText("arm_1.place");
-  await expect(cards.nth(3)).toContainText("arm_1.observe");
-  await expect(cards.nth(3)).not.toContainText("arm_1.pick");
-  await expect(cards.nth(4)).toContainText("arm_1.pick");
+  await expect(cards.nth(1)).toContainText("Structured output is authoritative.");
+  await expect(cards.nth(0)).not.toContainText("Historical text only.");
+  await expect(cards.nth(1)).not.toContainText("Historical text only.");
+  await expect(cards.nth(0)).not.toContainText("Historical conflict text.");
+  await expect(cards.nth(1)).not.toContainText("Historical conflict text.");
+  await expect(page.getByTestId("add-draft-to-actions")).toHaveCount(2);
+  await expect(page.getByTestId("chat-panel")).toContainText(fenceOnly.id);
+  await expect(page.getByTestId("chat-panel")).toContainText(fenceConflict.id);
 
-  await cards.nth(1).getByTestId("add-draft-to-actions").click();
-  await expect(page.getByTestId("action-board")).toContainText(fenceOnly.id);
+  await cards.nth(0).getByTestId("add-draft-to-actions").click();
+  await expect(page.getByTestId("action-board")).toContainText(structuredOnly.id);
+  await expect(page.getByTestId("action-board")).not.toContainText(fenceOnly.id);
+  await expect(page.getByTestId("action-board")).not.toContainText(fenceConflict.id);
+  const scenarioIds = new Set([structuredOnly.id, fenceOnly.id, fenceConflict.id]);
   await expect
     .poll(async () => {
       const response = await request.get("/api/state");
       const state = (await response.json()) as {
         actions?: {
           pending?: Array<{ id?: string }>;
-          completed?: Array<{ id?: string }>;
         };
       };
-      return {
-        pending: state.actions?.pending?.filter((action) => action.id === fenceOnly.id).length ?? 0,
-        completed:
-          state.actions?.completed?.filter((action) => action.id === fenceOnly.id).length ?? 0,
-      };
+      return (state.actions?.pending ?? []).flatMap((action) =>
+        action.id && scenarioIds.has(action.id) ? [action.id] : [],
+      );
     })
-    .toEqual({ pending: 1, completed: 0 });
+    .toEqual([structuredOnly.id]);
   expectNoConsoleErrors(consoleErrors);
 });
 

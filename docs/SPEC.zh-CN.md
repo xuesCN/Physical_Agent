@@ -2,7 +2,7 @@
 
 > 本文合并了原 optimization-spec（安全不变量）、plan-f（当前目标）与 traceability-matrix（账本），原件已删除、git 历史可查。历史过程见 `REFACTORING.zh-CN.md`。
 > **维护规则**：每轮 session 收尾更新 §4 矩阵一行 → commit → push；里程碑拆分时拆行记录；状态以验收测试通过为准。
-> 最后更新：2026-07-14
+> 最后更新：2026-07-15
 
 ## 0. 安全边界（三层：宪法 / 授权策略 / 工程纪律）
 
@@ -40,7 +40,7 @@
 | **R0-R8** | 架构减法与兼容面退役（当前唯一实施主线） | 不新增 SPEC 功能；按 `docs/specs/001-architecture-simplification/` 的原子门禁依次完成 GUI parity→legacy GUI 退役→Markdown migration/完整 Workspace 退役→`auto_step` 退役→structured Chat 双轨→read-model/response 去重→全量收口。删除前必须有 parity/双轨/救援证据 |
 | F0 | LLM planner 实验（后续暂停） | 已有实验与本地 JSONL trace 保留；R0-R8 期间不扩样本、不引观测平台、不据此新增 runtime 能力，收口后再按真实失败数据评审 |
 | **B6（已完成历史收口项）** | 状态层收口 | 已删 `MarkdownStateStore`/factory 分支/config legacy backend 自动选择/矩阵测试 md 侧与 `test_e2e_markdown_loop`，但保留旧目录检测以 fail closed；当时承诺 `migrate-md-to-sqlite`/reader 保留一个版本周期。R0 已决定在 R3 提前退役该入口：先抽 SAFETY/LOG sidecar，再删 full Workspace，并用 `9072b4e` 独立 worktree 留历史救援路径；这不改变 SQLite-only runtime 的既有事实 |
-| F1 | 提案卡片 + Add to Actions + 审批流（已完成） | chat draft 以 compiler 生成的 draft `AgentOutput.actions` 为正式结构化通道；R5 双轨期仍从同一 action set 生成 `action-draft` fence 供旧客户端 fallback，禁止从 fence 反推 canonical output。Chat 卡片的 Add to Actions 只创建 pending action，不等同执行审批。`requires_approval` 由后端按 robot/capability 计算；Actions 板的 Approve execution / Reject 才改变执行放行状态。watch claim 会原子跳过未批准动作但不阻塞后续 ready action；SafetyGate 仍照常校验 schema、bounds、capability、robot、SAFETY.md。 |
+| F1 | 提案卡片 + Add to Actions + 审批流（已完成） | chat draft 只从 compiler 生成的 draft `AgentOutput.actions` 创建；reply 永远是用户可读文本，不再承载或解析 `action-draft` 机器协议。旧 fence-only chat 升级后仍可阅读，但不会恢复为可操作 Draft；已经进入 Action Board 的 pending/approved action 不受影响。Chat 卡片的 Add to Actions 只创建 pending action，不等同执行审批。`requires_approval` 由后端按 robot/capability 计算；Actions 板的 Approve execution / Reject 才改变执行放行状态。watch claim 会原子跳过未批准动作但不阻塞后续 ready action；SafetyGate 仍照常校验 schema、bounds、capability、robot、SAFETY.md。 |
 | F2 | 结构化信息可读化（全应用原则） | **通用原则：已知协议字段一律定制组件呈现，未知/raw 字段 JSON 树兜底（懒加载），`<pre>` 裸 JSON 逐步清零**。首批落地：feedback 时间线（status 灯/action 跳转/失败原因用 `message` 字段）、world objects 表格、capabilities/config/integration 结果的卡片化；协议 schema 由 pydantic 锁定，定制组件不会白写 |
 | F3 | context_builder 解耦（已完成） | `context_builder` 统一 reply/proposal/planner/tool_loop 上下文；ContextBudget 收拢魔法数字；world/capabilities 超限摘要化；memory 按 importance 排序注入；golden-file 测试 |
 | F4 | 闭环地基（已完成） | 提案带 expected 断言 → 执行后**确定性比对**（不用 LLM 当裁判）→ 写入 `expectation_check` feedback；violated/skipped 回灌 LLM 上下文，自动重试默认关 |
@@ -65,7 +65,7 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 
 | 编号 | 内容 | 归属 | 状态 |
 | --- | --- | --- | --- |
-| **R0-R8** | 架构减法与兼容面退役 | `specs/001-architecture-simplification/` | 🟡 R0-R4 已完成；R5 structured Chat Turn 双轨实现/review-fix 已完成，2026-07-14 本地真实 Chromium 完整套件 27/27 通过，structured/fence/冲突/增量/Add→pending 与服务端 projection 门槛均有证据。R6 已在同一当前树完成 application/read-model 去重：正式 proposal consumer 统一读取 `AgentOutput.actions`，API/MCP current status 共用 application projection，删除 `_append_actions` 与零消费者 wrapper；顶层兼容字段、fence 与 parser 仍完整保留。本提交按用户确认发布，独立远端 CI 待推送后核验；R7 实现未开始 |
+| **R0-R8** | 架构减法与兼容面退役 | `specs/001-architecture-simplification/` | 🟡 R0-R4 已完成；R5 structured Chat Turn 双轨与 R6 official consumer migration 已完成，fork Push/PR CI 均成功。R7 已退役 action-draft fence 生成/parser/React fallback 和 proposal 顶层 action convenience fields；`AgentOutput`/`ChatPlan.agent_output` 是唯一 draft 机器通道，历史 fence-only chat 只作文本。approve/reject mutation `action`、`/api/state.actions`、pending/approval/SafetyGate 语义均保留；R8 全量文档/发布收口待继续 |
 | F0 | LLM planner + 本地调用留痕 + 坏任务实验报告 | §2 | ⏸ R0-R8 冻结；既有第一轮 15 条结果保留：10 完成、5 无提案、0 Gate 拦截。**Review 复核（2026-07-06）**：trace 证实 bounds 在 prompt 内、拒绝为知情拒绝；不在本轮继续扩实验或功能 |
 | B6 | 退役 markdown 后端（保留 renderer 与迁移命令） | §2 | ✅ 2026-07-06 完成 `9072b4e`：active backend 只剩 SQLite；旧 Markdown 仅迁移 reader 可读 |
 | F1 | 提案卡片 + Add to Actions + 审批流 | §2 | ✅ 2026-07-07 完成：Chat draft 卡片只提交动作板；Actions 板审批才放行 `requires_approval`；approval required 后端计算，SQLite 原子 claim 跳过未批准动作；拒绝/审批元数据进 LOG/audit |

@@ -472,6 +472,12 @@ produces a `pick` action followed by a dependent `place` action.
 
 Physical Agent can use an OpenAI-compatible Chat Completions endpoint for planning while keeping the same safety boundary: the LLM only writes proposed actions to StateStore; watch still validates and executes them.
 
+### Upgrade note: Chat action-draft wire
+
+Actionable Chat Drafts now travel only through structured `AgentOutput.actions`; assistant replies are ordinary user-facing text and no longer generate or parse the legacy `action-draft` fence. Persisted fence-only chat from older versions remains readable as Markdown, but it will not recover a Draft card or Add to Actions control. Existing pending or approved actions in the Action Board are unaffected. No compatibility migration layer was added, and approval/SafetyGate behavior is unchanged.
+
+Proposal/chat/task responses, including MCP `submit_task`, also no longer duplicate actions in top-level `action`, `actions`, or `draft_actions` convenience fields; callers must read `agent_output.actions`. Approval/rejection mutation responses still return `action`, and `/api/state.actions` remains the Action Board read model.
+
 Create a local `.env` file. It is ignored by git.
 
 ```bash

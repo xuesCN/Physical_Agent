@@ -12,9 +12,9 @@
 | 2.1 | canonical projection 与删除门禁 review fix | ✅ `b20ad20` / PR #1 全绿 | React/TUI 不再二次推断 Gate；pending 不复用旧 passed Gate；PR e2e/wheel 负门禁阻塞 |
 | 3 | 退役 Markdown migration，缩成 safety/log sidecar | ✅ R3-A `e7f878b`、R3-B `a64be59`、R3-C `d1713a0`、R3-D `6309a1b`、R3-E `4a8ec86`、R3-F `9698b3e` 完成 | 当前树与 wheel 均无 migrator/full Workspace；sidecar 等价；旧目录 fail closed；历史救援可执行 |
 | 4 | 删除 `auto_step` 与 embedded watch composition | ✅ `da14064` 完成；下一步 R5 | proposal/chat 入口不拥有 watch；正式 `watch` 与 `api --watch` 保留并通过边界回归 |
-| 5 | 结构化 Chat Turn + `action-draft` 双轨 | 🟡 实现与本地真实 Chromium 27/27 完成；本提交发布、远端 CI 待核验 | 独立一轮验证 structured/fence 一致，F1 主链与旧 fallback 全绿 |
-| 6 | 收敛 application/read-model 职责和官方消费者 | ✅ 本地完成；随本提交发布，远端 CI 待核验 | `_append_actions` 等死代码为零；消费者只读 canonical projection/output；R7 仍等待 R5 独立双轨证据 |
-| 7 | 切断旧 wire compatibility | ⚪ | 停产/删除 fence；删除 proposal 顶层 `actions/action/draft_actions`，不动 state board |
+| 5 | 结构化 Chat Turn + `action-draft` 双轨 | ✅ 本地真实 Chromium 27/27、fork Push/PR CI 成功 | 独立一轮验证 structured/fence 一致，F1 主链与旧 fallback 全绿 |
+| 6 | 收敛 application/read-model 职责和官方消费者 | ✅ official consumers 迁移完成，fork Push/PR CI 成功 | `_append_actions` 等死代码为零；消费者只读 canonical projection/output |
+| 7 | 切断旧 wire compatibility | ✅ 2026-07-15 完成 | 停产/删除 fence；删除 proposal 顶层 `actions/action/draft_actions`，不动 state board |
 | 8 | 文档、发布形态与全量验证收口 | ⚪ | 全量测试、wheel、docs/CLI/README grep 和安全扫描全绿 |
 
 ## 1. 冻结范围、建立规格与退役清单
@@ -120,7 +120,7 @@ Rollback：单独提交，恢复参数不会改变 SQLite schema。
 
 ### 5.1 生产路径先收口
 
-当前 streaming 的 `AgentOutput` 是在完成后从 fence 反向解析出来的，不算独立结构化通道。先建立 typed Chat result，但不把 ChatRuntime 的不同语义硬塞成 draft：
+R5 开工前，streaming 的 `AgentOutput` 是在完成后从 fence 反向解析出来的，不算独立结构化通道。该阶段先建立 typed Chat result，但不把 ChatRuntime 的不同语义硬塞成 draft：
 
 1. 结果使用明确 variant/kind：普通 reply 的 `agent_output` 可选；只有 proposal variant 才有 draft lifecycle output；tool-loop 是 submitted proposal；CLI code/integration 路径继续是独立 typed variant。本步骤只收口 `/api/chat` 使用的 rule/LLM reply/proposal 主路径，不借机删除 CLI code/integration/tool-loop。
 2. proposal variant 的 action intents 只分配一次稳定 draft IDs，再经 trusted `PlanCompiler` 得到 draft `AgentOutput`；done、ChatPlan、assistant metadata 与兼容 fence 的 action IDs/dependencies 必须一致。

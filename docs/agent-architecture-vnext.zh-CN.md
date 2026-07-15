@@ -316,7 +316,7 @@ Event 是审计和恢复载体，不能成为绕开 state transaction 或 Gate �
 
 ## 7. API、流式协议与产品可见性
 
-本轮所有主要 proposal 入口已经返回同一协议的 `AgentOutput`，旧 `actions` 字段暂时保留兼容。包括：
+所有主要 proposal 入口都返回同一协议的 `AgentOutput`；R7 已删除与 `agent_output.actions` 重复的 proposal 顶层 `actions`/`action`/`draft_actions`。包括：
 
 - API task 与 manual proposal；
 - MCP task 与 proposal；
@@ -326,7 +326,7 @@ Event 是审计和恢复载体，不能成为绕开 state transaction 或 Gate �
 
 React/TUI 已直接展示 task kind、owner、status、依赖、关联 action、Gate policy source，并消费服务端 materialized output。用户无需展开 raw JSON 即可回答“现在卡在哪里、下一步由谁做、Gate 是否真的执行过”。这仍是 read projection，不代表客户端或 plan 文档成为 Gate authority。
 
-Chat draft/tool loop 与 `ChatPlan` 已附上 compiled `AgentOutput`；流式 chat 仍可暂时保留 `action-draft` fence。下一阶段再输出 typed proposal/task stream event，客户端不继续猜 fenced JSON。
+Chat draft/tool loop 与 `ChatPlan` 已附上 compiled `AgentOutput`；流式 chat 的 Draft 只从 SSE done/assistant metadata 的 canonical `AgentOutput` 创建。reply 只作用户可读文本，即使包含旧 fence-like 内容也不得升级为卡片。旧 fence-only 历史消息仍可阅读，但不可再 Add；无需数据迁移层。
 
 ## 8. 与 world freshness、registry 和 F6 的关系
 
@@ -366,7 +366,7 @@ Assurance loop 稳定后再推进：
 - 明确 tasks 是持久化实体还是从 Action/feedback 可重建的 projection。
 - 已完成：`append_pending_actions()` 单事务写入 proposal 的全部 actions，任何冲突回滚整个 batch。
 - 未完成：在同一事务中持久化 task graph/obligation rows 与 action batch，并将 server-side action id 分配移入该事务；当前扫描编号的并发冲突会使整个 batch 失败，但不会产生半批 actions。
-- 各入口完成迁移后再收缩旧 response 字段。
+- 各入口已迁移到 `AgentOutput`，R7 已收缩旧 response 字段；本阶段不得重新引入 convenience payload。
 - 验收：并发 proposal 不产生重复 id；持久化 graph 与 actions 不出现半份或不一致；当前已完成的 action batch all-or-nothing 必须保持。
 
 ### VNext-3B1：workspace watch runtime lease 与 action owner CAS（本轮完成）
@@ -391,7 +391,7 @@ Assurance loop 稳定后再推进：
 
 ### VNext-5：Typed stream、registry 与 read model
 
-- typed SSE、共享 reducer/类型；fence 退役一个兼容周期。
+- typed SSE、共享 reducer/类型；`action-draft` fence 已在 R7 完成兼容周期并退役。
 - 统一 skill/tool/capability catalog；capability 永不成为 direct hardware tool。
 - React/TUI 使用同一 read model。
 

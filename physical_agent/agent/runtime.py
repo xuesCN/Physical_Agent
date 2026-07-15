@@ -64,7 +64,6 @@ class AgentRuntime:
             return {
                 "ok": False,
                 "message": proposal.message,
-                "actions": proposal.agent_output.actions,
                 "agent_output": proposal.agent_output.model_dump(
                     mode="json", by_alias=True
                 ),
@@ -82,7 +81,6 @@ class AgentRuntime:
             return {
                 "ok": True,
                 "message": proposal.message,
-                "actions": proposal.agent_output.actions,
                 "agent_output": proposal.agent_output.model_dump(
                     mode="json", by_alias=True
                 ),
@@ -121,7 +119,6 @@ class AgentRuntime:
         return {
             "ok": all_done,
             "message": final_message,
-            "actions": materialized_output.actions,
             "agent_output": materialized_output.model_dump(
                 mode="json", by_alias=True
             ),

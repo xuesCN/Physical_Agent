@@ -10,7 +10,7 @@ import { Bubble, Sender } from "@ant-design/x";
 import { Alert, Button, Card, Descriptions, Empty, Popconfirm, Space, Tag, Typography } from "antd";
 import { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { resolveActionDrafts } from "../actionDraft";
+import { structuredDraftActions } from "../agentOutput";
 import { useMessages } from "../locales/context";
 import type { ActionItem, ChatMessage } from "../types";
 import { JsonSummaryLine } from "./JsonSummary";
@@ -182,22 +182,16 @@ function MessageContent({
   onEditDraft
 }: MessageContentProps) {
   const labels = useMessages();
-  const isStructuredContract = message.metadata?.chat_contract === "structured_v1";
-  const allowFenceFallback =
-    !isStructuredContract || message.metadata?.has_structured_draft === true;
-  const parsed =
+  const drafts =
     message.role === "assistant"
-      ? resolveActionDrafts(message.content, message.metadata?.agent_output, {
-          allowFenceFallback
-        })
-      : null;
-  const markdown = parsed?.markdown ?? message.content;
+      ? (structuredDraftActions(message.metadata?.agent_output) ?? [])
+      : [];
   return (
     <div className="chat-message-content">
       <div className="markdown-body">
-        <ReactMarkdown>{markdown}</ReactMarkdown>
+        <ReactMarkdown>{message.content}</ReactMarkdown>
       </div>
-      {parsed?.drafts.map((draft, draftIndex) => {
+      {drafts.map((draft, draftIndex) => {
         const key = `${message.created_at ?? messageIndex}-${draftIndex}`;
         const action = withDraftMetadata(draft, {
           originalMessage,

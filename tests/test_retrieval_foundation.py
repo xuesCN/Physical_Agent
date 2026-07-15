@@ -340,7 +340,8 @@ def test_chat_runtime_retrieval_enabled_adds_untrusted_context_without_overrides
 
     payload = json.loads(fake_client.messages[1]["content"])
     retrieved = payload["retrieved_context"]
-    assert result["actions"] == []
+    assert result["agent_output"] is None
+    assert "actions" not in result
     assert "untrusted proposal context only" in retrieved["context_policy"]
     assert retrieved["results"][0]["source_type"] == "upload"
     assert retrieved["results"][0]["trust_level"] == "untrusted"

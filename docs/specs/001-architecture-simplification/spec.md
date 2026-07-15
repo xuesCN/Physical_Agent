@@ -1,8 +1,8 @@
 # 001：架构减法与兼容面退役
 
-状态：执行中（R0-R4 完成；R5 本地真实 Chromium 27/27 已通过、本提交发布且远端 CI 待核验；R6 实现与本地全量门禁完成并随本提交发布；R7 删除实现未开始）
+状态：执行中（R0-R7 完成；R5/R6 fork Push CI 与 PR CI 成功；R7 已切断旧 action-draft wire，R8 收口待继续）
 
-日期：2026-07-14
+日期：2026-07-15
 
 对应账本：`SPEC.zh-CN.md` §4 `R0-R8`
 
@@ -32,7 +32,7 @@ R2 阶段 review 发现 React/TUI 仍会从 raw feedback/Action Board 二次推�
 2. 任何物理动作执行前必须经过 watch-owned `SafetyGateTask` 与 `SAFETY.md` 文件真源；审批、兼容层和 UI 都不能绕过。
 3. Action Board 与 structured feedback 是当前运行事实；`AgentOutput` 是对外心智模型和 materialized read model；`ChatPlan` 只做 presentation singleton，不成为第二运行真源。
 4. 删除或迁移必须先有枚举清单、正反验收和回滚/救援路径。未列出的旧能力不得被推定为“不重要”。
-5. `action-draft` 文本 fence 在结构化 streaming 主链验证完成前必须保留；同一轮双轨写出，下一轮才允许删除旧轨。
+5. `action-draft` 文本 fence 只允许存在于已经完成的 R5 双轨验证历史；R7 后 reply 不承载机器协议，Draft 只来自 compiler-owned `AgentOutput`。
 6. `SAFETY.md` 与 `LOG.md` sidecar 是正式能力，不属于“旧 Markdown workspace”退役范围。
 
 ## 2. 已定决策
@@ -83,21 +83,20 @@ R2 阶段 review 发现 React/TUI 仍会从 raw feedback/Action Board 二次推�
 
 理由：`auto_step` 已在 ChatRuntime 内成为 no-op，却仍让 CLI 和旧 GUI 保留“认知请求顺便推进执行”的旧心智模型。
 
-### 2.5 结构化 streaming 先双轨，后删除 `action-draft`
+### 2.5 结构化 streaming 先双轨，R7 后只保留 `AgentOutput`
 
-- 先让 streaming `done` 事件携带 compiler 生成的 `agent_output`，并让 React 优先消费结构化字段、文本 fence 仅作 fallback。可信的是 compiler 注入的 topology/owner/Gate 义务；其中 draft actions 仍是不可信 proposal intents，不代表已通过 SafetyGate 或可直接执行。
-- 双轨期间后端仍写 fence；验证 streaming chat → draft card → Add to Actions → pending Action Board 全链路，以及旧客户端 fallback。
-- 新 structured 消息用显式 contract/provenance 区分历史 fallback：reply-only turn 中模型自行输出的 fence 只能是文本；只有 compiler 声明本轮存在 structured draft 时，fence 才可作为 envelope 丢失/损坏的双轨灾备。
-- canonical `AgentOutput.message` 不含 fence；streaming 使用 JSON mode + 本地 schema 校验，并把 Stop best-effort 传到实际 provider stream close。terminal result 只允许落盘一次。
-- 经过至少一轮独立验证后，才删除 fence 生产、parser、fixture 和文案。
+- R5 先让 streaming `done` 事件携带 compiler 生成的 `agent_output`，并用一轮双轨验证 streaming chat → draft card → Add to Actions → pending Action Board 与旧客户端 fallback；这是已经结束的迁移窗口。
+- R7 已删除 fence 生产、parser、fixture、provenance 和前端 fallback。React/TUI 只消费 `AgentOutput`；可信的是 compiler 注入的 topology/owner/Gate 义务，其中 draft actions 仍是不可信 proposal intents，不代表已通过 SafetyGate 或可直接执行。
+- canonical `AgentOutput.message` 与 reply 都是用户可读文本；streaming 继续使用 JSON mode + 本地 schema 校验，并把 Stop best-effort 传到实际 provider stream close。terminal result 只允许落盘一次。
+- 旧 fence-only chat 不做数据迁移，升级后作为普通 Markdown 文本展示，不能恢复为可操作 Draft；已经进入 Action Board 的 action 保持原状态。
 
-理由：当前 streaming 是 reply-only，F1 主链靠 fence 传 draft；直接删 fence 会造成无报错的功能断链。
+理由：先用双轨证明结构化主链可独立工作，再删除旧 wire，避免无报错断链，同时不把临时兼容层永久化。
 
 ### 2.6 删除公开 proposal action payload duplication
 
 - 正式客户端迁移到 `agent_output.actions` 与 `agent_output.tasks`。
 - `/api/state.actions` 永久保留，它是 Action Board 的运行事实，不属于重复 response 字段。
-- task/chat/manual proposal response 顶层的 `actions`/`action`/`draft_actions` 只作为临时兼容字段；结构化客户端完成迁移且双轨验证通过后删除。
+- task/chat/manual proposal response 顶层的 `actions`/`action`/`draft_actions` 已在 R7 删除；canonical proposal payload 只在 `agent_output.actions`。
 - `message`、`proposal_status`、`proposal_id`、`refusal_reason` 等 envelope/status/correlation 字段本条目保留；`ProposalResult.actions` 等 application 内部 typed command result 也不在公开 wire 去重范围。若要继续删，必须另做消费者审计。
 - Web 与 TUI 可以保留各自的 formatter/viewmodel；统一的是后端契约与状态解释，不强求两个表现层共享渲染代码。
 

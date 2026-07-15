@@ -1,7 +1,7 @@
 # 重构过程
 
 > 本文浓缩自原 33 份 session-handoff 与 22 份 brief（已删除，git 历史可查）。姊妹文档：`SPEC.zh-CN.md`（目标与待办矩阵）。
-> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-14。
+> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-15。
 
 ## 0. 基线与纪律
 
@@ -51,9 +51,10 @@
 | R3-E | 删除 full Workspace helper 与退役 Markdown protocol | `4a8ec86` |
 | R3-F | 当前文档、示例与发布包收口 | `9698b3e` |
 | R4 | 删除 chat 自动推进兼容面与 CLI 内嵌 watch | `da14064` |
-| R5 | 单调用 structured Chat Turn + fence 双轨消费者 | 本轮实现；独立 CI 待确认 |
-| R6 | application/read-model 去重 + 正式 consumer 收敛到 AgentOutput | 本地完成；未推送 |
-| R5-browser-gate | structured/fence 双轨真实 Chromium、增量去重与 Add→pending 独立验证 | 本提交发布；远端 CI 待核验 |
+| R5 | 单调用 structured Chat Turn + fence 双轨消费者 | 双轨窗口完成；fork Push/PR CI 成功 |
+| R6 | application/read-model 去重 + 正式 consumer 收敛到 AgentOutput | consumer migration 完成；fork Push/PR CI 成功 |
+| R5-browser-gate | structured/fence 双轨真实 Chromium、增量去重与 Add→pending 独立验证 | 本地 27/27；fork Push/PR CI 成功 |
+| R7 | 退役 action-draft wire/fence 与 proposal convenience payload | 本轮完成，未提交/未推送 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -368,6 +369,16 @@ API 与 MCP current plan 都继续调用 `application.output_projection.project_
 
 同一当前树的最终门禁为 frontend `tsc -b && vite build`、R5/AgentOutput/Safety 定向 `161 passed`、Safety smoke `32 passed`、Python full `414 passed`、TUI typecheck/build + `60 passed`、clean-wheel Dashboard smoke 全绿。首次 full pytest/wheel smoke 只因本地 `.venv` 缺 `build` 模块失败；安装 CI 已要求的 `build/setuptools/wheel` 后失败项与完整门禁均通过。后端 fence 生产/parser、React `actionDraft.ts`、兼容 fixtures/tests 与 proposal 顶层字段均保留，R7 删除实现未开始；本提交只发布浏览器验证与正式状态文档，远端 CI 待推送后核验。
 
+### R7：退役 action-draft wire/fence
+
+在 R5 双轨与 R6 official consumer migration 的本地/远端门禁均关闭后，ChatRuntime 不再把 structured actions 投影进 reply：删除 fence encoder/formatter/parser、provider reply 后缀 SSE 切片、`chat_contract`/`has_structured_draft` provenance 与 `draft_actions` metadata/result。reply、assistant content 与 `AgentOutput.message` 现在都是同一份用户可读文本；raw action intents 仍只分配一次 ID，经 trusted `PlanCompiler` 生成 canonical draft `AgentOutput`，mandatory watch-owned `SafetyGateTask` 的编译路径没有改变。
+
+React 把 strict `AgentOutput` validator 拆到 `agentOutput.ts` 后删除 `actionDraft.ts`，`ChatPanel` 永远按 Markdown 显示正文，只从 `metadata.agent_output` 渲染 Draft。增量与历史负例证明完整旧 fence 仍是普通可读 code block，不生成卡片/Add/Edit；structured output 与旧正文并存时也只提交 structured action。TUI/CLI 原本没有文本 parser，继续原样显示 reply 并单独消费 structured output。
+
+同批删除 task/chat/manual proposal、ChatRuntime、MCP submit_task 与 AgentRuntime/tool-loop 的公开 `actions`/`action`/`draft_actions` convenience payload；approve/reject mutation 的 `action`、envelope/status/correlation、内部 `ProposalResult.actions` 与 `/api/state.actions`/SQLite Action Board 永久保留。SQLite chat 不需 schema migration：旧 fence-only 消息升级后只作文本，已经进入 actions 表的 pending/approved action 不受影响，也不新增兼容迁移层。
+
+最终本地门禁：Python full `415 passed`、Safety smoke `32 passed`、frontend `tsc -b && vite build`、真实 Chromium `27/27 passed`、TUI typecheck/build + `61 passed`、clean-wheel Dashboard smoke、context golden/文档一致性 `11 passed` 与 `git diff --check` 全绿；生产 Python/React/TUI 与 shipped Dashboard bundle 的旧 marker/parser/fallback/provenance 扫描均为零。自审先后抓到并修复一条 retrieval 测试的旧顶层 `actions` 断言、Playwright 跨用例 pending 状态断言过宽，以及 completed stream 对 reply 做二次 trim 导致 delta/正文/AgentOutput message 可能分叉；最终回归锁定同一 reply 在所有层严格一致。本轮按用户要求不 commit、不 push。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -428,7 +439,7 @@ API 与 MCP current plan 都继续调用 `application.output_projection.project_
 56. **先减兼容面，再扩 Agent runtime**（R0）：VNext-3/4、W4/W5/W6.2、F0 后续、F5/F6、B4-vec、registry/read-model 与自动 replan 在 R0-R8 期间冻结；收口后按真实需求重新排序，不自动恢复旧排期。
 57. **legacy GUI 删除以用户任务 parity 为门禁**（R1.5/R2）：保留命令体验但只启动正式 FastAPI+React；仍支持的任务必须先覆盖并测试，违背 proposal-only 边界的旧能力则显式退役并给替代，不能静默消失，也不机械复制危险语义。
 58. **迁移入口退役不等于删除 safety/log sidecar**（R3）：一次性 Markdown reader/full Workspace 可以删；`SAFETY.md` 文件真源、`LOG.md` 镜像和旧目录 fail-closed 检测属于当前生产安全边界，先抽聚焦 adapter。提前结束迁移窗口以 `9072b4e` 独立 worktree 作为救援指针。
-59. **structured output 必须独立于 fence 生产**（R5/R7）：从 `action-draft` 反向解析出的 AgentOutput 不是新通道；先建立 typed Chat Turn，以 structured actions 生成兼容 fence并双轨验证，后续提交才可删 fence。
+59. **structured output 必须独立于 fence 生产**（R5/R7）：从 `action-draft` 反向解析出的 AgentOutput 不是新通道；先建立 typed Chat Turn，以 structured actions 生成兼容 fence 并双轨验证，R7 再完整删除 fence。
 60. **Action Board truth 与 proposal action payload duplication 分开**（R6/R7）：`/api/state.actions`/SQLite board 永久保留；只删除已有 `agent_output.actions` 替代的 task/chat/manual proposal 顶层 `actions/action/draft_actions`，approve/reject mutation result、envelope/status/correlation 和内部 `ProposalResult.actions` 不在此列。
 61. **统一协议，不强行统一 presentation**（R6）：React 与 TUI 可以保留不同 formatter/viewmodel；只统一后端 `AgentOutput`、projection 和 owner/status/Gate 解释，避免跨浏览器/终端的伪共享抽象。
 62. **`watch_enabled` 不是 executor health**（R1.5）：真实执行者状态必须合成本进程 service phase 与 SQLite active lease；driver/hardware health 继续由 capabilities/runtime profile 单独表达。
@@ -437,11 +448,11 @@ API 与 MCP current plan 都继续调用 `application.output_projection.project_
 65. **真实 setup 失败不自动高频重连硬件**（R1.5）：missing init/external lease 可以安全轮询；driver connect/setup 错误 degraded fail-stop，交给显式进程生命周期重试。
 66. **Dashboard 是 wheel package resource，hashed build 必须去陈旧化**（R1.5）：源码 cwd 只能做开发 fallback；增量 wheel 在复制前清目标 dist，并验证 wheel 资源集合与当前 Vite 输出严格相等。
 67. **structured streaming 只能有一次权威决策调用**（R5）：同一 provider stream 同时承载 reply 与 action intents；format fallback 只允许发生在零 byte 阶段，已经产生 byte 后失败就终止该 turn，不能再调用模型拼接第二份 actions。
-68. **兼容 fence 是 structured output 的投影，不是输入**（R5/R7）：draft IDs/dependencies 先稳定、compiler 后注入 Gate，再从同一 actions 写 fence；React 冲突时 structured 胜出，后端永不 fence → AgentOutput。
+68. **兼容 fence 只曾是 structured output 的临时投影，不是输入**（R5/R7）：R5 期间 draft IDs/dependencies 先稳定、compiler 后注入 Gate，再从同一 actions 写 fence；后端从未 fence → AgentOutput。R7 后连该投影也不再输出。
 69. **Stop 的语义包含上游资源释放和零 draft persistence**（R5）：只停浏览器渲染不够；abort 必须 close provider iterator，并在 compile/persist/done 前复查，partial assistant 可留审计但不能带可提交 draft metadata。
 70. **terminal persistence 必须 exactly-once**（R5）：SSE `done` 已落 completed 后，consumer close 只是资源清理，不能再落 cancelled 或降级 ChatPlan。
-71. **compatibility projection 不能污染 canonical message**（R5/R7）：`AgentOutput.message` 保存 base reply；fence 只属于双轨 wire reply，便于 R7 单独切除。
-72. **历史 fallback 必须有版本边界**（R5/R7）：无标记历史消息可继续解析 fence；新 structured reply-only 消息不得把模型正文提升成 proposal，只有 compiler 声明存在 draft 时才允许双轨灾备。
+71. **compatibility projection 不能污染 canonical message**（R5/R7）：`AgentOutput.message` 保存 base reply；fence 只属于已结束的 R5 双轨 wire reply，并已在 R7 单独切除。
+72. **历史 fallback 必须有结束边界**（R5/R7）：R5 双轨窗口曾允许无标记历史消息解析 fence；R7 后旧消息只作普通文本，任何 reply 正文都不得提升成 proposal，唯一 Draft 来源是 compiler-owned `AgentOutput`。
 73. **turn correlation 读 tool result，不读 Action Board 差分**（R6）：tool-loop 的 submitted actions 由每个 tool step 的 `AgentOutput.actions` 明确归属；Action Board 只负责运行事实，不能用前后 diff 猜本轮输出，否则并发 proposal 会串入错误 turn。
 74. **真实 structured browser fixture 先发布 capabilities、再关闭 setup runtime**（R5-browser-gate）：默认 E2E 的 `init + api` 不发布 runtime capabilities，rule-based chat 会正确返回 reply-only。真实主链验证选择调用正式 `physical-agent setup` 让 watch-owned setup 发布 capabilities 并立即 shutdown，再由不带 watch 的 API 完成 chat/Add；这样既不伪造后端 `AgentOutput`，也不让 executor 抢走刚 Add 的 pending action。
 
@@ -467,10 +478,11 @@ API 与 MCP current plan 都继续调用 `application.output_projection.project_
 - **把 status overlay 留在客户端会再次分叉**（VNext-2 的教训）：compiled graph、Action Board 与 feedback 的合成规则应集中在 application projection；Web/TUI 只渲染同一 materialized 输出。
 - **软件 ownership 与硬件 fencing 要分层命名**（W6 的教训）：workspace runtime lease 已覆盖单数据库内的执行者排他、claim CAS 和 reset guard；不能因此声称 in-flight command 或设备控制权已被 epoch fence。
 - **删除/迁移清单必须来自代码 surface，不只来自现有测试**（R0 的教训）：legacy GUI 的 setup/watch/doctor/task 多条路径没有直接测试，若只搬测试会再次漏功能；先枚举端点、用户任务、打包入口、文档和负用例，再决定覆盖或有意退役。
-- **兼容字段存在不代表已经有独立新通道**（R0 的教训）：stream done 内部已有 `agent_output`，但它仍由 fence 反解析且 API 丢弃；判断迁移完成要追 producer→transport→consumer→persistence 的事实来源，而不是只看 schema 名称。
+- **兼容字段存在不代表已经有独立新通道**（R0 的教训）：当时 stream done 内部已有 `agent_output`，但它仍由 fence 反解析且 API 丢弃；判断迁移完成要追 producer→transport→consumer→persistence 的事实来源，而不是只看 schema 名称。
 - **带 hash 的前端产物要防增量构建残留**（R1.5 的教训）：只让 Vite `emptyOutDir` 不够，setuptools 的 `build/lib` 仍可能保存旧 chunk；wheel 测试必须比较资源全集，而不是只断言“有 index 和任意 asset”。
 - **浏览器验收不可用 discovery 冒充 runtime**（R1.5 的教训）：`playwright --list` 能抓语法/发现问题，但不能证明 route handler、SSE 与 DOM 交互实际成立；浏览器二进制不可用时应保留删除 No-Go，而不是为了收工勾绿。
 - **源码删除不等于发布物删除**（R2 的教训）：setuptools 增量 staging 会保留已经从源码树移除的 package；退役模块必须增加 wheel member 负断言，并在 build hook 中清理对应 staging 目录。
-- **真实浏览器证据要同时锁服务新鲜度与增量中间态**（R5-browser-gate 的教训）：最终取证设置 `CI=1` 禁止 Playwright 复用 5173/8766 的陈旧服务；只断言 terminal 卡片数还不够，partial fence→完整 fallback→structured done 必须逐阶段检查 0→1→1，才能排除瞬时重复和错误卡。
+- **真实浏览器证据要同时锁服务新鲜度与增量中间态**（R5-browser-gate 的教训）：R5 双轨取证设置 `CI=1` 禁止 Playwright 复用 5173/8766 的陈旧服务；只断言 terminal 卡片数还不够，partial fence→完整 fallback→structured done 当时逐阶段检查 0→1→1，才能排除瞬时重复和错误卡。
+- **兼容 parser 退役要把历史正例改成产品负例**（R7 的教训）：只删除生产 helper 不足以证明 wire 已切断；浏览器必须在 partial/完整/持久化三种旧正文上断言 0 卡、0 Add，同时确认文本仍可读，并由独立 structured output 证明产品功能没有一起被删。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

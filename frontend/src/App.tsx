@@ -323,10 +323,7 @@ function Dashboard({
                   {
                     stream_status: "completed",
                     agent_output: payload.agent_output ?? null,
-                    plan: payload.plan ?? null,
-                    draft_actions: payload.draft_actions ?? [],
-                    chat_contract: payload.chat_contract ?? null,
-                    has_structured_draft: payload.has_structured_draft === true
+                    plan: payload.plan ?? null
                   }
                 )
               );

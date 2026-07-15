@@ -1,6 +1,9 @@
+import asyncio
+
 from physical_agent.config import write_default_config
 from physical_agent.api.server import ApiController
 from physical_agent.mcp.server import PhysicalAgentMCP
+from physical_agent.quickstart import setup_project
 from physical_agent.state import open_state_store
 
 
@@ -36,6 +39,23 @@ def test_mcp_propose_action_sqlite_only_writes_pending_board(tmp_path):
     assert actions["pending"][0].metadata["expected"][0]["path"] == "robots.arm_1.status"
     assert actions["completed"] == []
     assert actions["cancelled"] == []
+
+
+def test_mcp_submit_task_exposes_actions_only_through_agent_output(tmp_path):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+
+    result = asyncio.run(PhysicalAgentMCP(config_path).submit_task("look around"))
+
+    assert result["ok"] is True
+    assert "actions" not in result
+    assert [
+        action["capability"] for action in result["agent_output"]["actions"]
+    ] == ["observe"]
+    store = open_state_store(config_path=config_path)
+    assert [action.capability for action in store.read_actions()["pending"]] == [
+        "observe"
+    ]
 
 
 def test_mcp_tool_specs_describe_proposal_only_tools(tmp_path):

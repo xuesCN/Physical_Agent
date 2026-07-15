@@ -51,8 +51,11 @@ def test_chat_runtime_rule_based_drafts_actions_without_writing_pending(tmp_path
     )
 
     assert result["ok"] is True
-    assert result["actions"] == []
-    assert [action["capability"] for action in result["draft_actions"]] == ["pick", "place"]
+    assert "actions" not in result
+    assert "draft_actions" not in result
+    assert [
+        action["capability"] for action in result["agent_output"]["actions"]
+    ] == ["pick", "place"]
     assert result["agent_output"]["lifecycle"] == "draft"
     assert result["agent_output"]["actions"][0]["id"]
     gates = [
@@ -62,7 +65,8 @@ def test_chat_runtime_rule_based_drafts_actions_without_writing_pending(tmp_path
     ]
     assert len(gates) == 2
     assert all(task["status"] == "not_scheduled" for task in gates)
-    assert "```action-draft" in result["reply"]
+    assert result["reply"] == result["agent_output"]["message"]
+    assert "```action-draft" not in result["reply"]
     assert result["executed"] == 0
     store = open_state_store(config_path=config_path)
     assert store.read_world()["state"]["objects"]["red_block"]["location"] == "table"
@@ -79,11 +83,13 @@ def test_repeated_chat_drafts_receive_unique_ids_and_remapped_dependencies(tmp_p
     first = runtime.respond("pick the red block and place it on the tray")
     second = runtime.respond("pick the red block and place it on the tray")
 
-    first_ids = [action["id"] for action in first["draft_actions"]]
-    second_ids = [action["id"] for action in second["draft_actions"]]
+    first_actions = first["agent_output"]["actions"]
+    second_actions = second["agent_output"]["actions"]
+    first_ids = [action["id"] for action in first_actions]
+    second_ids = [action["id"] for action in second_actions]
     assert set(first_ids).isdisjoint(second_ids)
-    assert first["draft_actions"][1]["depends_on"] == [first_ids[0]]
-    assert second["draft_actions"][1]["depends_on"] == [second_ids[0]]
+    assert first_actions[1]["depends_on"] == [first_ids[0]]
+    assert second_actions[1]["depends_on"] == [second_ids[0]]
 
 
 def test_chat_runtime_tool_loop_submits_proposal_without_executing(tmp_path, monkeypatch):
@@ -134,7 +140,8 @@ def test_chat_runtime_tool_loop_submits_proposal_without_executing(tmp_path, mon
     assert [action["id"] for action in result["agent_output"]["actions"]] == [
         "act_tool_loop"
     ]
-    assert result["actions"] == result["agent_output"]["actions"]
+    assert "actions" not in result
+    assert "draft_actions" not in result
     store = open_state_store(config_path=config_path)
     assert [action.id for action in store.read_actions()["pending"]] == ["act_tool_loop"]
     assert store.read_actions()["completed"] == []
@@ -229,7 +236,8 @@ def test_chat_runtime_api_safe_flags_disable_hardware_integration(tmp_path, monk
     result = runtime.respond("integrate https://github.com/example/device-sdk")
 
     assert result["mode"] == "rule_based"
-    assert result["actions"] == []
+    assert "actions" not in result
+    assert "draft_actions" not in result
     assert result["code_result"] is None
 
 
@@ -297,8 +305,9 @@ def test_chat_runtime_stream_writes_completed_assistant_message(tmp_path, monkey
     assert messages[-1].content == "hello"
     assert messages[-1].metadata["stream_status"] == "completed"
     assert messages[-1].metadata["partial"] is False
-    assert messages[-1].metadata["chat_contract"] == "structured_v1"
-    assert messages[-1].metadata["has_structured_draft"] is False
+    assert "draft_actions" not in messages[-1].metadata
+    assert "chat_contract" not in messages[-1].metadata
+    assert "has_structured_draft" not in messages[-1].metadata
     assert store.read_actions()["pending"] == []
 
 
@@ -393,15 +402,19 @@ def test_chat_runtime_stream_never_creates_pending_actions(tmp_path):
         "without writing pending actions" in step
         for step in events[-1]["plan"]["steps"]
     )
-    assert "```action-draft" in events[-1]["reply"]
-    assert '"capability": "pick"' in events[-1]["reply"]
-    assert '"capability": "place"' in events[-1]["reply"]
+    assert "actions" not in events[-1]
+    assert "draft_actions" not in events[-1]
+    assert "```action-draft" not in events[-1]["reply"]
+    assert [
+        action["capability"]
+        for action in events[-1]["agent_output"]["actions"]
+    ] == ["pick", "place"]
     store = open_state_store(config_path=config_path)
     assert store.read_actions()["pending"] == []
     assert store.read_plan()["plan"].actions == []
 
 
-def test_chat_runtime_stream_prompt_allows_copyable_action_drafts(tmp_path, monkeypatch):
+def test_chat_runtime_stream_prompt_uses_structured_actions_without_fence(tmp_path, monkeypatch):
     config_path = tmp_path / "physical-agent.yaml"
     setup_project(config_path, publish=True)
     runtime = ChatRuntime(
@@ -433,7 +446,8 @@ def test_chat_runtime_stream_prompt_allows_copyable_action_drafts(tmp_path, monk
     assert "Action Draft JSON" not in captured["system"]
     assert "```action-draft" not in captured["system"]
     assert "capabilities" in captured["payload"]
-    assert events[-1]["actions"] == []
+    assert "actions" not in events[-1]
+    assert "draft_actions" not in events[-1]
     store = open_state_store(config_path=config_path)
     assert store.read_actions()["pending"] == []
 
@@ -455,8 +469,8 @@ def test_chat_runtime_structured_stream_is_early_and_has_one_draft_truth(
     class FakeClient:
         def stream_structured_json(self, messages, **kwargs):
             try:
-                yield '{"reply":"I drafted two actions.'
-                yield ('","intent":"act","steps":["Draft"],"actions":['
+                yield '{"reply":" I drafted two actions.'
+                yield (' ","intent":"act","steps":["Draft"],"actions":['
                     '{"robot":"arm_1","capability":"pick","params":{"object":"red_block"},'
                     '"reason":"pick","depends_on":[]},'
                     '{"robot":"arm_1","capability":"place","params":{"object":"red_block"},'
@@ -474,31 +488,32 @@ def test_chat_runtime_structured_stream_is_early_and_has_one_draft_truth(
     stream = runtime.respond_stream("pick and place")
     first = next(stream)
 
-    assert first == {"type": "delta", "delta": "I drafted two actions."}
+    assert first == {"type": "delta", "delta": " I drafted two actions."}
     assert transport["finished"] is False
 
     events = [first, *list(stream)]
     done = events[-1]
+    streamed_reply = "".join(
+        event["delta"] for event in events if event["type"] == "delta"
+    )
+    expected_reply = " I drafted two actions. "
     assert done["type"] == "done", done
     assert transport == {"finished": True, "closed": True}
 
     output_actions = done["agent_output"]["actions"]
-    assert done["draft_actions"] == output_actions
+    assert "actions" not in done
+    assert "draft_actions" not in done
     assert done["plan"]["agent_output"]["actions"] == output_actions
-    assert done["agent_output"]["message"] == "I drafted two actions."
+    assert streamed_reply == expected_reply
+    assert done["reply"] == expected_reply
+    assert done["plan"]["summary"] == expected_reply
+    assert done["agent_output"]["message"] == expected_reply
     assert "```action-draft" not in done["agent_output"]["message"]
-    assert "```action-draft" in done["reply"]
-    assert done["chat_contract"] == "structured_v1"
-    assert done["has_structured_draft"] is True
+    assert done["reply"] == done["agent_output"]["message"]
+    assert "```action-draft" not in done["reply"]
+    assert "chat_contract" not in done
+    assert "has_structured_draft" not in done
     assert output_actions[1]["depends_on"] == [output_actions[0]["id"]]
-    fence = chat_runtime_module._extract_action_drafts_from_reply(done["reply"])
-    assert [
-        (action["id"], action["capability"], action["depends_on"])
-        for action in fence
-    ] == [
-        (action["id"], action["capability"], action["depends_on"])
-        for action in output_actions
-    ]
     gates = [
         task for task in done["agent_output"]["tasks"]
         if task["kind"] == "safety_gate"
@@ -508,10 +523,11 @@ def test_chat_runtime_structured_stream_is_early_and_has_one_draft_truth(
 
     store = open_state_store(config_path=config_path)
     assistant = store.read_chat()["messages"][-1]
-    assert assistant.metadata["draft_actions"] == output_actions
+    assert assistant.content == expected_reply
     assert assistant.metadata["agent_output"]["actions"] == output_actions
-    assert assistant.metadata["chat_contract"] == "structured_v1"
-    assert assistant.metadata["has_structured_draft"] is True
+    assert "draft_actions" not in assistant.metadata
+    assert "chat_contract" not in assistant.metadata
+    assert "has_structured_draft" not in assistant.metadata
     assert store.read_actions()["pending"] == []
 
 
@@ -663,11 +679,13 @@ def test_chat_runtime_llm_context_uses_summary_and_live_workspace_state(
     assert payload["feedback"]["latest"]["status"] == "completed"
     assert "unsafe_execute" not in json.dumps(payload["capabilities"])
     assert "stale" not in json.dumps(payload["world"])
-    assert result["actions"] == []
-    assert result["draft_actions"][0]["capability"] == "observe"
-    assert result["draft_actions"][0]["metadata"]["expected"][0]["path"] == "robots.arm_1.status"
-    assert '"expected"' in result["reply"]
-    assert "```action-draft" in result["reply"]
+    assert "actions" not in result
+    assert "draft_actions" not in result
+    output_action = result["agent_output"]["actions"][0]
+    assert output_action["capability"] == "observe"
+    assert output_action["metadata"]["expected"][0]["path"] == "robots.arm_1.status"
+    assert result["reply"] == "Proposed from live state."
+    assert "```action-draft" not in result["reply"]
 
 
 def test_chat_runtime_llm_treats_upload_memory_as_untrusted_context(
@@ -724,7 +742,8 @@ def test_chat_runtime_llm_treats_upload_memory_as_untrusted_context(
     result = runtime.respond("summarize the upload")
 
     payload = json.loads(fake_client.messages[1]["content"])
-    assert result["actions"] == []
+    assert "actions" not in result
+    assert "draft_actions" not in result
     assert "UNTRUSTED UPLOAD EXCERPT" in payload["memory"][0]["content"]
     assert payload["memory"][0]["source"] == "upload"
     assert "untrusted context" in payload["context_policy"]

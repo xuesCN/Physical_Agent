@@ -70,9 +70,6 @@ CHAT_RESPONSE_SCHEMA: dict[str, Any] = {
     },
 }
 
-CHAT_CONTRACT_VERSION = "structured_v1"
-
-
 class ChatReplyTurn(StrictModel):
     kind: Literal["reply"] = "reply"
     reply: str
@@ -81,7 +78,6 @@ class ChatReplyTurn(StrictModel):
     memory: list[str]
     refusal_reason: str | None = None
     agent_output: None = None
-    actions: list[Action] = Field(default_factory=list)
 
 
 class ChatDraftTurn(StrictModel):
@@ -92,7 +88,6 @@ class ChatDraftTurn(StrictModel):
     memory: list[str]
     refusal_reason: str | None = None
     agent_output: AgentOutput
-    actions: list[Action]
 
 
 class ChatSubmittedTurn(StrictModel):
@@ -103,7 +98,6 @@ class ChatSubmittedTurn(StrictModel):
     memory: list[str] = Field(default_factory=list)
     refusal_reason: str | None = None
     agent_output: AgentOutput
-    actions: list[Action]
 
 
 ChatTurn = ChatReplyTurn | ChatDraftTurn | ChatSubmittedTurn
@@ -179,7 +173,6 @@ class ChatRuntime:
                     "ok": code_result.ok,
                     "mode": "integration",
                     "reply": assistant.content,
-                    "actions": [],
                     "memory": [],
                     "plan": plan.model_dump(mode="json"),
                     "executed": 0,
@@ -205,7 +198,6 @@ class ChatRuntime:
                 "ok": code_result.ok,
                 "mode": "code",
                 "reply": assistant.content,
-                "actions": [],
                 "memory": [],
                 "plan": None,
                 "executed": 0,
@@ -216,7 +208,6 @@ class ChatRuntime:
 
         if self.enable_hardware_integration and self._looks_like_integration_request(message):
             response = self._respond_with_integration(message)
-            actions: list[Action] = []
             notes: list[str] = []
             executed = 0
             plan = ChatPlan(
@@ -243,7 +234,6 @@ class ChatRuntime:
                 "ok": True,
                 "mode": "integration",
                 "reply": assistant.content,
-                "actions": actions,
                 "memory": notes,
                 "plan": plan.model_dump(mode="json"),
                 "executed": executed,
@@ -312,9 +302,7 @@ class ChatRuntime:
             capabilities=capabilities,
             safety_rules=workspace.read_safety().get("rules", {}),
         )
-        draft_actions = [action.model_dump(mode="json") for action in turn.actions]
         agent_output = turn.agent_output
-        actions: list[Action] = []
         notes = []
         for note in turn.memory:
             if str(note).strip():
@@ -330,7 +318,7 @@ class ChatRuntime:
                 *turn.steps,
                 *(task_graph_steps(agent_output) if agent_output is not None else []),
             ],
-            actions=actions,
+            actions=[],
             needs_watch=False,
             agent_output=agent_output,
         )
@@ -340,8 +328,6 @@ class ChatRuntime:
             turn.reply,
             metadata={
                 "intent": plan.intent,
-                "actions": [action.model_dump(mode="json") for action in actions],
-                "draft_actions": draft_actions,
                 "agent_output": (
                     agent_output.model_dump(mode="json", by_alias=True)
                     if agent_output is not None
@@ -350,8 +336,6 @@ class ChatRuntime:
                 "refusal_reason": turn.refusal_reason,
                 "needs_watch": plan.needs_watch,
                 "executed": executed,
-                "chat_contract": CHAT_CONTRACT_VERSION,
-                "has_structured_draft": agent_output is not None,
             },
         )
         workspace.append_log("Chat agent replied.", actor="agent")
@@ -360,8 +344,6 @@ class ChatRuntime:
             "ok": True,
             "mode": mode,
             "reply": assistant.content,
-            "actions": [action.model_dump(mode="json") for action in actions],
-            "draft_actions": draft_actions,
             "agent_output": (
                 agent_output.model_dump(mode="json", by_alias=True)
                 if agent_output is not None
@@ -374,8 +356,6 @@ class ChatRuntime:
             "code_result": None,
             "refusal_reason": turn.refusal_reason,
             "skills": self._skills_summary(),
-            "chat_contract": CHAT_CONTRACT_VERSION,
-            "has_structured_draft": agent_output is not None,
         }
 
     def respond_stream(
@@ -390,9 +370,8 @@ class ChatRuntime:
         """Stream one proposal-only ChatTurn without starting watch.
 
         LLM mode has one authoritative structured provider stream. Human-facing
-        reply deltas are decoded from that stream as they arrive; the draft
-        output and compatibility fence are derived only after the complete
-        structured decision validates.
+        reply deltas are decoded from that stream as they arrive; the canonical
+        AgentOutput is emitted only after the complete structured decision validates.
         """
 
         self.setup()
@@ -468,14 +447,8 @@ class ChatRuntime:
                         raise ValueError(
                             "Incremental structured reply did not match the validated decision."
                         )
-                    if not turn.reply.startswith(base_reply):
-                        raise ValueError("Compiled ChatTurn changed the provider reply prefix.")
-                    for delta in _text_chunks(turn.reply[len(base_reply) :]):
-                        if _stream_cancelled(cancel_check):
-                            turn = None
-                            raise _ChatStreamAborted()
-                        reply_parts.append(delta)
-                        yield {"type": "delta", "delta": delta}
+                    if turn.reply != base_reply:
+                        raise ValueError("Compiled ChatTurn changed the provider reply.")
                 except Exception as exc:
                     if isinstance(exc, _ChatStreamAborted):
                         raise
@@ -667,7 +640,7 @@ class ChatRuntime:
         error: str | None = None,
     ) -> dict[str, Any]:
         workspace = self._workspace()
-        content = reply.strip()
+        content = reply if status == "completed" else reply.strip()
         if not content:
             if status == "cancelled":
                 content = "[stream cancelled before any assistant text]"
@@ -677,11 +650,6 @@ class ChatRuntime:
                 content = ""
 
         completed_turn = turn if status == "completed" else None
-        draft_actions = (
-            [action.model_dump(mode="json") for action in completed_turn.actions]
-            if completed_turn is not None
-            else []
-        )
         agent_output = completed_turn.agent_output if completed_turn is not None else None
         notes: list[Any] = []
         if completed_turn is not None:
@@ -710,8 +678,6 @@ class ChatRuntime:
         workspace.write_plan(plan)
         metadata: dict[str, Any] = {
             "intent": plan.intent,
-            "actions": [],
-            "draft_actions": draft_actions,
             "agent_output": (
                 agent_output.model_dump(mode="json", by_alias=True)
                 if agent_output is not None
@@ -725,8 +691,6 @@ class ChatRuntime:
             "streamed": True,
             "stream_status": status,
             "partial": status != "completed",
-            "chat_contract": CHAT_CONTRACT_VERSION,
-            "has_structured_draft": agent_output is not None,
         }
         if error:
             metadata["error"] = _truncate(error, 500)
@@ -740,8 +704,6 @@ class ChatRuntime:
             "ok": status == "completed",
             "mode": mode,
             "reply": assistant.content,
-            "actions": [],
-            "draft_actions": draft_actions,
             "agent_output": (
                 agent_output.model_dump(mode="json", by_alias=True)
                 if agent_output is not None
@@ -754,8 +716,6 @@ class ChatRuntime:
             "code_result": None,
             "skills": [],
             "stream_status": status,
-            "chat_contract": CHAT_CONTRACT_VERSION,
-            "has_structured_draft": agent_output is not None,
         }
 
     def _maybe_handle_code_task(self, message: str):
@@ -993,7 +953,6 @@ class ChatRuntime:
                 intent="act",
                 steps=step_summaries,
                 agent_output=agent_output,
-                actions=agent_output.actions,
             )
         else:
             turn = ChatReplyTurn(
@@ -1024,14 +983,6 @@ class ChatRuntime:
             turn.reply,
             metadata={
                 "intent": plan.intent,
-                "actions": [
-                    action.model_dump(mode="json")
-                    for action in (
-                        turn.agent_output.actions
-                        if turn.agent_output is not None
-                        else []
-                    )
-                ],
                 "tool_steps": [
                     {
                         "name": step.name,
@@ -1056,14 +1007,6 @@ class ChatRuntime:
             "ok": True,
             "mode": "tool_loop",
             "reply": assistant.content,
-            "actions": [
-                action.model_dump(mode="json")
-                for action in (
-                    turn.agent_output.actions
-                    if turn.agent_output is not None
-                    else []
-                )
-            ],
             "memory": turn.memory,
             "agent_output": (
                 turn.agent_output.model_dump(mode="json", by_alias=True)
@@ -1131,7 +1074,7 @@ class ChatRuntime:
 
         normalized = _normalize_chat_payload(response)
         draft_payloads = _assign_unique_draft_ids(
-            _normalize_action_drafts(normalized["actions"])
+            _normalize_action_intents(normalized["actions"])
         )
         actions = _draft_action_models(draft_payloads)
         if not actions:
@@ -1143,7 +1086,6 @@ class ChatRuntime:
                 refusal_reason=normalized["refusal_reason"],
             )
 
-        reply = _reply_with_action_draft(normalized["reply"], actions)
         steps = [
             *normalized["steps"],
             "Prepared an action draft without writing pending actions.",
@@ -1158,13 +1100,12 @@ class ChatRuntime:
             safety_rules=safety_rules,
         )
         return ChatDraftTurn(
-            reply=reply,
+            reply=normalized["reply"],
             intent=normalized["intent"],
             steps=steps,
             memory=normalized["memory"],
             refusal_reason=normalized["refusal_reason"],
             agent_output=agent_output,
-            actions=actions,
         )
 
     def _respond_with_rules(
@@ -1659,32 +1600,7 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     return value
 
 
-def _action_draft_json(actions: list[Any]) -> str:
-    drafts: list[dict[str, Any]] = []
-    for action in actions:
-        if hasattr(action, "model_dump"):
-            item = action.model_dump(mode="json")
-        elif isinstance(action, dict):
-            item = dict(action)
-        else:
-            continue
-        draft: dict[str, Any] = {}
-        if item.get("id"):
-            draft["id"] = item["id"]
-        draft["robot"] = item.get("robot", "")
-        draft["capability"] = item.get("capability", "")
-        draft["params"] = item.get("params") or {}
-        if item.get("reason"):
-            draft["reason"] = item["reason"]
-        draft["depends_on"] = item.get("depends_on") or []
-        if isinstance(item.get("metadata"), dict) and item["metadata"]:
-            draft["metadata"] = item["metadata"]
-        drafts.append(draft)
-    payload: Any = drafts[0] if len(drafts) == 1 else drafts
-    return json.dumps(payload, ensure_ascii=False, indent=2)
-
-
-def _normalize_action_drafts(actions: list[Any]) -> list[dict[str, Any]]:
+def _normalize_action_intents(actions: list[Any]) -> list[dict[str, Any]]:
     drafts: list[dict[str, Any]] = []
     for action in actions:
         if hasattr(action, "model_dump"):
@@ -1789,33 +1705,6 @@ def _normalize_draft_dependencies(
         elif action_ids:
             normalized.append(action_ids[0])
     return normalized
-
-
-def _extract_action_drafts_from_reply(reply: str) -> list[dict[str, Any]]:
-    match = re.search(
-        r"```action-draft\s*(.*?)\s*```",
-        reply,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if match is None:
-        return []
-    try:
-        value = json.loads(match.group(1))
-    except (TypeError, json.JSONDecodeError):
-        return []
-    items = value if isinstance(value, list) else [value]
-    return _normalize_action_drafts(items)
-
-
-def _reply_with_action_draft(reply: str, drafts: list[dict[str, Any]]) -> str:
-    intro = (reply or "I prepared an action draft for review.").strip()
-    return (
-        f"{intro}\n\n"
-        "Review this draft, then add it to the action board if it matches your intent.\n\n"
-        f"```action-draft\n{_action_draft_json(drafts)}\n```\n\n"
-        "Adding it to the action board is separate from execution approval; "
-        "watch/SafetyGate will still validate before hardware can move."
-    )
 
 
 def _normalize_chat_payload(payload: dict[str, Any]) -> dict[str, Any]:

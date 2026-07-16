@@ -317,6 +317,10 @@ class WatchRuntime:
                     ),
                     result={"error_type": "DriverCallTimeout", "timeout_s": timeout_s},
                 )
+                # Hardware state is unknown after a timeout. Attempt the
+                # safety mitigation before any result/feedback persistence so
+                # a storage failure cannot suppress the halt.
+                await self._halt_robot_after_timeout(action.robot, loaded)
                 self._finalize_claimed_action(action, status="cancelled")
                 executed_count += 1
                 await self._record_action_result(action, result)
@@ -324,7 +328,6 @@ class WatchRuntime:
                     action,
                     f"Action failed before expectation check: {result.message}",
                 )
-                await self._halt_robot_after_timeout(action.robot, loaded)
                 continue
             except (
                 TransportReconnecting,

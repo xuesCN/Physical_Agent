@@ -38,6 +38,34 @@ def _propose_observe(config_path: Path, action_id: str) -> None:
     )
 
 
+def _fail_log_mirror_after(
+    monkeypatch,
+    log_path: Path,
+    *,
+    successful_writes: int,
+) -> None:
+    real_open = Path.open
+    attempts = 0
+    resolved_log_path = log_path.resolve()
+
+    def fail_log_write(path: Path, *args, **kwargs):
+        nonlocal attempts
+        mode = args[0] if args else kwargs.get("mode", "r")
+        resolved = path.resolve()
+        is_log_target = resolved == resolved_log_path
+        is_log_temp = (
+            resolved.parent == resolved_log_path.parent
+            and path.name.startswith(f".{resolved_log_path.name}.")
+        )
+        if "w" in mode and (is_log_target or is_log_temp):
+            attempts += 1
+            if attempts > successful_writes:
+                raise OSError("simulated LOG mirror write failure")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_log_write)
+
+
 def test_connect_timeout_bounds_setup(tmp_path, monkeypatch):
     config_path = _write_config(tmp_path, connect_timeout_s=0.1)
     monkeypatch.setattr(MockArmDriver, "connect", _hang)
@@ -90,6 +118,84 @@ def test_execute_timeout_fails_action_and_keeps_loop_alive(tmp_path):
     last = open_state_store(config_path=config_path).read_feedback()["history"][-1]
     assert last["action_id"] == "act_after_hang"
     assert last["status"] == "completed"
+
+
+def test_execute_timeout_halts_even_when_result_log_mirror_fails(tmp_path, monkeypatch):
+    config_path = _write_config(tmp_path, action_timeout_s=0.1)
+    watch = WatchRuntime(config_path)
+    asyncio.run(watch.setup())
+    driver = watch.loaded_drivers["arm_1"].driver
+    halted: list[bool] = []
+
+    async def record_halt(*args, **kwargs):
+        halted.append(True)
+
+    driver.execute = _hang
+    driver.halt = record_halt
+    _propose_observe(config_path, "act_hang_mirror_failure")
+
+    try:
+        with monkeypatch.context() as patch:
+            _fail_log_mirror_after(
+                patch,
+                watch._workspace().file("log"),
+                successful_writes=1,
+            )
+            assert asyncio.run(watch.step(setup=False)) == 1
+    finally:
+        asyncio.run(watch.shutdown())
+
+    assert halted
+    store = open_state_store(config_path=config_path)
+    action_events = [
+        event
+        for event in store.read_feedback()["history"]
+        if event.get("action_id") == "act_hang_mirror_failure"
+    ]
+    assert action_events[-1]["status"] == "failed"
+
+
+def test_completed_action_verification_survives_result_log_mirror_failure(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = _write_config(tmp_path)
+    watch = WatchRuntime(config_path)
+    asyncio.run(watch.setup())
+    store = open_state_store(config_path=config_path)
+    store.append_pending_action(
+        Action(
+            id="act_verify_mirror_failure",
+            robot="arm_1",
+            capability="observe",
+            params={},
+            reason="verification must follow execution",
+            metadata={
+                "expected": [
+                    {"path": "robots.arm_1.status", "op": "eq", "value": "idle"}
+                ]
+            },
+        )
+    )
+
+    try:
+        with monkeypatch.context() as patch:
+            _fail_log_mirror_after(
+                patch,
+                store.file("log"),
+                successful_writes=1,
+            )
+            assert asyncio.run(watch.step(setup=False)) == 1
+    finally:
+        asyncio.run(watch.shutdown())
+
+    verification_events = [
+        event
+        for event in store.read_feedback()["history"]
+        if event.get("event") == "expectation_check"
+        and event.get("action_id") == "act_verify_mirror_failure"
+    ]
+    assert verification_events[-1]["status"] == "verified"
 
 
 def test_observe_timeout_skips_driver_without_feedback_spam(tmp_path):

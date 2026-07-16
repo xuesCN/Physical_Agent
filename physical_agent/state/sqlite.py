@@ -1088,7 +1088,13 @@ class SqliteStateStore:
                 {"metadata": self._metadata("log", revision)},
                 revision,
             )
-        self._sidecars.append_log(message, actor=actor)
+        try:
+            self._sync_log_mirror()
+        except Exception:
+            # SQLite is the log truth. A stale/missing human mirror remains
+            # visible through validate_log_mirror()/doctor, but must not turn
+            # an already committed state or control-flow mutation into failure.
+            pass
 
     def validate_log_mirror(self) -> dict[str, Any]:
         """Validate that the human LOG mirror matches SQLite's committed revision."""
@@ -1814,14 +1820,17 @@ class SqliteStateStore:
 
     def _read_log_document(self) -> dict[str, Any]:
         with self._connect() as conn:
-            metadata = self._read_metadata_conn(conn, "log")
-            rows = conn.execute(
-                """
-                SELECT id, ts, actor, message
-                FROM log_entries
-                ORDER BY id
-                """
-            ).fetchall()
+            return self._read_log_document_conn(conn)
+
+    def _read_log_document_conn(self, conn: sqlite3.Connection) -> dict[str, Any]:
+        metadata = self._read_metadata_conn(conn, "log")
+        rows = conn.execute(
+            """
+            SELECT id, ts, actor, message
+            FROM log_entries
+            ORDER BY id
+            """
+        ).fetchall()
         return {
             "metadata": metadata,
             "entries": [
@@ -1838,6 +1847,18 @@ class SqliteStateStore:
                 for row in rows
             ],
         }
+
+    def _sync_log_mirror(self) -> None:
+        with self._connect() as conn:
+            # This second write transaction serializes snapshot/read/publish
+            # across processes. Every waiter therefore rebuilds from the
+            # latest committed log instead of overwriting it with stale state.
+            conn.execute("BEGIN IMMEDIATE")
+            snapshot = self._read_log_document_conn(conn)
+            self._sidecars.write_log_snapshot(
+                metadata=snapshot["metadata"],
+                entries=snapshot["entries"],
+            )
 
     def _read_actions_by_status(
         self,

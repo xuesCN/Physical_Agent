@@ -650,6 +650,73 @@ def test_api_approve_reject_actions_are_idempotent_and_state_protected(tmp_path)
     assert missing.status_code == 404
 
 
+def test_api_approve_succeeds_when_log_mirror_write_fails_after_commit(
+    tmp_path,
+    monkeypatch,
+):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    store.write_capabilities(
+        {
+            "arm_1": {
+                "kind": "arm",
+                "driver": "mock_arm",
+                "status": "connected",
+                "capabilities": [
+                    {
+                        "name": "observe",
+                        "description": "Inspect with approval.",
+                        "params_schema": {"type": "object"},
+                        "requires_approval": True,
+                    }
+                ],
+            }
+        }
+    )
+    client = TestClient(create_app(config_path), raise_server_exceptions=False)
+    proposed = client.post(
+        "/api/actions/propose",
+        json={
+            "id": "act_api_mirror_failure",
+            "robot": "arm_1",
+            "capability": "observe",
+            "params": {},
+            "reason": "Approval must survive mirror failure.",
+            "depends_on": [],
+        },
+    )
+    assert proposed.status_code == 200
+
+    log_path = store.file("log").resolve()
+    real_open = Path.open
+
+    def fail_log_write(path: Path, *args, **kwargs):
+        mode = args[0] if args else kwargs.get("mode", "r")
+        resolved = path.resolve()
+        is_log_target = resolved == log_path
+        is_log_temp = (
+            resolved.parent == log_path.parent
+            and path.name.startswith(f".{log_path.name}.")
+        )
+        if "w" in mode and (is_log_target or is_log_temp):
+            raise OSError("simulated LOG mirror write failure")
+        return real_open(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", fail_log_write)
+        approved = client.post(
+            "/api/actions/act_api_mirror_failure/approve",
+            json={"reason": "Intentional.", "actor": "gui"},
+        )
+
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["changed"] is True
+    assert approved.json()["action"]["metadata"]["approval"]["status"] == "approved"
+    pending = {action.id: action for action in store.read_actions()["pending"]}
+    assert pending["act_api_mirror_failure"].metadata["approval"]["status"] == "approved"
+
+
 def test_api_reject_pending_action_moves_to_cancelled_with_reason(tmp_path):
     TestClient = _client_or_skip()
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)

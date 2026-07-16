@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import json
+import multiprocessing
 from pathlib import Path
 import re
 import sqlite3
@@ -21,6 +22,15 @@ DEFAULT_SAFETY_RULES = {
     "max_action_timeout_s": 30,
     "forbid_duplicate_action_ids": True,
 }
+
+
+def _append_log_from_spawned_process(
+    workspace_path: str,
+    message: str,
+    start_barrier,
+) -> None:
+    start_barrier.wait(timeout=60)
+    SqliteStateStore(workspace_path).append_log(message, actor="worker")
 
 
 def _project(tmp_path: Path) -> tuple[Path, SqliteStateStore]:
@@ -147,23 +157,75 @@ def test_log_sidecar_concurrent_append_keeps_every_entry_and_revision(tmp_path):
     assert store.validate_log_mirror()["revision"] == 1 + len(messages)
 
 
+def test_log_mirror_spawn_processes_preserve_all_entries_and_latest_revision(tmp_path):
+    _, store = _project(tmp_path)
+    process_count = 32
+    messages = [
+        f"spawned log {index:02d} " + (str(index % 10) * 50_000)
+        for index in range(process_count)
+    ]
+    context = multiprocessing.get_context("spawn")
+    start_barrier = context.Barrier(process_count + 1)
+    processes = [
+        context.Process(
+            target=_append_log_from_spawned_process,
+            args=(str(store.path), message, start_barrier),
+        )
+        for message in messages
+    ]
+
+    try:
+        for process in processes:
+            process.start()
+        start_barrier.wait(timeout=60)
+        for process in processes:
+            process.join(timeout=60)
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=10)
+
+    with sqlite3.connect(store.db_path) as conn:
+        rows = conn.execute(
+            "SELECT actor, message FROM log_entries ORDER BY id"
+        ).fetchall()
+        sqlite_revision = conn.execute(
+            "SELECT revision FROM doc_state WHERE name = 'log'"
+        ).fetchone()[0]
+    assert sorted(rows) == sorted(("worker", message) for message in messages)
+    assert sqlite_revision == 1 + process_count
+
+    mirrored = parse_front_matter(store.file("log").read_text(encoding="utf-8"))
+    assert mirrored.revision == sqlite_revision
+    for message in messages:
+        assert f"**worker**: {message}" in mirrored.body
+    assert {process.exitcode for process in processes} == {0}
+
+
 def test_log_mirror_write_failure_keeps_sqlite_truth_and_doctor_reports_stale_revision(
     tmp_path,
     monkeypatch,
 ):
     config_path, store = _project(tmp_path)
     log_path = store.file("log").resolve()
-    real_write_text = Path.write_text
+    real_open = Path.open
 
     def fail_log_write(path: Path, *args, **kwargs):
-        if path.resolve() == log_path:
+        mode = args[0] if args else kwargs.get("mode", "r")
+        resolved = path.resolve()
+        is_log_target = resolved == log_path
+        is_log_temp = (
+            resolved.parent == log_path.parent
+            and path.name.startswith(f".{log_path.name}.")
+        )
+        if "w" in mode and (is_log_target or is_log_temp):
             raise OSError("simulated LOG mirror write failure")
-        return real_write_text(path, *args, **kwargs)
+        return real_open(path, *args, **kwargs)
 
     with monkeypatch.context() as patch:
-        patch.setattr(Path, "write_text", fail_log_write)
-        with pytest.raises(OSError, match="simulated LOG mirror write failure"):
-            store.append_log("committed before mirror failure", actor="watch")
+        patch.setattr(Path, "open", fail_log_write)
+        assert store.append_log("committed before mirror failure", actor="watch") is None
 
     log = _audit_json(store, "log")
     assert log["entries"][0]["message"] == "committed before mirror failure"
@@ -172,18 +234,19 @@ def test_log_mirror_write_failure_keeps_sqlite_truth_and_doctor_reports_stale_re
     assert "file=1, sqlite=2" in failed["workspace:log"].message
 
 
-def test_malformed_log_mirror_keeps_committed_sqlite_entry_and_doctor_fails(tmp_path):
+def test_append_log_rebuilds_malformed_log_mirror_from_sqlite(tmp_path):
     config_path, store = _project(tmp_path)
     store.file("log").write_text("not front matter", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="front matter"):
-        store.append_log("committed despite malformed mirror", actor="watch")
+    store.append_log("committed despite malformed mirror", actor="watch")
 
     log = _audit_json(store, "log")
     assert log["entries"][0]["message"] == "committed despite malformed mirror"
-    failed = {check.name: check for check in run_doctor(config_path)}
-    assert failed["workspace:log"].ok is False
-    assert "front matter" in failed["workspace:log"].message.lower()
+    mirrored = parse_front_matter(store.file("log").read_text(encoding="utf-8"))
+    assert mirrored.revision == 2
+    assert "**watch**: committed despite malformed mirror" in mirrored.body
+    checks = {check.name: check for check in run_doctor(config_path)}
+    assert checks["workspace:log"].ok is True
 
 
 @pytest.mark.parametrize("name", ["safety", "log"])

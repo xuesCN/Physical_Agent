@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import os
 from pathlib import Path
-import threading
-from typing import Any
+from typing import Any, Iterable, Mapping
+from uuid import uuid4
 
 from physical_agent.protocol.markdown import (
     extract_yaml_block_after_heading,
@@ -27,19 +27,6 @@ DEFAULT_SAFETY_RULES = {
 
 SAFETY_SCHEMA = "physical-agent/safety/v1"
 LOG_SCHEMA = "physical-agent/log/v1"
-
-_LOG_LOCKS: dict[Path, threading.Lock] = {}
-_LOG_LOCKS_GUARD = threading.Lock()
-
-
-def _log_lock(path: Path) -> threading.Lock:
-    key = path.resolve()
-    with _LOG_LOCKS_GUARD:
-        lock = _LOG_LOCKS.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _LOG_LOCKS[key] = lock
-        return lock
 
 
 class StateSidecars:
@@ -83,26 +70,27 @@ class StateSidecars:
             "rules": extract_yaml_block_after_heading(doc.body, "Rules", level=2) or {},
         }
 
-    def append_log(self, message: str, *, actor: str | None = None) -> None:
+    def write_log_snapshot(
+        self,
+        *,
+        metadata: Mapping[str, Any],
+        entries: Iterable[Mapping[str, Any]],
+    ) -> None:
         target = self.log_path
-        with _log_lock(target):
-            if target.exists():
-                doc = parse_front_matter(target.read_text(encoding="utf-8"))
-                metadata = dict(doc.metadata)
-                body = doc.body.rstrip() + "\n\n"
-                metadata["revision"] = doc.revision + 1
-            else:
-                metadata = {"schema": LOG_SCHEMA, "owner": "system", "revision": 1}
-                body = "# Physical Agent Log\n\n"
-            timestamp = (
-                datetime.now(UTC)
-                .replace(microsecond=0)
-                .isoformat()
-                .replace("+00:00", "Z")
-            )
-            prefix = f"**{actor}**: " if actor else ""
-            body += f"## {timestamp}\n\n{prefix}{message}\n"
-            target.write_text(render_front_matter(metadata, body), encoding="utf-8")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+        rendered = _render_log_snapshot(metadata=metadata, entries=entries)
+        try:
+            with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write(rendered)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, target)
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def validate_log(self, *, expected_revision: int) -> dict[str, Any]:
         doc = parse_front_matter(self.log_path.read_text(encoding="utf-8"))
@@ -148,3 +136,16 @@ def _render_initial_log() -> str:
         "---\n"
         "# Physical Agent Log\n"
     )
+
+
+def _render_log_snapshot(
+    *,
+    metadata: Mapping[str, Any],
+    entries: Iterable[Mapping[str, Any]],
+) -> str:
+    sections = ["# Physical Agent Log\n"]
+    for entry in entries:
+        actor = entry.get("actor")
+        prefix = f"**{actor}**: " if actor else ""
+        sections.append(f"\n## {entry['ts']}\n\n{prefix}{entry['message']}\n")
+    return render_front_matter(dict(metadata), "".join(sections))

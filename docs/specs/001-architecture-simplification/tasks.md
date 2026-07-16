@@ -337,15 +337,15 @@
 - [x] safety AST/grep 边界扫描。
 - [x] R0-R8 每个删除项有对应替代/负用例证据。
 - [x] SPEC R0-R8 标记完成；REFACTORING 追加实现、决策和教训。
-- [x] commit/push：实现 closure commit `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功；不创建独立 handoff。
+- [x] commit/push：实现 closure commit `c4da4f9`，fork Push run `29476327424`、PR run `29476329954` 均成功；evidence closure `33b062b`，fork Push run `29477199756`、PR run `29477202468` 均成功；不创建独立 handoff。
 
 ### 删除证据矩阵
 
 | 删除内容 | 当前替代路径 | 正向测试 | 负向测试或扫描证据 | 提交或 CI 证据 |
 | --- | --- | --- | --- | --- |
 | legacy GUI | `physical-agent gui` 薄入口复用 FastAPI app factory 与 packaged React Dashboard | `tests/test_cli_dashboard.py`、`tests/test_dashboard_parity.py`、Dashboard Playwright 主路径 | wheel member 负断言；正式 legacy routes 404；`physical_agent/gui/` 源码为零 | `5764bac`；fork Push run `29140289239`、PR run `29140290422` 均成功 |
-| Markdown workspace/migration | SQLite `state.db` 唯一运行态；`StateSidecars` 只管 SAFETY/LOG；旧数据用 `9072b4e` 独立历史 checkout 救援 | `tests/test_sidecar_behavior.py`、`scripts/smoke_legacy_workspace_rescue.py` | `tests/test_backend_matrix.py`/`test_state_store.py` 锁显式与隐式 legacy fail-closed；wheel 不含 migrator/full Workspace | `d1713a0`、`6309a1b`、`4a8ec86`、`9698b3e` |
-| auto_step | `physical-agent watch`、`physical-agent api --watch` 或 `physical-agent gui` 的独立 watch 生命周期 | CLI chat/API proposal-only tests 与正式 watch smoke | 生产 `auto_step|auto-step|_run_chat_auto_step` 零命中；R8 再删除固定 `executed=0` 与 CLI 不可达旧文案 | `da14064`；fork Push run `29234483572`、PR run `29234488489` 均成功 |
+| Markdown workspace/migration | SQLite `state.db` 唯一运行态；`StateSidecars` 只管 SAFETY/LOG；旧数据用 `9072b4e` 独立历史 checkout 救援 | `tests/test_sidecar_behavior.py`、`scripts/smoke_legacy_workspace_rescue.py` | `tests/test_backend_matrix.py`/`test_state_store.py` 锁显式与隐式 legacy fail-closed；wheel 不含 migrator/full Workspace | sidecar cutover `a64be59`；`d1713a0`、`6309a1b`、`4a8ec86`、`9698b3e`；R3 closure `a431c3b`，fork Push run `29233815375`、PR run `29233817630` 均成功 |
+| auto_step | `physical-agent watch`、`physical-agent api --watch` 或 `physical-agent gui` 的独立 watch 生命周期 | CLI chat/API proposal-only tests 与正式 watch smoke | 生产 `auto_step|auto-step|_run_chat_auto_step` 零命中；R8 再删除固定 `executed=0` 与 CLI 不可达旧文案 | `da14064`；fork Push run `29234483572`、PR run `29234488489` 均成功；R8 `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功 |
 | Chat/Watch/Driver 越权路径 | 提案侧只产 intent/`AgentOutput`；watch 在 Gate 后唯一调用 driver | `tests/test_watch_runtime.py`、`tests/test_safety.py` | `tests/test_safety_boundaries.py` AST + request-side monkeypatch；真实 `driver.execute` 只在 `watch/runtime.py` | `da14064`，fork Push run `29234483572`、PR run `29234488489` 均成功；`d1ca53c3`，fork Push run `29321294713`、PR run `29321297674` 均成功；`9ba44af`，fork Push run `29399978672`、PR run `29399982326` 均成功 |
 | 重复 projection/read model | `application.output_projection` 唯一合成 current `AgentOutput`；`/api/state.actions` 保留 board truth | `tests/test_output_projection.py`、React/TUI canonical status 负例 | React/TUI 不重算 Gate；R8 删除可陈旧的 `ChatPlan.actions` 第三份投影并锁旧 payload 忽略 | `9adaf6c` 是先前 status fix；`0bb7807` 是 R6 closure head，fork Push run `29312317707`、PR run `29312319687` 均成功；R8 `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功 |
 | `_append_actions` | `ProposalService` + `StateStore.append_pending_actions()` 原子 batch | `tests/test_proposal_service.py`、`tests/test_chat_runtime.py`、batch/dependency 回归 | `chat_runtime.py` 中 `_append_actions|_max_action_number` 零命中 | `0bb7807`；fork Push run `29312317707`、PR run `29312319687` 均成功 |
@@ -354,14 +354,19 @@
 
 ## R8.1 阶段 review hardening
 
-- [ ] LOG mirror 跨进程并发后与 SQLite 条目/revision 一致，并使用原子替换。
-- [ ] LOG mirror 失败不阻断 timeout halt、expectation check 或已提交 API mutation；doctor 仍能诊断 stale mirror。
-- [ ] in-progress Gate evidence 必须匹配当前 claim owner；旧 owner pass 不满足 current obligation。
-- [ ] OpenAPI `ChatPlan.agent_output` 指向 canonical `AgentOutput`，且 `ChatPlan.actions` 继续不存在。
-- [ ] spec/plan/evidence matrix/PLAYBOOK/REFACTORING 与 PR 元数据一致，历史门禁/rollback 偏离有正式记录。
+实现与定向证据（2026-07-16）：LOG 修复 `6d53db3`；Gate claim-owner correlation `4c9c6a4` 及 late-feedback fencing `c38e3ec`；nested OpenAPI `89f84c8`。Task 1 focused `60 passed`、group `177 passed`、阶段 full `439 passed`；Task 2 combined `127 passed`；Task 3 focused `78 passed + 78 passed`。以上不替代 Task 5 最终树全量验证；独立终审、push 与 exact-head CI 仍待执行。
+
+- [x] LOG mirror 跨进程并发后与 SQLite 条目/revision 一致，并使用原子替换。
+- [x] LOG mirror 失败不阻断 timeout halt、expectation check 或已提交 API mutation；doctor 仍能诊断 stale mirror。
+- [x] in-progress Gate evidence 必须匹配当前 claim owner；旧 owner pass 不满足 current obligation。
+- [x] OpenAPI `ChatPlan.agent_output` 指向 canonical `AgentOutput`，且 `ChatPlan.actions` 继续不存在。
+- [ ] spec/plan/evidence matrix/PLAYBOOK/REFACTORING 已纠偏；draft PR 元数据更新仍待执行，历史门禁/rollback 偏离已正式记录。
 - [ ] Python full、frontend build/Playwright、TUI、clean-wheel、多进程/安全专项和 docs/golden 全绿。
 - [ ] 独立终审无 Critical/Important；commit/push 与 exact-head Push/PR CI 成功。
-- [ ] 新功能冻结项保持冻结；本轮 brief 收工删除，不创建 handoff。
+- [x] 新功能冻结项保持冻结。
+- [ ] 本轮 brief 收工删除，不创建 handoff。
+
+R8.1 不解冻 VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 或自动 replan；只有出现可复现的真实需求并形成显式 SPEC 决策后，才可重启对应条目。
 
 ## 暂停项（本规格期间不实施）
 

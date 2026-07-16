@@ -398,13 +398,28 @@ def test_r8_deletion_evidence_matrix_covers_every_retired_surface() -> None:
     }
     expected_ci_evidence = {
         "legacy GUI": "`5764bac`；fork Push run `29140289239`、PR run `29140290422` 均成功",
-        "auto_step": "`da14064`；fork Push run `29234483572`、PR run `29234488489` 均成功",
         "_append_actions": "`0bb7807`；fork Push run `29312317707`、PR run `29312319687` 均成功",
         "action-draft fence": "`9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功",
         "proposal convenience fields": "`9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功",
     }
     for retired_surface, expected_evidence in expected_ci_evidence.items():
         assert expected_evidence in evidence_by_surface[retired_surface]
+
+    markdown_evidence = evidence_by_surface["Markdown workspace/migration"]
+    for fragment in (
+        "sidecar cutover `a64be59`",
+        "R3 closure `a431c3b`",
+        "fork Push run `29233815375`",
+        "PR run `29233817630`",
+    ):
+        assert fragment in markdown_evidence
+
+    auto_step_evidence = evidence_by_surface["auto_step"]
+    for fragment in (
+        "`da14064`；fork Push run `29234483572`、PR run `29234488489` 均成功",
+        "R8 `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功",
+    ):
+        assert fragment in auto_step_evidence
 
     chat_watch_driver_evidence = evidence_by_surface["Chat/Watch/Driver 越权路径"]
     for expected_evidence in (
@@ -497,7 +512,7 @@ def test_r8_final_status_maps_every_gate_and_remote_evidence_to_its_document() -
         "- [x] safety AST/grep 边界扫描。",
         "- [x] R0-R8 每个删除项有对应替代/负用例证据。",
         "- [x] SPEC R0-R8 标记完成；REFACTORING 追加实现、决策和教训。",
-        "- [x] commit/push：实现 closure commit `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功；不创建独立 handoff。",
+        "- [x] commit/push：实现 closure commit `c4da4f9`，fork Push run `29476327424`、PR run `29476329954` 均成功；evidence closure `33b062b`，fork Push run `29477199756`、PR run `29477202468` 均成功；不创建独立 handoff。",
     )
     assert checklist == list(expected_checklist)
     assert all("暂停" not in item for item in checklist)
@@ -510,8 +525,9 @@ def test_r8_final_status_maps_every_gate_and_remote_evidence_to_its_document() -
     spec_r8_status = spec_r8_rows[0].rsplit(" | ", 1)[1].removesuffix(" |")
     assert spec_r8_status.startswith("✅ 2026-07-16 完成：")
     assert (
-        "实现 closure commit `c4da4f9`；fork Push run `29476327424`、"
-        "PR run `29476329954` 均成功"
+        "实现 closure commit `c4da4f9`，fork Push run `29476327424`、"
+        "PR run `29476329954` 均成功；evidence closure `33b062b`，fork Push run "
+        "`29477199756`、PR run `29477202468` 均成功"
         in spec_r8_status
     )
     for boundary in (
@@ -539,8 +555,9 @@ def test_r8_final_status_maps_every_gate_and_remote_evidence_to_its_document() -
     current_progress = progress_paragraphs[0]
     assert "R8 已完成收口" in current_progress
     assert (
-        "实现 closure commit `c4da4f9`；fork Push run `29476327424`、"
-        "PR run `29476329954` 均成功"
+        "实现 closure commit `c4da4f9`，fork Push run `29476327424`、"
+        "PR run `29476329954` 均成功；evidence closure `33b062b`，fork Push run "
+        "`29477199756`、PR run `29477202468` 均成功"
         in current_progress
     )
     assert "冻结项不自动恢复" in current_progress
@@ -554,7 +571,7 @@ def test_r8_final_status_maps_every_gate_and_remote_evidence_to_its_document() -
         line for line in refactoring_table.splitlines() if line.startswith("| R8 |")
     ]
     assert refactoring_r8_rows == [
-        "| R8 | 当前架构、文档、示例、OpenAPI、发布包与全量门禁收口 | `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功 |"
+        "| R8 | 当前架构、文档、示例、OpenAPI、发布包与全量门禁收口 | implementation closure `c4da4f9`，fork Push run `29476327424`、PR run `29476329954`；evidence closure `33b062b`，fork Push run `29477199756`、PR run `29477202468`；均成功 |"
     ]
 
     refactoring_lessons = _section(
@@ -569,6 +586,132 @@ def test_r8_final_status_maps_every_gate_and_remote_evidence_to_its_document() -
     assert checkbox_lessons == [
         "- **checkbox 测试必须锁门槛身份、阶段与证据语义**（R8 review-fix 的教训）：pre-closure 阶段应逐一锁定 11 个本地门槛为 `[x]`，第 11 项沿用 SPEC 🟡 的“实现与本地验收完成、等待最终提交和远端 CI”，第 12 项 commit/push 为 `[ ]`；只有真实 closure commit 已 push 且 fork Push/PR CI 均成功后，才能切换为 12 项全部 `[x]` 与 SPEC ✅ 完成，最终状态测试还必须逐项锁定完整门槛身份和对应 commit/run 证据。"
     ]
+
+
+def test_r81_formal_status_and_stage_evidence_are_current() -> None:
+    stage_spec = _read("docs/specs/001-architecture-simplification/spec.md")
+    stage_plan = _read("docs/specs/001-architecture-simplification/plan.md")
+    overview = _section(stage_plan, "## 顺序总览")
+    r8_plan = _section(stage_plan, "## 8. 文档、发布形态与全量验证收口")
+
+    assert (
+        "状态：R0-R8 已完成；R8.1 实现与定向验收完成，等待 Task 5 "
+        "最终树全量验证、独立终审、commit/push 与 exact-head 远端 CI"
+        in stage_spec
+    )
+    assert "R8 commit/push 项仍未完成" not in stage_spec
+
+    expected_stage_evidence = {
+        "| 5 |": (
+            "`d1ca53c3`",
+            "fork Push run `29321294713`",
+            "PR run `29321297674`",
+        ),
+        "| 6 |": (
+            "`0bb7807`",
+            "fork Push run `29312317707`",
+            "PR run `29312319687`",
+        ),
+        "| 7 |": (
+            "`9ba44af`",
+            "fork Push run `29399978672`",
+            "PR run `29399982326`",
+        ),
+        "| 8 |": (
+            "`c4da4f9`",
+            "fork Push run `29476327424`",
+            "PR run `29476329954`",
+            "evidence closure `33b062b`",
+            "fork Push run `29477199756`",
+            "PR run `29477202468`",
+        ),
+    }
+    for row_prefix, fragments in expected_stage_evidence.items():
+        rows = [line for line in overview.splitlines() if line.startswith(row_prefix)]
+        assert len(rows) == 1
+        for fragment in fragments:
+            assert fragment in rows[0]
+
+    assert "等待 commit/push/远端 CI" not in r8_plan
+    assert "等待最终提交和远端 CI" not in r8_plan
+    assert "evidence closure `33b062b`" in r8_plan
+
+
+def test_r81_corrects_t3_status_and_records_historical_gate_deviations() -> None:
+    playbook_t = _section(
+        _read("docs/PLAYBOOK.zh-CN.md"),
+        "## T 系列：Ink 终端 UI（独立线，与 F 主线无依赖）",
+    )
+    refactoring = _read("docs/REFACTORING.zh-CN.md")
+    decisions = _section(refactoring, "## 3. 关键决策与偏离（跨阶段汇总）")
+    lessons = _section(refactoring, "## 4. 经验教训（流程侧）")
+
+    assert "T3 的 config/upload 仍未完成" not in playbook_t
+    assert "T3 的 config/robots/uploads 已在 2026-07-08 完成" in playbook_t
+
+    for fragment in (
+        "R6 `0bb7807` 先于 R5 real-Chromium closure `d1ca53c3`",
+        "fallback 仍保留且 R7 保持 No-Go",
+        "不存在当前 compatibility defect",
+        "hard-gate 顺序仍发生偏离",
+        "R6 在 `0bb7807` 合并 consumer migration 与 dead-code removal",
+        "R7 在 `9ba44af` 合并 fence 与 response-field removal",
+        "不重写历史",
+        "父提交/完整提交",
+        "显式 file/hunk",
+    ):
+        assert fragment in decisions
+
+    assert "门禁顺序必须核对 commit ancestry 与 CI headSha" in lessons
+    assert "承诺的 rollback unit 必须落实为实际提交边界" in lessons
+
+
+def test_r81_records_code_evidence_without_claiming_final_closure() -> None:
+    tasks_r81 = _section(
+        _read("docs/specs/001-architecture-simplification/tasks.md"),
+        "## R8.1 阶段 review hardening",
+    )
+    refactoring_table = _section(
+        _read("docs/REFACTORING.zh-CN.md"),
+        "## 1. 阶段速查表",
+    )
+
+    for commit in ("`6d53db3`", "`4c9c6a4`", "`c38e3ec`", "`89f84c8`"):
+        assert commit in tasks_r81
+    for evidence in (
+        "Task 1 focused `60 passed`、group `177 passed`、阶段 full `439 passed`",
+        "Task 2 combined `127 passed`",
+        "Task 3 focused `78 passed + 78 passed`",
+        "不替代 Task 5 最终树全量验证",
+        "独立终审、push 与 exact-head CI 仍待执行",
+    ):
+        assert evidence in tasks_r81
+
+    r81_rows = [
+        line for line in refactoring_table.splitlines() if line.startswith("| R8.1 |")
+    ]
+    assert len(r81_rows) == 1
+    assert "Task 5 全量验证/终审/push/CI 待执行" in r81_rows[0]
+    assert "exact-head CI 成功" not in tasks_r81
+
+
+def test_r81_keeps_every_feature_freeze_until_an_explicit_spec_decision() -> None:
+    freeze_statement = (
+        "R8.1 不解冻 VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、"
+        "registry/read-model 或自动 replan；只有出现可复现的真实需求并形成显式 "
+        "SPEC 决策后，才可重启对应条目。"
+    )
+    formal_documents = (
+        "docs/SPEC.zh-CN.md",
+        "docs/PLAYBOOK.zh-CN.md",
+        "docs/REFACTORING.zh-CN.md",
+        "docs/specs/001-architecture-simplification/spec.md",
+        "docs/specs/001-architecture-simplification/plan.md",
+        "docs/specs/001-architecture-simplification/tasks.md",
+    )
+
+    for path in formal_documents:
+        assert freeze_statement in _read(path), path
 
 
 def test_moce_example_documents_current_capabilities_and_dashboard_flow() -> None:

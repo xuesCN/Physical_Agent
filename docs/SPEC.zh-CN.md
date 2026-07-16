@@ -56,7 +56,7 @@ rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Dr
 | **T（独立线：Ink 终端 UI）** | 第五入口 | Node/TS/Ink 5 交互式终端工作台（`tui/` 目录，纯 API 客户端零核心改动）；T1 只读（状态+流式 chat+actions 实时）→ T2 交互（提交/审批/重置，审批依赖 F1.3）→ T3 补齐。typer CLI 保留管脚本化，Ink 管交互；选 Ink 而非 Textual 是为复用 dashboard 的 React 技能。与 F 主线无依赖（除 T2 审批），可随时穿插 |
 | F6 | Demo Twin + BYO Simulator（冻结） | F6.0-F6.4 全部暂停；R0-R8 不以 demo、SceneView、remote_sim 或 conformance 为由扩大协议面。收口后若重启，仍需先做场景规格且不做通用仿真平台 |
 
-**R0-R8 功能冻结（2026-07-10）**：VNext-3/4、W4/W5/W6.2、F0 后续实验、F5、F6、B4-vec、registry/read-model 新能力、自动 replan/无人值守档均暂停。重启条件=R8 全量收口完成后出现可复现的恢复、硬件或产品需求，并重新排序；不是 R8 后自动恢复旧排期。
+**R0-R8 功能冻结（2026-07-10，R8.1 延续）**：VNext-3/4、W4/W5/W6.2、F0 后续实验、F5、F6、B4-vec、registry/read-model 新能力、自动 replan/无人值守档均暂停。R8.1 不解冻 VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 或自动 replan；只有出现可复现的真实需求并形成显式 SPEC 决策后，才可重启对应条目。
 
 **其他挂起（明确不做）**：Langfuse 观测平台（2026-07-05 评估：F0 量级几十次调用，本地 JSONL 留痕足够；重启条件=F4 闭环自动调用量增大或 F6.2 批量评测需要打分 UI，届时优先 Cloud 免费档）、instructor / LiteLLM（等 F0 数据）、chat markdown **深度**渲染扩展（基础渲染已由用户以 react-markdown 落地于 ChatPanel；代码高亮/一键复制等扩展不排期）、通用 yaml 编辑器（lite 版已够）、schema 驱动表单库 rjsf/JSON Forms（2026-07-05 评估：产品无手写 JSON 需求——若将来出现高频结构化输入场景再评估，届时选 rjsf + @rjsf/antd）、**通用仿真平台**（2026-07-05 产品决定：只做 demo twin 与 BYO 接口，若 F6 解冻仍遵守）。
 
@@ -72,8 +72,8 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 
 | 编号 | 内容 | 归属 | 状态 |
 | --- | --- | --- | --- |
-| **R0-R8** | 架构减法与兼容面退役 | `specs/001-architecture-simplification/` | ✅ 2026-07-16 完成：实现 closure commit `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功。R8 已收口 current docs、Moce SQLite 示例、`ChatPlan.actions` 重复投影、typed OpenAPI、chat-side `executed=0` 残留及发布包；`AgentOutput`/`ChatPlan.agent_output` 是唯一 Draft 机器通道，`/api/state.actions` 仍是 board truth，approve/reject mutation `action`、pending/approval/SafetyGate 与 watch 唯一执行权保持。冻结项不自动恢复，仍按 §2 的重启条件重新评审 |
-| **R8.1** | R-stage review hardening：LOG 多进程/安全收尾、Gate claim correlation、嵌套 OpenAPI 与证据闭环 | `specs/001-architecture-simplification/r8-1-review-hardening-plan.md` | 🟡 2026-07-16 开工：只修 review 缺陷并补全门禁；不解冻 VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 或自动 replan |
+| **R0-R8** | 架构减法与兼容面退役 | `specs/001-architecture-simplification/` | ✅ 2026-07-16 完成：实现 closure commit `c4da4f9`，fork Push run `29476327424`、PR run `29476329954` 均成功；evidence closure `33b062b`，fork Push run `29477199756`、PR run `29477202468` 均成功。R8 已收口 current docs、Moce SQLite 示例、`ChatPlan.actions` 重复投影、typed OpenAPI、chat-side `executed=0` 残留及发布包；`AgentOutput`/`ChatPlan.agent_output` 是唯一 Draft 机器通道，`/api/state.actions` 仍是 board truth，approve/reject mutation `action`、pending/approval/SafetyGate 与 watch 唯一执行权保持。冻结项不自动恢复，仍按 §2 的重启条件重新评审 |
+| **R8.1** | R-stage review hardening：LOG 多进程/安全收尾、Gate claim correlation、嵌套 OpenAPI 与证据闭环 | `specs/001-architecture-simplification/r8-1-review-hardening-plan.md` | 🟡 2026-07-16：实现提交 `6d53db3`、`4c9c6a4` + `c38e3ec`、`89f84c8` 与定向验收已完成；正式文档纠偏进行中，Task 5 最终树全量验证、独立终审、commit/push 与 exact-head CI 待执行。R8.1 不解冻 VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 或自动 replan；只有出现可复现的真实需求并形成显式 SPEC 决策后，才可重启对应条目。 |
 | F0 | LLM planner + 本地调用留痕 + 坏任务实验报告 | §2 | ⏸ R0-R8 冻结；既有第一轮 15 条结果保留：10 完成、5 无提案、0 Gate 拦截。**Review 复核（2026-07-06）**：trace 证实 bounds 在 prompt 内、拒绝为知情拒绝；不在本轮继续扩实验或功能 |
 | B6 | 退役 Markdown runtime/migration（保留 SAFETY/LOG sidecar 与 fail-closed） | §2 | ✅ active backend 只剩 SQLite；R3 已删除当前 migrator、reader 与 full Workspace。当前版本不再提供迁移命令，只保留 SAFETY/LOG sidecar、legacy workspace fail-closed 检测和独立历史 checkout `9072b4e` 救援路径 |
 | F1 | 提案卡片 + Add to Actions + 审批流 | §2 | ✅ 2026-07-07 完成：Chat draft 卡片只提交动作板；Actions 板审批才放行 `requires_approval`；approval required 后端计算，SQLite 原子 claim 跳过未批准动作；拒绝/审批元数据进 LOG/audit |

@@ -10,13 +10,13 @@
 | 1.5 | legacy GUI parity + 缺口补齐 + launcher strangler cutover | ✅ PR #1 / `2d5e909` 验证完成 | 所有保留能力已覆盖；有意退役项有替代说明；thin launcher/wheel smoke + 当前提交 Playwright 全绿 |
 | 2 | 验证 cutover 后删除 legacy GUI | ✅ `5764bac` / PR #1 全绿 | React/FastAPI 成为唯一 GUI；安全/主路径回归通过 |
 | 2.1 | canonical projection 与删除门禁 review fix | ✅ `b20ad20` / PR #1 全绿 | React/TUI 不再二次推断 Gate；pending 不复用旧 passed Gate；PR e2e/wheel 负门禁阻塞 |
-| 3 | 退役 Markdown migration，缩成 safety/log sidecar | ✅ R3-A `e7f878b`、R3-B `a64be59`、R3-C `d1713a0`、R3-D `6309a1b`、R3-E `4a8ec86`、R3-F `9698b3e` 完成 | 当前树与 wheel 均无 migrator/full Workspace；sidecar 等价；旧目录 fail closed；历史救援可执行 |
+| 3 | 退役 Markdown migration，缩成 safety/log sidecar | ✅ sidecar cutover `a64be59`；R3 closure `a431c3b`，fork Push run `29233815375`、PR run `29233817630` 均成功 | 当前树与 wheel 均无 migrator/full Workspace；sidecar 等价；旧目录 fail closed；历史救援可执行 |
 | 4 | 删除 `auto_step` 与 embedded watch composition | ✅ `da14064` 完成；下一步 R5 | proposal/chat 入口不拥有 watch；正式 `watch` 与 `api --watch` 保留并通过边界回归 |
-| 5 | 结构化 Chat Turn + `action-draft` 双轨 | ✅ 本地真实 Chromium 27/27、fork Push/PR CI 成功 | 独立一轮验证 structured/fence 一致，F1 主链与旧 fallback 全绿 |
-| 6 | 收敛 application/read-model 职责和官方消费者 | ✅ official consumers 迁移完成，fork Push/PR CI 成功 | `_append_actions` 等死代码为零；消费者只读 canonical projection/output |
-| 7 | 切断旧 wire compatibility | ✅ 2026-07-15 完成 | 停产/删除 fence；删除 proposal 顶层 `actions/action/draft_actions`，不动 state board |
-| 8 | 文档、发布形态与全量验证收口 | ✅ 本地实现与验收完成；等待 commit/push/远端 CI | 全量测试、wheel、docs/CLI/README grep 和安全扫描全绿；最终提交单独执行 |
-| 8.1 | 阶段 review hardening | 🟡 2026-07-16 开工 | LOG 多进程与安全收尾、Gate claim correlation、嵌套 OpenAPI、证据/PR 元数据全部关闭；新功能继续冻结 |
+| 5 | 结构化 Chat Turn + `action-draft` 双轨 | ✅ `d1ca53c3`；fork Push run `29321294713`、PR run `29321297674` 均成功 | 独立一轮验证 structured/fence 一致，F1 主链与旧 fallback 全绿 |
+| 6 | 收敛 application/read-model 职责和官方消费者 | ✅ `0bb7807`；fork Push run `29312317707`、PR run `29312319687` 均成功 | `_append_actions` 等死代码为零；消费者只读 canonical projection/output |
+| 7 | 切断旧 wire compatibility | ✅ `9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功 | 停产/删除 fence；删除 proposal 顶层 `actions/action/draft_actions`，不动 state board |
+| 8 | 文档、发布形态与全量验证收口 | ✅ implementation closure `c4da4f9`，fork Push run `29476327424`、PR run `29476329954` 均成功；evidence closure `33b062b`，fork Push run `29477199756`、PR run `29477202468` 均成功 | 全量测试、wheel、docs/CLI/README grep 和安全扫描全绿；实现与最终证据均已闭环 |
+| 8.1 | 阶段 review hardening | 🟡 实现提交 `6d53db3`、`4c9c6a4` + `c38e3ec`、`89f84c8` 已完成；正式文档修正中，Task 5 全量验证/终审/push/CI 待执行 | LOG 多进程与安全收尾、Gate claim correlation、嵌套 OpenAPI、证据/PR 元数据全部关闭；新功能继续冻结 |
 
 ## 1. 冻结范围、建立规格与退役清单
 
@@ -188,9 +188,9 @@ Rollback：fence 和 response 字段分两个提交；任一外部兼容问题�
 2. SPEC/PLAYBOOK/REFACTORING/README/README.zh-CN/state-backends/hardware guides/examples/CLI help/API/OpenAPI 统一口径。
 3. 把 `agent-architecture-vnext` 收口为当前架构说明，不再把已暂停的 task table/Event ledger 写成默认下一步。
 4. 执行 Python 全量测试、frontend build + Playwright、TUI build/test、wheel build/install smoke、安全 AST/grep 边界扫描。
-5. 更新 `tasks.md` 删除证据矩阵、SPEC 状态和 REFACTORING 决策/教训；本轮先完成本地验收，`commit/push` 单独保持未完成，等待独立 review，不额外创建 handoff 文档。
+5. 更新 `tasks.md` 删除证据矩阵、SPEC 状态和 REFACTORING 决策/教训；R8 最终没有创建独立 handoff 文档。
 
-Go：R8 前 11 项均有本轮真实证据时，可记录“实现与本地验收完成，等待最终提交和远端 CI”；第 12 项只有独立 review 后实际 commit/push 且远端门禁成功才可勾选。
+Closure：implementation closure `c4da4f9` 的 fork Push run `29476327424`、PR run `29476329954` 成功；随后 evidence closure `33b062b` 的 fork Push run `29477199756`、PR run `29477202468` 成功，R8 十二项全部闭环。
 
 后续：重新评审冻结 backlog；没有真实需求证据的项继续挂起。
 
@@ -203,3 +203,7 @@ R8 远端 closure 后的独立阶段 review 发现三个实现缺口和一组证
 3. `ChatPlan.agent_output` 在 OpenAPI 中引用 canonical `AgentOutput`，不改变 JSON wire。
 4. 修复 spec/plan/matrix/PLAYBOOK/REFACTORING/PR 元数据，并如实记录 R5-browser 与 R6 顺序、R6/R7 rollback 粒度偏离。
 5. 通过 Python full、真实 Chromium、TUI、clean-wheel、多进程/安全专项和独立终审后才可关闭；关闭也不自动解冻后续功能。
+
+实现与定向证据（2026-07-16）：LOG 修复 `6d53db3`；Gate claim-owner correlation `4c9c6a4` 及 late-feedback fencing `c38e3ec`；nested OpenAPI `89f84c8`。Task 1 focused `60 passed`、group `177 passed`、阶段 full `439 passed`；Task 2 combined `127 passed`；Task 3 focused `78 passed + 78 passed`。这些阶段证据不替代 Task 5 最终树全量验证，独立终审、push 与 exact-head CI 仍待执行。
+
+R8.1 不解冻 VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 或自动 replan；只有出现可复现的真实需求并形成显式 SPEC 决策后，才可重启对应条目。

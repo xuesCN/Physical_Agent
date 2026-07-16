@@ -1,8 +1,8 @@
 # 001：架构减法与兼容面退役
 
-状态：实现与本地验收完成，等待最终提交和远端 CI（R8 commit/push 项仍未完成）
+状态：R0-R8 已完成；R8.1 实现与定向验收完成，等待 Task 5 最终树全量验证、独立终审、commit/push 与 exact-head 远端 CI
 
-日期：2026-07-15
+日期：2026-07-16
 
 对应账本：`SPEC.zh-CN.md` §4 `R0-R8`
 
@@ -106,9 +106,9 @@ R2 阶段 review 发现 React/TUI 仍会从 raw feedback/Action Board 二次推�
 
 ### 2.7 暂停功能扩张
 
-R0-R8 期间暂停 VNext-3、VNext-4、W4、W5、W6.2、F0 后续实验、F5、F6、B4-vec、自动 replan、registry/read-model 扩展等功能项。只有为本条目验收、安全回归或去重所需的改动可以进入。
+R0-R8 期间暂停 VNext-3、VNext-4、W4、W5、W6.2、F0 后续实验、F5、F6、B4-vec、自动 replan、registry/read-model 扩展等功能项。R8.1 只允许为阶段 review 缺陷、安全回归和证据闭环所需的改动进入。
 
-重启条件：R8 全量验证完成、运行主链和发布形态收口后，再依据真实恢复/硬件/产品需求重新排序，而不是自动恢复旧排期。
+R8.1 不解冻 VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 或自动 replan；只有出现可复现的真实需求并形成显式 SPEC 决策后，才可重启对应条目。
 
 理由：继续叠加 task table、Event ledger、仿真和硬件 HA 会放大当前重复契约与兼容层，降低“做减法”的可验证性。
 

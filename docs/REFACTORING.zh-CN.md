@@ -51,11 +51,12 @@
 | R3-E | 删除 full Workspace helper 与退役 Markdown protocol | `4a8ec86` |
 | R3-F | 当前文档、示例与发布包收口 | `9698b3e` |
 | R4 | 删除 chat 自动推进兼容面与 CLI 内嵌 watch | `da14064` |
-| R5 | 单调用 structured Chat Turn + fence 双轨消费者 | 双轨窗口完成；fork Push/PR CI 成功 |
-| R6 | application/read-model 去重 + 正式 consumer 收敛到 AgentOutput | consumer migration 完成；fork Push/PR CI 成功 |
-| R5-browser-gate | structured/fence 双轨真实 Chromium、增量去重与 Add→pending 独立验证 | 本地 27/27；fork Push/PR CI 成功 |
-| R7 | 退役 action-draft wire/fence 与 proposal convenience payload | `9ba44af`；fork Push/PR CI 成功 |
-| R8 | 当前架构、文档、示例、OpenAPI、发布包与全量门禁收口 | `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功 |
+| R5 | 单调用 structured Chat Turn + fence 双轨消费者 | `d1ca53c3`；fork Push run `29321294713`、PR run `29321297674` 均成功 |
+| R6 | application/read-model 去重 + 正式 consumer 收敛到 AgentOutput | `0bb7807`；fork Push run `29312317707`、PR run `29312319687` 均成功 |
+| R5-browser-gate | structured/fence 双轨真实 Chromium、增量去重与 Add→pending 独立验证 | 本地 27/27；`d1ca53c3` 的 fork Push run `29321294713`、PR run `29321297674` 均成功 |
+| R7 | 退役 action-draft wire/fence 与 proposal convenience payload | `9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功 |
+| R8 | 当前架构、文档、示例、OpenAPI、发布包与全量门禁收口 | implementation closure `c4da4f9`，fork Push run `29476327424`、PR run `29476329954`；evidence closure `33b062b`，fork Push run `29477199756`、PR run `29477202468`；均成功 |
+| R8.1 | review hardening：LOG mirror、Gate owner correlation、nested OpenAPI 与证据纠偏 | `6d53db3`、`4c9c6a4` + `c38e3ec`、`89f84c8`；Task 5 全量验证/终审/push/CI 待执行 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -390,13 +391,21 @@ rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Dr
 
 正式文档、双语 README、SPEC/PLAYBOOK、架构说明、Moce 示例与 CI 口径同步。Moce partial-hardware 配置改指向干净 SQLite workspace，仓库删除两套会触发 fail-closed 的完整 legacy Markdown runtime 快照，并按当前 driver manifest 修正能力与 Dashboard 操作顺序。用户保留的 `current-architecture-audit.md`、`current-architecture-audit.html`、`system-summary.zh-CN.md` 是阶段快照，不属于 current-doc contract；本轮不修改、不删除、不重新生成。VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 与自动 replan/Level 3 继续冻结，不因 R8 自动恢复。
 
-最终本地证据：Python full `435 passed, 1 warning`；Safety smoke `32 passed`、AST boundary `2 passed`，真实 `driver.execute` 只位于 watch runtime；current-doc/golden/Moce `29 passed`；frontend 独立 `tsc -b` 与 Vite production build 成功，locale 修复后已重建 tracked `physical_agent/dashboard/dist`，并由 source + shipped bundle contract 验证；ignored `frontend/dist` 不作为发布证据；TUI typecheck/build、默认测试 `61 passed`、独立 scenario matrix `11 passed`；`CI=1` 真实 Chromium 完整 `27 passed`；clean wheel 在隔离环境完成 base/server 安装，并验证安装后的 `gui`/`api`、health、index 与 hashed assets 全绿；`git diff --check` 和退役面扫描均 clean。实现 closure commit 为 `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均 completed success，headSha 均为 `c4da4f9`。
+最终本地证据：Python full `435 passed, 1 warning`；Safety smoke `32 passed`、AST boundary `2 passed`，真实 `driver.execute` 只位于 watch runtime；current-doc/golden/Moce `29 passed`；frontend 独立 `tsc -b` 与 Vite production build 成功，locale 修复后已重建 tracked `physical_agent/dashboard/dist`，并由 source + shipped bundle contract 验证；ignored `frontend/dist` 不作为发布证据；TUI typecheck/build、默认测试 `61 passed`、独立 scenario matrix `11 passed`；`CI=1` 真实 Chromium 完整 `27 passed`；clean wheel 在隔离环境完成 base/server 安装，并验证安装后的 `gui`/`api`、health、index 与 hashed assets 全绿；`git diff --check` 和退役面扫描均 clean。实现 closure commit 为 `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均 completed success，headSha 均为 `c4da4f9`。最终 evidence closure commit 为 `33b062b`；fork Push run `29477199756`、PR run `29477202468` 均 completed success，headSha 均为 `33b062b`。
 
 2026-07-16 独立 review-fix 先后发现并修复六类口径/门禁缺口：中英文 README 一度把请求侧描述成会动态加载或以 mock 验证候选 driver，现均改为只做静态 manifest/Python/interface 校验，动态 conformance 明确归属显式 watch 侧工作流；Moce 最小流程仍建议 `chmod 777`，现改为 `dialout`/udev 的最小权限指引；R5 远端 CI checkbox 未按已有事实勾选，R6/R7 与删除证据矩阵又只写了模糊的成功口径，现已按阶段补齐准确 closure commit 与 Push/PR run；Dashboard 通用 `/api/chat` fixture 的 `executed: 0` 已删除，而刻意保留的 legacy internal stream fixture 明确断言公开 SSE 丢弃该字段，锁住两者不同意图；R8 本地证据曾误把 ignored `frontend/dist` 当发布目录，现改为核验 Vite 实际 outDir 与 tracked package resource `physical_agent/dashboard/dist`；R8 第 11 项也不再把当时仍为 🟡 的 SPEC 状态缩写成“完成”，而是精确记录“实现与本地验收完成、等待最终提交和远端 CI”。新增 current-doc 契约逐行解析删除证据矩阵并锁定各 surface 的 commit/run 映射，同时按门槛身份逐项锁定 R8 的 11 个本地 checkbox、正确发布资源与英文请求侧静态校验边界；当时只有 commit/push 保持未勾选，closure 后已按最终证据回写为完成；两份受保护轮次 brief 与三份受保护 current-architecture audit/system-summary snapshots 均未修改。
 
 终审继续发现并修复三项事实分叉：Dashboard locale source 与 shipped bundle 仍残留“mock 动态验证/只有 watch 加载 driver”的旧文案，现改为静态校验边界、重建 tracked dist 并同时锁 source + bundle；主链把 shared `AgentOutput` 协议误泛化成所有入口都有 Add，现明确 React/Web 的可操作卡片、TUI/CLI 的只读 structured draft、`tool_loop` 的 proposal-only pending 提交例外，以及 task/manual/run 的既有直接 proposal 路径；README 又把执行权唯一误写为 loadability 唯一，现明确 request/proposal 不加载、watch 独占 connect/操作生命周期/`driver.execute`，operator `doctor` 仅可为惰性诊断 import/instantiate，绝不 connect/execute。以上均以 current-doc 与 shipped locale 契约回归锁定，未增加 TUI/CLI Add 功能，也未改变生产 Python/TUI 行为。
 
 同轮晚段复核又发现双语 README 的 OpenAI/chat 使用说明仍沿用旧心智：把普通 LLM chat 写成直接回写 proposed actions，并暗示只要启动 watch 就能执行 CLI 显示的 draft。现按实际分流改正：task/manual/run 与 MCP proposal、显式 `tool_loop` 可提交 pending；普通 rule/LLM chat 只持久化 reply/current intent/structured draft，React/Web Add 后才入板，TUI/CLI 只显示；watch 只看已经进入 Action Board 的 action。新增契约直接截取两份 README 的 OpenAI 晚段，禁止旧句并要求 draft/submitted/watch board-only 区分，避免由文档开头的正确段落掩盖后段回归。
+
+### R8.1：阶段 review hardening
+
+阶段 review 发现三处实现缺口。`6d53db3` 把 SQLite 已提交日志作为唯一镜像输入，以第二个 `BEGIN IMMEDIATE` 跨进程序列化 snapshot/read/publish，并通过同目录临时文件、flush/fsync 和 `os.replace` 原子发布 `LOG.md`；mirror-only 失败被限制在 SQLite commit 之后，doctor 仍可诊断 stale revision，execute timeout 的 halt 又提前到持久化之前。`4c9c6a4` 使用既有 `actions.claim_owner` 约束 in-progress Gate evidence，旧 owner pass 只作 stale evidence；review 再以 `c38e3ec` 把 claim-owner read 放到 feedback 之后，挡住 late prior-owner event 与 earlier owner snapshot 的错误配对。`89f84c8` 让 `ChatPlan.agent_output` 的 Pydantic/FastAPI schema 引用 canonical `AgentOutput`，同时保持 runtime dict、JSON alias 与旧 extra-field 忽略边界不变。
+
+定向证据：Task 1 focused `60 passed`、state/backend/watch/safety group `177 passed`、阶段 full `439 passed`；Task 2 combined `127 passed`；Task 3 API/chat/projection `78 passed`，额外 protocol/state adapters `78 passed`。这些结果只证明各实现任务与阶段基线，不替代 Task 5 在最终树重跑 Python full、真实 Chromium、TUI、clean-wheel、多进程/安全专项与 docs/golden；独立终审、push 和 exact-head Push/PR CI 也仍待执行。
+
+本轮同步修复 spec/plan/evidence matrix/PLAYBOOK 的历史口径并准备 draft PR 元数据，但不把尚未执行的远端动作写成证据。R8.1 不解冻 VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 或自动 replan；只有出现可复现的真实需求并形成显式 SPEC 决策后，才可重启对应条目。
 
 ## 3. 关键决策与偏离（跨阶段汇总）
 
@@ -479,6 +488,8 @@ rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Dr
 76. **OpenAPI 是 wire 删除门禁的一部分**（R8）：运行时 dict 和单测全绿仍不足以发布 breaking shape；proposal/chat/task 与 mutation 必须用 typed response model 明确保留/删除字段，防止 SDK 继续把任意 object 当契约。
 77. **阶段快照不自动升级为 current-doc contract**（R8）：用户明确保留的 audit/system-summary 可以作为历史资料存在；正式 current docs 另行列明范围，既不重写用户快照，也不拿已知历史文本阻塞收口。
 78. **前端发布证据以 tracked package resource 为准**（R8 review-fix）：Vite 唯一正式 outDir 是 `physical_agent/dashboard/dist`，发布核验只认该 tracked 目录与 wheel members；ignored `frontend/dist` 不进入发布判定。
+79. **R5 browser hard gate 与 R6 的历史顺序发生偏离**（R8.1 review）：R6 `0bb7807` 先于 R5 real-Chromium closure `d1ca53c3`；当时 compatibility fallback 仍保留且 R7 保持 No-Go，所以不存在当前 compatibility defect，R7 最终也在 R5/R6 门禁均关闭后才执行，但 plan 声明的 hard-gate 顺序仍发生偏离。这里如实记录 commit ancestry 与 CI head，不重写历史。
+80. **R6/R7 实际提交没有兑现计划承诺的 rollback units**（R8.1 review）：R6 在 `0bb7807` 合并 consumer migration 与 dead-code removal，R7 在 `9ba44af` 合并 fence 与 response-field removal，均不是 plan 所写的独立回退提交。历史不拆分、不 force rewrite；恢复整阶段时使用父提交/完整提交边界，若只恢复单一 compatibility surface，则必须先列出显式 file/hunk 选择，复跑 wire、consumer、projection 与安全契约后再提交，不能引用不存在的 split commit。
 
 ## 4. 经验教训（流程侧）
 
@@ -513,5 +524,7 @@ rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Dr
 - **checkbox 测试必须锁门槛身份、阶段与证据语义**（R8 review-fix 的教训）：pre-closure 阶段应逐一锁定 11 个本地门槛为 `[x]`，第 11 项沿用 SPEC 🟡 的“实现与本地验收完成、等待最终提交和远端 CI”，第 12 项 commit/push 为 `[ ]`；只有真实 closure commit 已 push 且 fork Push/PR CI 均成功后，才能切换为 12 项全部 `[x]` 与 SPEC ✅ 完成，最终状态测试还必须逐项锁定完整门槛身份和对应 commit/run 证据。
 - **证据矩阵测试必须逐行锁映射**（R8 review-fix 的教训）：在整份文档全局搜索 commit/run 名称不能证明证据属于正确删除项；应先按 surface 解析唯一矩阵行，再断言该行的提交与 Push/PR run 映射。
 - **发布目录证据先核对构建配置与 Git 跟踪状态**（R8 review-fix 的教训）：目录名相似不等于发布面；Vite outDir、package-data、tracked resource 与 wheel members 必须指向同一目录，ignored `frontend/dist` 的“无差异”不能证明发布物新鲜。
+- **门禁顺序必须核对 commit ancestry 与 CI headSha**（R8.1 的教训）：文档表格顺序或后来成功的 run 不能证明前置门槛当时已经关闭；每个 hard gate 都要记录依赖 commit、实际祖先关系与对应 run 的 headSha，发现偏离就保留事实并说明安全影响。
+- **承诺的 rollback unit 必须落实为实际提交边界**（R8.1 的教训）：计划写“可单独回退”时，实现就应拆成对应 commits；若已合并提交，则不得事后把它描述成可独立 revert，必须记录父提交/完整提交或显式 file/hunk selective recovery，并在恢复后重跑相关契约。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

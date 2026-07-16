@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, PlainSerializer
+
+if TYPE_CHECKING:
+    from physical_agent.protocol.agent_output import AgentOutput
 
 
 class StrictModel(BaseModel):
@@ -154,15 +157,10 @@ class ChatPlan(StrictModel):
     summary: str = ""
     steps: list[str] = Field(default_factory=list)
     needs_watch: bool = False
-    agent_output: dict[str, Any] | None = None
-
-    @field_validator("agent_output", mode="before")
-    @classmethod
-    def validate_agent_output(cls, value: Any) -> dict[str, Any] | None:
-        if value is None:
-            return None
-        # Lazy import avoids a protocol cycle: AgentOutput itself contains
-        # canonical Action models from this module.
-        from physical_agent.protocol.agent_output import AgentOutput
-
-        return AgentOutput.model_validate(value).model_dump(mode="json", by_alias=True)
+    agent_output: Annotated[
+        "AgentOutput",
+        AfterValidator(
+            lambda value: value.model_dump(mode="json", by_alias=True)
+        ),
+        PlainSerializer(lambda value: value),
+    ] | None = None

@@ -3,6 +3,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 import yaml
@@ -129,6 +131,54 @@ def test_openapi_publishes_canonical_proposal_and_mutation_responses(tmp_path):
         properties = _openapi_response_properties(schema, path)
         assert "action" in properties
         assert "agent_output" not in properties
+
+
+def test_openapi_chat_plan_agent_output_references_canonical_component(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    schema = create_app(config_path).openapi()
+
+    agent_output_schema = schema["components"]["schemas"]["ChatPlan"]["properties"][
+        "agent_output"
+    ]
+    non_null_variants = [
+        variant
+        for variant in agent_output_schema["anyOf"]
+        if variant.get("type") != "null"
+    ]
+
+    assert non_null_variants == [{"$ref": "#/components/schemas/AgentOutput"}]
+    assert '"additionalProperties": true' not in json.dumps(agent_output_schema)
+    agent_output_properties = schema["components"]["schemas"]["AgentOutput"][
+        "properties"
+    ]
+    assert "schema" in agent_output_properties
+    assert "schema_" not in agent_output_properties
+
+
+def test_chat_plan_json_schema_resolves_after_direct_schema_module_import():
+    script = """
+import json
+from physical_agent.protocol.schemas import ChatPlan
+
+schema = ChatPlan.model_json_schema()
+agent_output = schema["properties"]["agent_output"]
+non_null = [item for item in agent_output["anyOf"] if item.get("type") != "null"]
+assert non_null == [{"$ref": "#/$defs/AgentOutput"}], agent_output
+assert "AgentOutput" in schema["$defs"]
+assert "schema" in schema["$defs"]["AgentOutput"]["properties"]
+assert "schema_" not in schema["$defs"]["AgentOutput"]["properties"]
+print(json.dumps(agent_output, sort_keys=True))
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
 def test_api_cli_missing_server_extra_has_clear_message(tmp_path, monkeypatch):

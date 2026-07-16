@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+
 from physical_agent.application.output_projection import (
     current_agent_output,
     materialize_agent_output,
@@ -439,3 +441,33 @@ def test_chat_plan_ignores_retired_top_level_actions_and_projects_only_agent_out
     assert [
         action["id"] for action in serialized["agent_output"]["actions"]
     ] == ["act_active"]
+
+
+def test_chat_plan_agent_output_remains_dict_with_wire_alias_and_no_warning():
+    agent_output = _compiled()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        plan = ChatPlan.model_validate(
+            {
+                "status": "proposed_actions",
+                "intent": "act",
+                "summary": "typed nested output",
+                "agent_output": agent_output,
+                "actions": [agent_output.actions[0].model_dump(mode="json")],
+            }
+        )
+        serialized = plan.model_dump(mode="json", by_alias=True)
+
+    assert type(plan.agent_output) is dict
+    assert serialized["agent_output"] == agent_output.model_dump(
+        mode="json", by_alias=True
+    )
+    assert serialized["agent_output"]["schema"] == "physical-agent/agent-output/v1"
+    assert "schema_" not in serialized["agent_output"]
+    assert "actions" not in serialized
+    assert not [
+        warning
+        for warning in caught
+        if "Pydantic serializer warnings" in str(warning.message)
+    ]

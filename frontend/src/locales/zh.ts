@@ -132,7 +132,7 @@ export const zh = {
   hardware: {
     ...en.hardware,
     proposalOnly: "仅提案侧",
-    proposalOnlyDescription: "生成 driver 文件并在 mock 模式验证。只有 watch 运行时会加载 driver 并触碰硬件。",
+    proposalOnlyDescription: "生成 driver 文件并仅做静态 manifest/Python/interface 校验。请求侧绝不 import、连接或执行候选 driver；动态一致性验证只允许通过显式 watch 侧工作流进行。",
     source: "来源（SDK 文件夹、仓库路径或 URL）",
     sourceRequired: "来源必填",
     driverName: "Driver 名称（可选）",

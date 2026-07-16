@@ -12,7 +12,7 @@
 ## 开工中
 
 - 新能力默认关闭或向后兼容；小步可回滚。
-- 改动必须带测试；两个状态后端（markdown/sqlite）的行为改动要过 backend 矩阵测试。
+- 改动必须带测试；SQLite 运行态行为改动要过 state/backend 回归，SAFETY/LOG sidecar 或 legacy fail-closed 行为改动要过对应矩阵测试。
 - driver 内阻塞调用必须带超时或走 `asyncio.to_thread`（W5 守则）。
 - 不确定的设计决策：先查 `docs/REFACTORING.zh-CN.md` §3 有无先例，再做取舍并记录。
 

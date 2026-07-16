@@ -54,7 +54,6 @@ class AgentRuntime:
                 intent="act" if actions else "task",
                 summary=proposal.message,
                 steps=task_graph_steps(proposal.agent_output),
-                actions=actions,
                 needs_watch=bool(actions),
                 agent_output=proposal.agent_output,
             )
@@ -111,7 +110,6 @@ class AgentRuntime:
                 intent="act",
                 summary=final_message,
                 steps=task_graph_steps(materialized_output),
-                actions=actions,
                 needs_watch=False,
                 agent_output=materialized_output,
             )

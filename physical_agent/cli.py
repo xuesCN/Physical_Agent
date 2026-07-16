@@ -271,8 +271,6 @@ def chat(
             typer.echo("Proposed actions:")
             for action in actions:
                 typer.echo(f"- {action.id}: {action.robot}.{action.capability}")
-        if result["executed"]:
-            typer.echo(f"Watch step executed {result['executed']} action(s).")
         return
 
     typer.echo("Physical Agent chat mode. Ask normally; code tasks can edit files and run tests. Press Ctrl+C or submit an empty message to exit.")
@@ -293,8 +291,6 @@ def chat(
             typer.echo("agent> Proposed actions:")
             for action in actions:
                 typer.echo(f"  - {action.id}: {action.robot}.{action.capability}")
-        if result["executed"]:
-            typer.echo(f"agent> Watch step executed {result['executed']} action(s).")
 
 @app.command("ingest-file")
 def ingest_file_command(

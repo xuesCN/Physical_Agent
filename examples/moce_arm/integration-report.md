@@ -38,11 +38,13 @@ Source: `https://github.com/wanhaoniu/MomoAgent`
 ## Capabilities
 
 - observe: Observe the current device or bridge state.
-- say: Speak a short sentence through the device or bridge.
-- set_light: Set the device light or indicator color.
-- move_to: Move the robot to a target pose or waypoint.
-- pick: Pick an object by object_id.
-- place: Place the held object at a named target.
+- home: Return the arm to its configured home pose.
+- stop: Stop arm motion and hold the current pose.
+- move_joint: Move one available joint to an absolute target or by a relative delta.
+- move_joints: Move several available joints to target angles.
+- set_gripper: Set the gripper opening ratio.
+- open_gripper: Fully open the gripper.
+- close_gripper: Fully close the gripper.
 
 ## Next Steps
 
@@ -51,5 +53,5 @@ Source: `https://github.com/wanhaoniu/MomoAgent`
 - Move hardware SDK calls into driver.py.
 - Run mock mode first, then switch to the real bridge or device.
 - Add a focused pytest for each capability you keep.
-- Keep pick and place actions dependent on the gripper state.
+- Verify observation and stop behavior before enabling motion or gripper commands.
 - If the repo already has an integration script, copy the transport logic, not the README wording.

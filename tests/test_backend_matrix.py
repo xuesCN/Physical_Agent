@@ -196,7 +196,7 @@ def test_backend_matrix_chat_runtime_drafts_actions_only(tmp_path, monkeypatch, 
     actions = store.read_actions()
 
     assert result["ok"] is True
-    assert result["executed"] == 0
+    assert "executed" not in result
     assert "actions" not in result
     assert "draft_actions" not in result
     assert [

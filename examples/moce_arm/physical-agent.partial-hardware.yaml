@@ -2,7 +2,7 @@ project:
   name: momoagent-driver-partial-wrist-gripper
 
 workspace:
-  path: ./workspace-partial-wrist-gripper
+  path: ./workspace-partial-hardware
 
 watch:
   tick_ms: 500

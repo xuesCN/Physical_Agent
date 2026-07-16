@@ -2,9 +2,9 @@
 
 [English version](README.md)
 
-Physical Agent is a safe runtime for physical-world agents with a SQLite default state store and Markdown audit compatibility.
+Physical Agent is a safe runtime for physical-world agents with one SQLite active state backend plus SAFETY/LOG sidecars.
 
-Physical Agent 是一个面向安全物理世界 agent 的本地运行时。运行态 active backend 只支持 SQLite；Markdown parser / renderer 仍服务 SAFETY.md 文件真源、LOG.md 镜像、audit export 和旧 workspace 迁移输入。v1 的重点不是堆功能，而是把认知侧 agent、物理侧 watch、driver 接入协议和安全边界拆清楚。
+Physical Agent 是一个面向安全物理世界 agent 的本地运行时。运行态 active backend 只支持 SQLite；最小 Markdown 工具仅服务 `SAFETY.md` 文件真源与 `LOG.md` 人类可读镜像，audit export 从 SQLite 生成只读视图。旧 workspace 只能通过独立历史 checkout 救援，不属于当前 runtime。v1 的重点不是堆功能，而是把认知侧 agent、物理侧 watch、driver 接入协议和安全边界拆清楚。
 
 核心原则：
 
@@ -14,15 +14,31 @@ Agent can propose actions. Watch decides whether and how they touch the physical
 
 也就是说，agent 可以提出动作意图，但只有 watch 进程可以决定这些动作是否以及如何触达真实物理世界。
 
+当前唯一 Chat 主链是：
+
+```text
+用户 Chat -> rule/LLM action intents -> normalize + stable ID/dependency
+  -> trusted PlanCompiler -> structured AgentOutput / ChatPlan.agent_output
+  -> API/SSE/assistant metadata -> structured draft
+     -> React/Web 可操作 Draft card -> 用户 Add to Actions -> pending
+     -> TUI/CLI 仅结构化展示
+显式 tool_loop -> proposal-only tool -> pending
+task/manual/run proposal 路径 -> pending
+pending -> approval（如需要）
+  -> Watch SafetyGate -> driver.execute -> canonical feedback/read model
+```
+
+rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Draft card，并可由用户通过 Add to Actions 创建 pending action；TUI/CLI 只显示 structured draft，不提供从该 draft 直接 Add 的控制。显式 `tool_loop` 是例外：它可调用 proposal-only tool 直接提交 pending，但仍绝不 approve 或 execute；既有 task/manual/run proposal 路径也可直接创建 pending。reply 只承载用户可读文本；以上提交路径均不代表审批、SafetyGate 通过或已经执行。
+
 准备接真实硬件前，请先读：[`docs/hardware-bringup-checklist.zh-CN.md`](docs/hardware-bringup-checklist.zh-CN.md)。CI 与测试策略见：[`docs/CI.zh-CN.md`](docs/CI.zh-CN.md)。
 
 ## 核心架构
 
-Physical Agent v1 采用双进程架构：
+Physical Agent v1 采用认知侧与执行侧两个信任区，并让 watch 独立拥有执行生命周期。watch 可以作为独立 CLI 服务运行，也可以由 `api --watch` / `gui` 内嵌。请求/提案路径绝不加载 driver。watch 是唯一连接 driver、拥有其操作生命周期并调用 `driver.execute(action)` 的路径：
 
 ```text
-Terminal 1: physical-agent watch
-Terminal 2: physical-agent run --task "..."
+执行侧: physical-agent watch（独立或内嵌）
+认知侧: physical-agent run --task "..." / physical-agent chat
 StateStore: new projects use workspace/state.db by default; SAFETY.md remains a file source.
 ```
 
@@ -40,7 +56,7 @@ StateStore: new projects use workspace/state.db by default; SAFETY.md remains a 
 - 写入 feedback
 - 追加 `LOG.md`
 
-`physical-agent run` 和 `physical-agent chat` 是认知侧入口，负责读取当前 StateStore、理解任务、生成结构化 action intent，并写入 pending action。
+`physical-agent run` 与 task/manual proposal 会经后端规则直接写入 pending action；`physical-agent chat` 的 rule/LLM 主路径只返回 structured draft，React/Web 的用户 Add to Actions 后才会创建 pending action，而 TUI/CLI 没有从该 draft 直接 Add 的控制。显式 `tool_loop` 可经 proposal-only tool 直接提交 pending，但不 approve、不 execute。`physical-agent doctor` 是仅供 operator 使用的惰性可加载性诊断：它可以 import 并实例化 driver，但绝不 connect，也绝不调用 `driver.execute`。这一诊断例外不改变 watch 对连接、操作生命周期、SafetyGate 与执行的唯一所有权。
 
 现在 `physical-agent chat` 也会自动识别代码类请求，比如“修改这个文件”“写测试”“修复这个 bug”“帮我接入这个 SDK”。命中后，它会切换到代码技能：在当前仓库根目录内直接写文件、运行测试、记录 lessons，并返回修改结果。这个能力仍然不改变物理执行边界，真正能接触硬件的只有 `physical-agent watch`。
 
@@ -249,9 +265,9 @@ physical-agent chat --planner llm --message "帮我接入这个 SDK ./vendor_sdk
 physical-agent chat --message "帮我接入 ./vendor_sdk --llm"
 ```
 
-GUI 的“硬件接入”区域也支持同样能力：选择“脚手架”会生成安全模板；选择“LLM 草稿”会读取 SDK 上下文、让模型更新 `driver.py`，并在 mock 模式下验证候选 driver。模型名可以在 GUI 输入框里临时覆盖，也可以通过 `.env` 的 `GPT_MODEL` / `OPENAI_MODEL` 设置。
+GUI 的“硬件接入”区域也支持同样能力：选择“脚手架”会生成安全模板；选择“LLM 草稿”会读取 SDK 上下文并让模型更新 `driver.py`。模型名可以在 GUI 输入框里临时覆盖，也可以通过 `.env` 的 `GPT_MODEL` / `OPENAI_MODEL` 设置。
 
-LLM coding 会先生成安全脚手架，再把 SDK 片段和脚手架发给模型；它只接受少量允许文件的更新，例如 `driver.py`、`physical_driver.yaml`、README、`integration-report.md` 和聚焦测试文件。候选 driver 必须通过 Python 编译、`load_driver`、`connect`、`health`、`observe` 和 `driver.execute(observe)` 的 mock 验证后才会写回真实输出目录。每次都会生成 `llm-coding-report.md`。如果 API 失败或草稿没有通过验证，安全脚手架会保留下来。
+LLM coding 会先生成安全脚手架，再把 SDK 片段和脚手架发给模型；它只接受少量允许文件的更新，例如 `driver.py`、`physical_driver.yaml`、README、`integration-report.md` 和聚焦测试文件，并生成 `llm-coding-report.md`。GUI 和其他请求侧路径只执行静态 manifest/Python/interface 校验，绝不加载、连接或执行候选 driver；动态 conformance 必须由显式的 watch 侧工作流完成。如果 API 失败或草稿没有通过静态校验，安全脚手架会保留下来。
 
 这不代表 LLM 可以绕过安全边界。接入助手只帮助写 watch 侧 driver 草稿和文档；真正执行动作时仍然必须经过：
 
@@ -314,17 +330,19 @@ v1 的第一个 planner 是本地、确定性的：
 - `pick` / `grasp` 生成 `pick`
 - `place` / `drop` 生成 `place`
 
-这样没有 API key 也能跑通完整 Markdown loop。
+这样没有 API key 也能跑通完整 SQLite proposal/watch loop。
 
 ## OpenAI 兼容 API 和 Chat Agent
 
-Physical Agent 可以使用 OpenAI-compatible Chat Completions 接口做规划和对话，同时保持同样安全边界：LLM 只写 proposed actions 或 watch 侧 driver 草稿，watch 仍然负责校验和执行。
+Physical Agent 可以使用 OpenAI-compatible Chat Completions 接口做规划和对话，同时保持同样安全边界：task/run 与 MCP proposal 路径会把 pending action 提交到 Action Board；普通 rule/LLM chat 只产生 structured draft，不创建 pending。TUI/CLI 只显示该 draft；React/Web 可由用户 Add to Actions。显式 `--planner tool_loop` 可经 proposal-only tool 提交 pending。这些提案路径都不能 approve 或 execute；watch 只校验和执行已经进入 Action Board 的 action。
 
 ### 升级说明：Chat action draft wire
 
 当前版本只通过结构化 `AgentOutput.actions` 传递可操作的 Chat Draft；assistant reply 是普通用户文本，不再生成或解析旧的 `action-draft` fence。升级前已经持久化的 fence-only chat 仍会按 Markdown 文本显示，但不会恢复 Draft 卡片或 Add to Actions。已经写入 Action Board 的 pending/approved action 不受影响；本次变化没有新增兼容迁移层，也没有改变审批或 SafetyGate。
 
 proposal/chat/task 响应（含 MCP `submit_task`）也不再通过顶层 `action`、`actions` 或 `draft_actions` convenience field 重复动作；调用方必须读取 `agent_output.actions`。approve/reject mutation 响应仍保留 `action`，`/api/state.actions` 仍是 Action Board read model。
+
+`ChatPlan` 同样不再暴露重复的 `plan.actions` 列表；调用方读取 `plan.agent_output.actions`。旧持久化 plan 可能仍含这个额外字段，current reader 会忽略它，并从 SQLite Action Board 重建 active actions。OpenAPI 的 200 response schema 已明确发布这些保留边界。
 
 创建本地 `.env` 文件。它会被 git 忽略：
 
@@ -356,7 +374,7 @@ physical-agent setup --force
 physical-agent chat
 ```
 
-`physical-agent chat` 是日常唯一对话入口：启动后直接输入自然语言即可。它可以聊天、记忆、提交物理动作，也可以把代码类请求路由到 skills，直接改文件并运行测试。
+`physical-agent chat` 是日常唯一对话入口：启动后直接输入自然语言即可。它可以聊天、记忆、起草并显示物理动作，也可以把代码类请求路由到 skills，直接改文件并运行测试。普通 chat 默认不会把这些 draft 提交到 Action Board。
 
 单条消息模式：
 
@@ -366,7 +384,7 @@ physical-agent chat "在 test 里写一个最简单的正方形示例并运行"
 physical-agent chat --planner llm --message "Please pick the red block and place it on the tray."
 ```
 
-默认 `--planner auto` 会优先尝试 `.env` 里的 LLM，失败时回退到本地 rule-based chat。看到 `LLM chat was unavailable` 不代表框架崩了，常见原因是：
+默认 `--planner auto` 会优先尝试 `.env` 里的 LLM，失败时回退到本地 rule-based chat。普通 rule/LLM chat 会持久化 reply、current intent 与 structured draft，但不创建 pending Action Board action；TUI/CLI 只显示该 draft，React/Web 可由用户 Add to Actions。显式 `--planner tool_loop` 才可能经 proposal-only tool 直接提交 pending，但仍不能 approve 或 execute。看到 `LLM chat was unavailable` 不代表框架崩了，常见原因是：
 
 - `HTTP 503`：上游服务暂时不可用
 - `HTTP 429`：被限流
@@ -378,6 +396,8 @@ physical-agent chat --planner llm --message "Please pick the red block and place
 ```bash
 physical-agent chat --planner llm
 ```
+
+watch 只处理已经提交到 Action Board 的 action。普通 CLI chat 显示的 draft 不在 Action Board 中，因此 watch 看不到；启动 watch 不会自动提交或执行该 draft。请先通过 React/Web Add to Actions、task/manual/run 或显式 `--planner tool_loop` 提交，再由独立或内嵌 watch 处理。
 
 如果希望默认使用 LLM planner，可以编辑 `physical-agent.yaml`：
 
@@ -429,7 +449,7 @@ pytest -q
 - driver manifest 和 config schema 校验
 - built-in driver 与本地 driver loader
 - 硬件接入助手生成可加载 driver scaffold
-- LLM driver coding、mock 验证、CLI/chat/GUI 入口
+- LLM driver coding 的静态 manifest/Python/interface 校验与 CLI/chat/GUI 入口
 - safety gate 拒绝路径
 - mock arm pick/place 状态变化
 - rule-based planner

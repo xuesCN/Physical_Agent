@@ -77,7 +77,6 @@ export function sendChat(message: string): Promise<{
   ok: boolean;
   mode?: string;
   reply: string;
-  executed: number;
   state: AgentState;
 }> {
   return apiJson("/api/chat", {

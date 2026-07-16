@@ -207,7 +207,6 @@ export interface AgentPlan {
   intent?: string;
   summary?: string;
   steps?: string[];
-  actions?: ActionItem[];
   needs_watch?: boolean;
   agent_output?: AgentOutput | null;
   plan?: AgentPlan;

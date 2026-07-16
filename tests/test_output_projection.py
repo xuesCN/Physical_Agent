@@ -331,3 +331,47 @@ def test_current_projection_rebuilds_active_tasks_after_chat_overwrites_plan():
         feedback={"history": []},
         preferred=None,
     ) is not None
+
+
+def test_chat_plan_ignores_retired_top_level_actions_and_projects_only_agent_output():
+    stale_action = Action(
+        id="act_stale",
+        robot="arm_1",
+        capability="observe",
+    )
+    active_action = Action(
+        id="act_active",
+        robot="arm_1",
+        capability="observe",
+        metadata={
+            "correlation": {
+                "session_id": "workspace",
+                "proposal_id": "proposal_active",
+            }
+        },
+    )
+    legacy_plan = ChatPlan.model_validate(
+        {
+            "status": "proposed_actions",
+            "intent": "act",
+            "summary": "legacy persisted plan",
+            "actions": [stale_action.model_dump(mode="json")],
+        }
+    )
+
+    projected = project_chat_plan(
+        {"metadata": {"revision": 3}, "plan": legacy_plan},
+        actions={
+            "pending": [active_action],
+            "in_progress": [],
+            "completed": [],
+            "cancelled": [],
+        },
+        feedback={"history": []},
+    )
+    serialized = projected["plan"].model_dump(mode="json")
+
+    assert "actions" not in serialized
+    assert [
+        action["id"] for action in serialized["agent_output"]["actions"]
+    ] == ["act_active"]

@@ -213,7 +213,6 @@ class PhysicalAgentMCP:
                 intent="act" if agent_output.actions else "task",
                 summary=summary,
                 steps=task_graph_steps(agent_output),
-                actions=agent_output.actions,
                 needs_watch=bool(agent_output.actions),
                 agent_output=agent_output,
             )

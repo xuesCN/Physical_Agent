@@ -67,7 +67,7 @@ def test_chat_runtime_rule_based_drafts_actions_without_writing_pending(tmp_path
     assert all(task["status"] == "not_scheduled" for task in gates)
     assert result["reply"] == result["agent_output"]["message"]
     assert "```action-draft" not in result["reply"]
-    assert result["executed"] == 0
+    assert "executed" not in result
     store = open_state_store(config_path=config_path)
     assert store.read_world()["state"]["objects"]["red_block"]["location"] == "table"
     assert store.read_actions()["pending"] == []
@@ -135,7 +135,7 @@ def test_chat_runtime_tool_loop_submits_proposal_without_executing(tmp_path, mon
 
     result = runtime.respond("look around")
 
-    assert result["executed"] == 0
+    assert "executed" not in result
     assert result["plan"]["needs_watch"] is True
     assert [action["id"] for action in result["agent_output"]["actions"]] == [
         "act_tool_loop"
@@ -411,7 +411,7 @@ def test_chat_runtime_stream_never_creates_pending_actions(tmp_path):
     ] == ["pick", "place"]
     store = open_state_store(config_path=config_path)
     assert store.read_actions()["pending"] == []
-    assert store.read_plan()["plan"].actions == []
+    assert "actions" not in store.read_plan()["plan"].model_dump(mode="json")
 
 
 def test_chat_runtime_stream_prompt_uses_structured_actions_without_fence(tmp_path, monkeypatch):

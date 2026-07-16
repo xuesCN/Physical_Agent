@@ -15,7 +15,7 @@
 | 5 | 结构化 Chat Turn + `action-draft` 双轨 | ✅ 本地真实 Chromium 27/27、fork Push/PR CI 成功 | 独立一轮验证 structured/fence 一致，F1 主链与旧 fallback 全绿 |
 | 6 | 收敛 application/read-model 职责和官方消费者 | ✅ official consumers 迁移完成，fork Push/PR CI 成功 | `_append_actions` 等死代码为零；消费者只读 canonical projection/output |
 | 7 | 切断旧 wire compatibility | ✅ 2026-07-15 完成 | 停产/删除 fence；删除 proposal 顶层 `actions/action/draft_actions`，不动 state board |
-| 8 | 文档、发布形态与全量验证收口 | ⚪ | 全量测试、wheel、docs/CLI/README grep 和安全扫描全绿 |
+| 8 | 文档、发布形态与全量验证收口 | ✅ 本地实现与验收完成；等待 commit/push/远端 CI | 全量测试、wheel、docs/CLI/README grep 和安全扫描全绿；最终提交单独执行 |
 
 ## 1. 冻结范围、建立规格与退役清单
 
@@ -183,12 +183,12 @@ Rollback：fence 和 response 字段分两个提交；任一外部兼容问题�
 
 ## 8. 文档、发布形态与全量验证收口
 
-1. 以当前实现重写或删除过期的 current architecture snapshot/HTML；若保留 HTML，重新生成 hash 并通过一致性测试。
-2. SPEC/PLAYBOOK/REFACTORING/README/README.zh-CN/state-backends/system-summary/hardware guides/examples/CLI help 统一口径。
+1. 以当前实现收口正式 current docs。用户保留的 `current-architecture-audit.md`、`current-architecture-audit.html` 与 `system-summary.zh-CN.md` 是阶段快照，不属于 current-doc contract；不修改、不删除、不重新生成，也不据此阻塞 R8。
+2. SPEC/PLAYBOOK/REFACTORING/README/README.zh-CN/state-backends/hardware guides/examples/CLI help/API/OpenAPI 统一口径。
 3. 把 `agent-architecture-vnext` 收口为当前架构说明，不再把已暂停的 task table/Event ledger 写成默认下一步。
 4. 执行 Python 全量测试、frontend build + Playwright、TUI build/test、wheel build/install smoke、安全 AST/grep 边界扫描。
-5. 更新 `tasks.md` 证据、SPEC 状态和 REFACTORING 决策/教训；小步 commit/push，不额外创建 handoff 文档。
+5. 更新 `tasks.md` 删除证据矩阵、SPEC 状态和 REFACTORING 决策/教训；本轮先完成本地验收，`commit/push` 单独保持未完成，等待独立 review，不额外创建 handoff 文档。
 
-Go：总体验收八项全部满足，R0-R8 才可标记完成。
+Go：R8 前 11 项均有本轮真实证据时，可记录“实现与本地验收完成，等待最终提交和远端 CI”；第 12 项只有独立 review 后实际 commit/push 且远端门禁成功才可勾选。
 
 后续：重新评审冻结 backlog；没有真实需求证据的项继续挂起。

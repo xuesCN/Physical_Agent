@@ -591,7 +591,7 @@ def test_http_proposal_handlers_do_not_start_watch(tmp_path, monkeypatch):
     assert proposed.status_code == 200
     assert submitted.status_code == 200
     assert chat.status_code == 200
-    assert chat.json()["executed"] == 0
+    assert "executed" not in chat.json()
 
     store = open_state_store(config_path=config_path)
     board = store.read_actions()

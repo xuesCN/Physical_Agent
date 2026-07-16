@@ -2,7 +2,7 @@
 
 > 本文合并了原 optimization-spec（安全不变量）、plan-f（当前目标）与 traceability-matrix（账本），原件已删除、git 历史可查。历史过程见 `REFACTORING.zh-CN.md`。
 > **维护规则**：每轮 session 收尾更新 §4 矩阵一行 → commit → push；里程碑拆分时拆行记录；状态以验收测试通过为准。
-> 最后更新：2026-07-15
+> 最后更新：2026-07-16
 
 ## 0. 安全边界（三层：宪法 / 授权策略 / 工程纪律）
 
@@ -26,9 +26,16 @@
 ## 1. 系统与产品框架
 
 ```
-入口(CLI/API/GUI/MCP) → raw model decision（不可信）→ PlanCompiler（可信）→ AgentOutput topology → Action Board(SQLite) → watch(Gate+执行+看门狗) → driver+transport → 硬件
-运行态投影：Action Board + structured feedback → output_projection → materialized current AgentOutput → 下一认知轮次
+用户 Chat → rule/LLM action intents → normalize + stable ID/dependency → trusted PlanCompiler → structured AgentOutput / ChatPlan.agent_output → API/SSE/assistant metadata → structured draft
+  ├─ React/Web 可操作 Draft card → 用户 Add to Actions → pending action
+  └─ TUI/CLI 结构化展示（无直接 Add 控制）
+显式 tool_loop → proposal-only tool → pending action
+task/manual/run proposal 路径 → pending action
+pending action → approval（如需要）→ Watch SafetyGate → driver.execute → canonical feedback/read model
+运行态投影：SQLite Action Board + structured feedback → output_projection → materialized current AgentOutput → 下一认知轮次
 ```
+
+rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Draft card，并可由用户通过 Add to Actions 创建 pending action；TUI/CLI 只显示 structured draft，不提供从该 draft 直接 Add 的控制。显式 `tool_loop` 是例外：它可调用 proposal-only tool 直接提交 pending，但仍绝不 approve 或 execute；既有 task/manual/run proposal 路径也可直接创建 pending。
 
 三入口 = 同一提案管线的自主档位：**档位0** 手动表单（jog）· **档位1** Chat 起草→人批 · **档位2** Task 一次规划 · **档位3** 闭环自主（未建）。
 分工恒定：LLM 只起草 action intent 与 advisory `SafetyIntent`；可信 application 层为每个物理 Action 注入唯一、mandatory、watch-owned `SafetyGateTask`；人类只完成审批义务；watch 最终校验并执行；F4 expected 只做执行后诊断。`SafetyGateTask` 不是 Action/tool，模型不能创建、删除、完成或绕过。
@@ -65,9 +72,9 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 
 | 编号 | 内容 | 归属 | 状态 |
 | --- | --- | --- | --- |
-| **R0-R8** | 架构减法与兼容面退役 | `specs/001-architecture-simplification/` | 🟡 R0-R4 已完成；R5 structured Chat Turn 双轨与 R6 official consumer migration 已完成，fork Push/PR CI 均成功。R7 已退役 action-draft fence 生成/parser/React fallback 和 proposal 顶层 action convenience fields；`AgentOutput`/`ChatPlan.agent_output` 是唯一 draft 机器通道，历史 fence-only chat 只作文本。approve/reject mutation `action`、`/api/state.actions`、pending/approval/SafetyGate 语义均保留；R8 全量文档/发布收口待继续 |
+| **R0-R8** | 架构减法与兼容面退役 | `specs/001-architecture-simplification/` | 🟡 实现与本地验收完成，等待最终提交和远端 CI。R8 已收口 current docs、Moce SQLite 示例、`ChatPlan.actions` 重复投影、typed OpenAPI、chat-side `executed=0` 残留及发布包；`AgentOutput`/`ChatPlan.agent_output` 是唯一 Draft 机器通道，`/api/state.actions` 仍是 board truth，approve/reject mutation `action`、pending/approval/SafetyGate 与 watch 唯一执行权保持。commit/push 尚未执行 |
 | F0 | LLM planner + 本地调用留痕 + 坏任务实验报告 | §2 | ⏸ R0-R8 冻结；既有第一轮 15 条结果保留：10 完成、5 无提案、0 Gate 拦截。**Review 复核（2026-07-06）**：trace 证实 bounds 在 prompt 内、拒绝为知情拒绝；不在本轮继续扩实验或功能 |
-| B6 | 退役 markdown 后端（保留 renderer 与迁移命令） | §2 | ✅ 2026-07-06 完成 `9072b4e`：active backend 只剩 SQLite；旧 Markdown 仅迁移 reader 可读 |
+| B6 | 退役 Markdown runtime/migration（保留 SAFETY/LOG sidecar 与 fail-closed） | §2 | ✅ active backend 只剩 SQLite；R3 已删除当前 migrator、reader 与 full Workspace。当前版本不再提供迁移命令，只保留 SAFETY/LOG sidecar、legacy workspace fail-closed 检测和独立历史 checkout `9072b4e` 救援路径 |
 | F1 | 提案卡片 + Add to Actions + 审批流 | §2 | ✅ 2026-07-07 完成：Chat draft 卡片只提交动作板；Actions 板审批才放行 `requires_approval`；approval required 后端计算，SQLite 原子 claim 跳过未批准动作；拒绝/审批元数据进 LOG/audit |
 | F2 | feedback 时间线 + world 视图 + JSON 树 | §2 | ✅ 2026-07-07 完成：feedback/action approval/refusal_reason 时间线可读，world objects 表格化，capabilities/config/integration 轻量可读；raw JSON 改懒加载树兜底。提交 `58a75b0`。2026-07-08 补 `docs/current-architecture-audit.html` 静态审计阅读页，展示 `docs/current-architecture-audit.md` 内容 |
 | F2.5 | State Overview 产品化收口 | §2/F2 后续收口 | ✅ 2026-07-08 完成：新增 `frontend/src/viewmodels/` formatter 层；Overview 首屏用 AntD Card/Statistic/Table/Descriptions/Tag/List 展示 system/robots/capabilities/environment/world objects；`RawDebug` 仅折叠展示 unknown/raw/backend private 字段。follow-up：非 RawDebug 的 params/schema/raw 展示统一为 Overview capability 风格的轻量摘要；RawDebug 也改为 AntD Collapse/Tree，移除 `react18-json-view` 依赖与 `json-view` chunk |
@@ -99,7 +106,7 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | E3 | 暗色模式 + 首次引导 | PLAYBOOK 同名条目 | ✅ 2026-07-07 完成：AntD `darkAlgorithm` + CSS 变量暗色适配 + localStorage；首次 3 步 Tour 与 Settings 重开入口 |
 | E0-e2e | Hardware/注册/DangerZone/ConfigPanel 的 Playwright 用例 | PLAYBOOK 同名条目 | ✅ 2026-07-07 完成：补 Danger Zone reset、Hardware scaffold→register→ConfigPanel、i18n、dark mode、Tour；dashboard e2e 18 passed |
 | B4-vec | 真实向量 RAG（sqlite-vec + embedding） | 延后项；原设计见 git 历史 optimization-spec §4 | ⏸ |
-| 基建 | CI（pytest 3.11/3.12 + 前端 build）；push 纪律；测试 env-scrub fixture | 流程欠账 | ✅ 2026-07-08 调整为宽松 CI：默认阻塞 Python safety smoke + frontend build；TUI/e2e 为 advisory；Python 3.11/3.12 全量 pytest 改为手动 full run；新增 `docs/CI.zh-CN.md` |
+| 基建 | CI（pytest 3.11/3.12 + 前端 build）；push 纪律；测试 env-scrub fixture | 流程欠账 | ✅ 当前 push 阻塞 Python safety smoke、frontend build/wheel 与 TUI；PR 额外阻塞 Python 3.12 full pytest 和真实 Chromium Playwright。Python 3.11/3.12 全量矩阵仍由 `workflow_dispatch full=true` 手动运行；细节以 `docs/CI.zh-CN.md` 为准 |
 
 ## 5. 验证环境备注
 

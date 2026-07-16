@@ -1,6 +1,6 @@
 # 001：架构减法与兼容面退役
 
-状态：执行中（R0-R7 完成；R5/R6 fork Push CI 与 PR CI 成功；R7 已切断旧 action-draft wire，R8 收口待继续）
+状态：实现与本地验收完成，等待最终提交和远端 CI（R8 commit/push 项仍未完成）
 
 日期：2026-07-15
 
@@ -97,6 +97,8 @@ R2 阶段 review 发现 React/TUI 仍会从 raw feedback/Action Board 二次推�
 - 正式客户端迁移到 `agent_output.actions` 与 `agent_output.tasks`。
 - `/api/state.actions` 永久保留，它是 Action Board 的运行事实，不属于重复 response 字段。
 - task/chat/manual proposal response 顶层的 `actions`/`action`/`draft_actions` 已在 R7 删除；canonical proposal payload 只在 `agent_output.actions`。
+- R8 继续删除 `ChatPlan.actions` 第三份投影；plan consumer 读取 `plan.agent_output.actions`，旧持久化额外字段被忽略，active actions 从 SQLite board materialize。
+- proposal/chat/task 与 approve/reject 的 typed OpenAPI 200-response schema 明确保留字段边界；mutation `action` 不属于 proposal duplication。
 - `message`、`proposal_status`、`proposal_id`、`refusal_reason` 等 envelope/status/correlation 字段本条目保留；`ProposalResult.actions` 等 application 内部 typed command result 也不在公开 wire 去重范围。若要继续删，必须另做消费者审计。
 - Web 与 TUI 可以保留各自的 formatter/viewmodel；统一的是后端契约与状态解释，不强求两个表现层共享渲染代码。
 

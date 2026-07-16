@@ -1216,7 +1216,6 @@ test("real streaming AgentOutput and ChatPlan can be persisted to pending Action
   };
   const chatPlan = done?.payload.plan as {
     agent_output?: unknown;
-    actions?: Array<{ id?: string }>;
     needs_watch?: boolean;
   };
   expect(done?.payload).not.toHaveProperty("actions");
@@ -1228,7 +1227,7 @@ test("real streaming AgentOutput and ChatPlan can be persisted to pending Action
   expect(done?.payload.reply).toBe(agentOutput.message);
   expect(done?.payload.reply).not.toContain("```action-draft");
   expect(chatPlan.agent_output).toEqual(agentOutput);
-  expect(chatPlan.actions).toEqual([]);
+  expect(chatPlan).not.toHaveProperty("actions");
   expect(chatPlan.needs_watch).toBe(false);
   expect(
     agentOutput.tasks?.some(
@@ -1365,7 +1364,6 @@ test("streaming fence-like text stays inert until structured AgentOutput arrives
           intent: "act",
           summary: replyPrefix,
           steps: [],
-          actions: [],
           needs_watch: false,
           agent_output: structuredOutput,
         },
@@ -1895,7 +1893,6 @@ async function mockApiSnapshot(page: Page, snapshot: Record<string, unknown>) {
         ok: true,
         mode: "rule_based",
         reply: `Fallback reply: ${body.message ?? ""}`,
-        executed: 0,
         state: nextSnapshot,
       }),
     });

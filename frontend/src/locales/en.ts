@@ -125,7 +125,7 @@ export const en = {
   },
   hardware: {
     proposalOnly: "Proposal-side only",
-    proposalOnlyDescription: "Generates driver files and validates them in mock mode. Watch remains the only runtime that loads drivers and touches hardware.",
+    proposalOnlyDescription: "Generates driver files and performs static manifest/Python/interface validation. Request-side code never imports, connects to, or executes the candidate driver; run dynamic conformance only through an explicit watch-side workflow.",
     source: "Source (SDK folder, repo path, or URL)",
     sourceRequired: "Source is required",
     driverName: "Driver name (optional)",

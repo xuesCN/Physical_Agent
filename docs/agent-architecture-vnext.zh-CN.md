@@ -1,47 +1,34 @@
-# Physical Agent vNext：以安全义务为核心的 Agent 架构
+# Physical Agent 当前架构：安全义务主链与历史决策
 
-日期：2026-07-10
+日期：2026-07-16
 
-范围：本文基于 `current-architecture-audit.md`（2026-07-08 的历史快照）、`refactor` 分支近期修改和当前工作树重新评估 Physical Agent。安全宪法仍以 `SPEC.zh-CN.md` §0 为准；本文只定义领域心智模型、软件边界与演进顺序。
+范围：本文只描述当前代码、已执行的设计决策与明确冻结的候选范围。安全宪法以 `SPEC.zh-CN.md` §0 为准；用户保留的 `current-architecture-audit.md/.html` 与 `system-summary.zh-CN.md` 是阶段快照，不属于本文的 current-doc contract，也不在 R8 修改或重新生成。
 
-## 0. 结论：先修心智模型，再补运行账本
-
-上一版路线把 `Run / Turn / Event` 当成 vNext 的第一块地基，这个顺序不正确。它能统一追踪与展示，却没有改变核心决策模型：模型仍像是在输出 `Action[]`，SafetyGate 只是动作被 watch 领取之后的一个隐式步骤。这样会导致三类问题：
-
-1. Agent 的公开输出无法表达“这个物理动作在执行前必须完成哪些义务”。
-2. 前端、TUI 和下一轮模型只能看到 action/feedback，难以区分等待审批、等待安全校验、正在执行和执行后验证。
-3. 一旦先围绕 Run/Event 扩展，各入口仍会把同一组安全语义重复翻译，只是多了一层账本。
-
-正确的核心链路应是：
+## 0. 结论：当前唯一架构主链
 
 ```text
-不可信 raw model decision
-  -> 可信 application PlanCompiler
-  -> AgentOutput task DAG
-       ApprovalTask?（人拥有）
-         -> SafetyGateTask（必有、watch 拥有）
-         -> PhysicalActionTask（watch 拥有）
-         -> VerificationTask?（执行后诊断）
-  -> watch 最终 Gate
+用户 Chat
+  -> rule/LLM action intents
+  -> normalize + stable ID/dependency
+  -> trusted PlanCompiler
+  -> structured AgentOutput / ChatPlan.agent_output
+  -> API/SSE/assistant metadata
+  -> structured draft
+     -> React/Web 可操作 Draft card -> 用户 Add to Actions -> pending action
+     -> TUI/CLI 结构化展示（无直接 Add 控制）
+显式 tool_loop -> proposal-only tool -> pending action
+task/manual/run proposal 路径 -> pending action
+  -> approval（如需要）
+  -> Watch SafetyGate
   -> driver.execute
-  -> 结构化 Gate / action / verification feedback
-  -> output_projection（compiled topology + Action Board + feedback）
-  -> materialized current AgentOutput
-  -> 下一认知轮次
+  -> canonical feedback/read model
 ```
 
-因此演进顺序必须改为：
+rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Draft card，并可由用户通过 Add to Actions 创建 pending action；TUI/CLI 只显示 structured draft，不提供从该 draft 直接 Add 的控制。显式 `tool_loop` 是例外：它可调用 proposal-only tool 直接提交 pending，但仍绝不 approve 或 execute；既有 task/manual/run proposal 路径也可直接创建 pending。
 
-1. `AgentOutput + PlanCompiler + task DAG`；
-2. watch 的结构化安全裁决与反馈回灌；
-3. 服务端 materialized current output 与执行调度硬化；
-4. 持久化 obligation 与“持久化 task graph + actions”同事务，以及 driver/hardware-level fencing token；
-5. 再用 `Run / Turn / Event` 包住上述闭环，承担恢复、审计和时间线；
-6. 最后推进 registry、typed read model、world freshness 与 F6。
+这条链的其余当前约束是：reply 只承载用户可读文本，不生产或解析 `action-draft` 机器协议；可操作 Draft 只来自 compiler-owned `AgentOutput`。Add 只创建 pending action，不等同于 approve 或 execute。审批只决定是否等待人，SafetyGate 仍在执行边界逐次校验 `SAFETY.md`；只有 watch 调用 `driver.execute()`。SQLite Action Board/feedback 是运行事实，`application.output_projection` 生成 current `AgentOutput`，React Dashboard 是唯一 GUI。
 
-第 1～3 步已在本轮以兼容方式落地；actions batch 原子提交与 workspace watch singleton lease 也已完成。第 4 步中的独立 task 持久化、graph/action 同事务和硬件级 fencing 仍未完成。
-
-`Run / Turn / Event` 仍然重要，但它们是账本外壳，不是 Agent 的核心心智模型。
+`AgentOutput + PlanCompiler + task DAG`、结构化 Gate feedback、materialized current projection、proposal action batch 原子提交和 workspace singleton watch lease 均已落地。独立 task engine、Run/Turn/Event、registry/read-model 扩张、world freshness、W4/W6.2 与 F6 均未实现且继续冻结；这些只是历史候选，不是默认开发路线，R8 后也不会自动恢复。
 
 ## 1. 不可改变的信任边界
 
@@ -79,7 +66,7 @@
 - `protocol/agent_output.py` 定义 `AgentOutput`、`AgentTask`、安全检查说明和任务图不变量；
 - `protocol/actions.py` 增加 advisory `SafetyIntent`，LLM schema 与 prompt 明确其非权威性质；
 - trusted `PlanCompiler` 为每个 Action 编译唯一 mandatory、watch-owned `SafetyGateTask`，并组合可选 Approval、PhysicalAction 与 Verification 依赖；
-- `ProposalService`、API、MCP、`AgentRuntime`、Chat draft/tool loop 与 `ChatPlan` 已接入 compiled `AgentOutput`；
+- `ProposalService`、API、MCP、`AgentRuntime`、rule/LLM Chat draft 与显式 tool_loop submitted turn 均已接入 compiled `AgentOutput`；前者保持 `lifecycle=draft`，后者只经 proposal-only tools 形成 pending；
 - `application/output_projection.py` 以 compiled topology 为骨架，将 Action Board、Gate feedback 与 expectation feedback materialize 成当前 `AgentOutput`；即使普通 chat 覆盖 singleton `ChatPlan`，active actions 也能重建当前义务；
 - materializer 将 `in_progress` 映射为 `checking`，Gate reject 会把 PhysicalAction/Verification 投影为 `skipped`，动作完成后有 expected 时保持 verification `checking`，直到 `expectation_check` 给出 verified/violated/skipped；
 - `AgentRuntime` 等待 required verification 后才把 output 判为 completed，不再把“driver 已完成”误作“任务验证已完成”；
@@ -95,16 +82,16 @@
 
 这完成的是**可重建、可 materialize 的兼容式 assurance loop**，不是完整 task runtime：Action Board 与原子 feedback 是运行事实，compiled graph 提供 topology，materializer 组合当前视图；actions batch 已原子，但尚无独立 task table、持久化 task graph 与 actions 的同一事务或 Run/Turn/Event ledger。workspace lease 提供软件执行者唯一性，但尚无 driver/hardware 能校验的 fencing token。
 
-### 2.3 旧链路为什么仍显粗糙
+### 2.3 历史链路为何需要收敛
 
-旧的真实主链是：
+R0 前的真实主链曾是：
 
 ```text
 planner -> Action[] -> pending action board -> approval? -> watch claim
         -> SafetyGate -> execute -> feedback -> expected check
 ```
 
-它在执行安全上是保守的，但公开心智模型仍以 Action 为中心。SafetyGate 只存在于 watch 实现细节，不在 Agent 输出中成为可观察义务；approval、Gate、execution、expected 又分散在 metadata、action 状态和 feedback 里。产品因而更像“LLM 帮忙填动作队列”，而不是能解释自身等待条件和下一步责任人的 Agent。
+它在执行安全上是保守的，但公开心智模型仍以 Action 为中心。SafetyGate 只存在于 watch 实现细节，不在 Agent 输出中成为可观察义务；approval、Gate、execution、expected 又分散在 metadata、action 状态和 feedback 里。这正是 R0-R8 收敛为当前唯一主链的历史原因；本节不是仍可并存的运行路径。
 
 ## 3. 核心协议：RawDecision 与 AgentOutput 必须分开
 
@@ -228,35 +215,32 @@ workspace 级执行 ownership 已在本轮落地：
 
 ## 5. 软件分层
 
-建议增量形成以下边界：
+当前实现形成以下边界；树中只列已经存在的模块，不把冻结候选伪装成待建默认结构：
 
 ```text
 physical_agent/
 ├── protocol/
 │   ├── actions.py          Action intent + advisory SafetyIntent
 │   ├── agent_output.py     AgentOutput / AgentTask / check schemas
-│   ├── runs.py             后续：Run / Turn
-│   ├── events.py           后续：ledger event envelope
-│   └── world.py            后续：freshness contract
+│   └── schemas.py          ChatPlan 与 API 共享协议
 ├── application/
 │   ├── proposals.py        proposal use case
 │   ├── plan_compiler.py    可信 task graph 编译
 │   ├── output_projection.py board + feedback -> current AgentOutput
-│   ├── orchestrator.py     后续：认知轮次推进
-│   ├── registry.py         后续：skill/tool/capability catalog
-│   └── queries.py          后续：read models
+│   └── ports.py            application-facing state ports
 ├── agent/
 │   ├── context_builder.py  只读上下文；能看 safety 与 feedback
+│   ├── chat_runtime.py     rule/LLM 产 structured draft；tool_loop 经 proposal-only tools 提交 pending
 │   └── *_planner.py        产生 raw decision/action intent
 ├── watch/
 │   ├── safety.py           最终 Gate 决策与结构化证据
 │   └── runtime.py          唯一执行、观察与 feedback 编排
 ├── state/
-│   └── sqlite.py           action/feedback 当前真源与原子事务
+│   ├── sqlite.py           action/feedback 当前真源与原子事务
+│   └── sidecars.py         SAFETY/LOG 文件侧车
 └── api/
-    ├── commands.py         后续拆分 write use cases
-    ├── queries.py          后续拆分 projections
-    └── streams.py          后续 typed SSE
+    ├── server.py           HTTP/OpenAPI 与 canonical response
+    └── watch_service.py    API 到唯一 watch runtime 的适配
 ```
 
 依赖方向：`protocol <- application <- agent/api/mcp`；watch 可以消费 protocol 和 state port，但 application/agent/API request handler 不得反向 import watch 或 driver。
@@ -285,9 +269,9 @@ PlanCompiler 输出的 graph topology（不可由模型修改）
 
 尤其不能把 `SafetyGateTask` 注册为 LLM tool；否则模型会获得伪造调用或完成状态的表达空间。
 
-## 6. Run / Turn / Event 的正确位置
+## 6. Run / Turn / Event 的冻结候选位置
 
-完成 assurance loop 后，再引入外层账本：
+Run / Turn / Event 曾被记录为可能的外层账本模型：
 
 ```text
 Run
@@ -302,7 +286,7 @@ Run
 - `Turn` 表达一次有边界的认知输入、决策和输出。
 - `Event` 记录 proposal、task 状态、approval、Gate、execution、observation 与 verification 的因果时间线。
 
-建议的首批事件应围绕真实闭环，而不是先围绕 UI 命名：
+历史候选事件围绕真实闭环，而不是 UI 命名：
 
 - `turn.decision_compiled`
 - `task.status_changed`
@@ -314,9 +298,11 @@ Run
 
 Event 是审计和恢复载体，不能成为绕开 state transaction 或 Gate 的第二执行通道。
 
+当前代码没有 Run/Turn/Event ledger，本轮也不实现它。只有在 SPEC 重新激活对应条目、明确恢复与审计需求并完成独立设计评审后，才可重启；它不是 R8 之后的默认下一步。
+
 ## 7. API、流式协议与产品可见性
 
-所有主要 proposal 入口都返回同一协议的 `AgentOutput`；R7 已删除与 `agent_output.actions` 重复的 proposal 顶层 `actions`/`action`/`draft_actions`。包括：
+所有主要 proposal 入口都返回同一协议的 `AgentOutput`；R7 已删除与 `agent_output.actions` 重复的 proposal 顶层 `actions`/`action`/`draft_actions`，R8 又删除可陈旧的 `ChatPlan.actions` 第三份投影。plan consumer 只读 `plan.agent_output.actions`；运行 Action Board 仍读 `/api/state.actions`。typed OpenAPI 200-response schema 明确发布 proposal 与 mutation 的不同边界。包括：
 
 - API task 与 manual proposal；
 - MCP task 与 proposal；
@@ -326,21 +312,23 @@ Event 是审计和恢复载体，不能成为绕开 state transaction 或 Gate �
 
 React/TUI 已直接展示 task kind、owner、status、依赖、关联 action、Gate policy source，并消费服务端 materialized output。用户无需展开 raw JSON 即可回答“现在卡在哪里、下一步由谁做、Gate 是否真的执行过”。这仍是 read projection，不代表客户端或 plan 文档成为 Gate authority。
 
-Chat draft/tool loop 与 `ChatPlan` 已附上 compiled `AgentOutput`；流式 chat 的 Draft 只从 SSE done/assistant metadata 的 canonical `AgentOutput` 创建。reply 只作用户可读文本，即使包含旧 fence-like 内容也不得升级为卡片。旧 fence-only 历史消息仍可阅读，但不可再 Add；无需数据迁移层。
+rule/LLM Chat draft 与 `ChatPlan` 已附上 `lifecycle=draft` 的 compiled `AgentOutput`；流式 chat 的 Draft 只从 SSE done/assistant metadata 的 canonical `AgentOutput` 创建。React/Web 可把它呈现为可操作卡片，TUI/CLI 只展示 structured draft。显式 tool_loop 则经 proposal-only tools 直接提交 pending，并返回 `lifecycle=submitted` 的 materialized output；它不 approve、不执行。reply 只作用户可读文本，即使包含旧 fence-like 内容也不得升级为卡片。旧 fence-only 历史消息仍可阅读，但不可再 Add；无需数据迁移层。
 
-## 8. 与 world freshness、registry 和 F6 的关系
+## 8. 冻结范围与重启条件
 
-Assurance loop 稳定后再推进：
+以下均是冻结候选，不是默认开发路线：
 
-1. registry 统一 skill/tool/capability descriptor 与可见性策略；
-2. command/query 分离和共享 read model；
-3. world 增加 `observed_at/revision/stale`，让 planner、UI 与 policy 能判断事实新鲜度；
-4. W4 单 watch 多机器人并行 execute 单独安全评审；多 watch 已受 workspace singleton lease 约束，但实机高可用接管仍需 VNext-3B2/W6.2 hardware-level fencing；
-5. F6 simulator 继续作为 driver，复用 AgentOutput、Gate feedback 和 WorldSnapshot。
+1. registry、command/query 分离和共享 read model；
+2. world freshness 的 `observed_at/revision/stale`；
+3. W4 单 watch 多机器人并行 execute，以及 VNext-3B2/W6.2 hardware-level fencing；
+4. F6 simulator 与 conformance；
+5. Chat/Task 多轮自主 replan loop（Level 3）。
 
 仿真可以帮助验证 action、world 与 UI 协议，但不能替代实机 SafetyGate 或证明 real-hardware policy 安全。
 
-## 9. 修正后的实施顺序与验收
+只有 SPEC §4 明确解除冻结、补齐依赖与正反验收并通过安全边界评审时，才能逐项重启；R8 不为它们预建模块、接口或兼容层。
+
+## 9. 历史阶段结果与冻结候选
 
 ### VNext-1：AgentOutput 与可信 PlanCompiler（本轮完成）
 
@@ -359,9 +347,9 @@ Assurance loop 稳定后再推进：
 - context-aware planner 读取 `SAFETY.md`、budgeted feedback 与 previous output；AgentRuntime 等待 verification。
 - 验收：Gate reject 不触发 driver；active task 不因 chat plan 消失；同 robot 不重叠 claim；heartbeat degraded 暂停新动作并可恢复；UI/TUI 能解释当前状态。
 
-以上已通过定向测试。当前 obligation 状态通过 compiled graph、Action Board 与 feedback materialize；持久化 obligation engine 留给 VNext-3A。
+以上已通过定向测试。当前 obligation 状态通过 compiled graph、Action Board 与 feedback materialize；不据此自动启动持久化 obligation engine。
 
-### VNext-3A：持久化任务状态与原子提交（未完成）
+### VNext-3A：持久化任务状态候选（冻结）
 
 - 明确 tasks 是持久化实体还是从 Action/feedback 可重建的 projection。
 - 已完成：`append_pending_actions()` 单事务写入 proposal 的全部 actions，任何冲突回滚整个 batch。
@@ -376,26 +364,26 @@ Assurance loop 稳定后再推进：
 - action terminal mutation 需要匹配唯一 `claim_owner`；active lease 阻止 destructive reset。
 - 验收已覆盖 lease acquire/renew/release/expiry、双 WatchRuntime、stale completion CAS、fatal API watch stop 与 reset guard。
 
-### VNext-3B2：driver/hardware-level fencing token（未完成）
+### VNext-3B2：driver/hardware-level fencing token（冻结）
 
 - 将 lease epoch/fencing token 下沉到 driver/transport/设备控制面，令设备或独占代理拒绝旧 owner 的后续 I/O。
 - 明确 in-flight command、网络分区、存储不可达和接管前 fresh observe/halt 的故障模型。
 - 验收：旧 owner 即使仍存活或旧 I/O 迟到，也不能对继任者控制的硬件产生副作用；接管绝不重放旧 action。
 
-### VNext-4：Run / Turn / Event 账本（未完成）
+### VNext-4：Run / Turn / Event 账本（冻结）
 
 - additive 引入 Run/Turn 与带 sequence/cursor 的 Event envelope。
 - correlation 扩展 run/turn/task/action。
 - 从现有表与事件构建 timeline，不做一次性纯 event sourcing 重写。
 - 验收：一次目标可追到每次 compiled output、义务状态、Gate evidence、执行与观察终态。
 
-### VNext-5：Typed stream、registry 与 read model
+### VNext-5：Typed stream、registry 与 read model（冻结）
 
 - typed SSE、共享 reducer/类型；`action-draft` fence 已在 R7 完成兼容周期并退役。
 - 统一 skill/tool/capability catalog；capability 永不成为 direct hardware tool。
 - React/TUI 使用同一 read model。
 
-### VNext-6：World freshness 与 F6
+### VNext-6：World freshness 与 F6（冻结）
 
 - 先落 `observed_at/revision/stale`，再评审多机器人并行执行。
 - 按 F6.0 → F6.1 → F6.2 → F6.3 推进 simulator 与 conformance。

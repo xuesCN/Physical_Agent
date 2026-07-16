@@ -153,7 +153,6 @@ class ChatPlan(StrictModel):
     intent: str = ""
     summary: str = ""
     steps: list[str] = Field(default_factory=list)
-    actions: list[Action] = Field(default_factory=list)
     needs_watch: bool = False
     agent_output: dict[str, Any] | None = None
 

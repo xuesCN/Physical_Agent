@@ -2,7 +2,7 @@
 
 > 配套 `SPEC.zh-CN.md` §4 矩阵使用：矩阵管"做什么/状态"，本册管"怎么做"。每项含：思路、关键文件、坑、验收。
 > 写给后续执行者（人或 agent）。动工前先读 SPEC §0 不变量与 REFACTORING §3 决策先例；每项动工时按惯例先出一份轮次 brief。
-> 最后更新：2026-07-15
+> 最后更新：2026-07-16
 
 ---
 
@@ -18,7 +18,7 @@
 
 **验收**：每个删除项都有前置正反测试或替代入口；双轨有独立一轮证据；wheel 安装后能启动同一 React Dashboard；全量 pytest、frontend build/e2e、TUI build/test、安全扫描与 docs/CLI grep 全绿。R0 已完成；R1.5 正式栈补缺、thin launcher 与 clean-wheel smoke 经 draft PR #1 / `2d5e909` 独立验证，真实 Chromium 25/25。R2 随后删除 legacy controller/server/static/tests/package-data 与 safety allowlist 例外，保留 `physical-agent gui` 命令作为正式 FastAPI + React launcher。
 
-**当前进度**：R3 已退役当前 Markdown migrator/full Workspace 并保留聚焦 sidecar 与历史救援；R4 `da14064` 已删除 chat 的旧自动推进参数和 CLI 内嵌 watch composition。R5 已完成受限 spike、review-fix 与真实 Chromium 双轨验证；R6 已完成 official consumers/read-model 收敛，fork Push/PR CI 均成功。R7 已删除后端 fence producer/parser、streaming fallback/provenance、React `actionDraft.ts` 与公开 proposal action convenience fields。当前 draft 卡片只消费 compiler-owned `AgentOutput.actions`；旧 fence-only chat 只显示普通文本，不再提供 Add/Edit。Action Board、approve/reject mutation、pending/approval/SafetyGate 与 watch 唯一执行权保持不变；下一步是 R8 全量文档/发布收口。
+**当前进度**：R3-R7 的删除与双轨门禁均已完成并有提交/远端 CI 证据。R8 已完成本地收口：正式 current docs 与示例统一到 SQLite/structured `AgentOutput`/独立 watch 主链；删除可陈旧的 `ChatPlan.actions` 第三份投影和 chat-side `executed=0` 心智残留；proposal/chat/task 与 approve/reject 的 200 响应写入 typed OpenAPI；wheel clean-install、真实 Chromium、TUI、Python full、Safety AST/grep 与文档 golden 均通过。旧 fence-only chat 只显示普通文本，Action Board、approve/reject mutation、pending/approval/SafetyGate 与 watch 唯一执行权保持不变。实现与本地验收完成，等待最终 commit/push 和远端 CI；冻结项不自动恢复。
 
 ## F0 LLM planner 实验
 
@@ -35,7 +35,7 @@
 
 ## F1 提案卡片 + Approve + 审批流
 
-**实现口径（2026-07-15 更新）**：① Draft 结构化（F1.1/R5-R7）：rule/LLM 主路径先形成 typed Chat Turn；proposal actions 只分配一次 draft IDs，经 trusted compiler 得到 draft `AgentOutput`。SSE done、`ChatPlan.agent_output`、assistant `metadata.agent_output` 是唯一机器通道；正文只按普通 Markdown 显示，任何 fence-like 文本都不能升级为 Draft。② 卡片（F1.2）：`ChatPanel` 渲染 draft 卡片，对照"任务原文 vs 提案动作"，展示 robot/capability/params/reason；按钮文案用 **Add to Actions**，只调用既有 `proposeAction()` 创建 pending action，Edit 回填 `ProposalPanel`。**LLM/chat 不直接写动作板，只有人的提交会创建 action**。③ 审批流（F1.3）：不新增 runtime backend 状态机状态，approval 放在 action metadata；Actions 板的 **Approve execution / Reject** 才是执行审批。`approval.required` 由后端按 robot/capability 的 `requires_approval` 与 SAFETY 文件真源计算，不能信任 LLM、前端或 API caller；`claim_next_ready_action()` 在 SQLite 事务里跳过 `required && status != approved` 的 pending action，不阻塞后续 ready action。`POST /api/actions/{id}/approve|reject` 做幂等和非法终态保护，reject 写原因并转 cancelled。
+**实现口径（2026-07-16 更新）**：① Draft 结构化（F1.1/R5-R7）：rule/LLM chat 主路径先形成 typed Chat Turn；proposal actions 只分配一次 draft IDs，经 trusted compiler 得到 draft `AgentOutput`。SSE done、`ChatPlan.agent_output`、assistant `metadata.agent_output` 是唯一机器通道；正文只按普通 Markdown 显示，任何 fence-like 文本都不能升级为 Draft。② 呈现分支（F1.2）：React/Web 显示可操作 Draft card；其中 `ChatPanel` 对照“任务原文 vs 提案动作”，展示 robot/capability/params/reason，**Add to Actions** 只调用既有 `proposeAction()` 创建 pending action，Edit 回填 `ProposalPanel`。TUI/CLI 只显示 structured draft，不提供从该 draft 直接 Add 的控制，也不为此新增功能。③ 提交例外：普通 rule/LLM chat 主路径不直接写动作板；显式 `tool_loop` 可调用 proposal-only tool 直接提交 pending，但仍绝不 approve 或 execute；既有 task/manual/run proposal 路径也可直接创建 pending。④ 审批流（F1.3）：不新增 runtime backend 状态机状态，approval 放在 action metadata；Actions 板的 **Approve execution / Reject** 才是执行审批。`approval.required` 由后端按 robot/capability 的 `requires_approval` 与 SAFETY 文件真源计算，不能信任 LLM、前端或 API caller；`claim_next_ready_action()` 在 SQLite 事务里跳过 `required && status != approved` 的 pending action，不阻塞后续 ready action。`POST /api/actions/{id}/approve|reject` 做幂等和非法终态保护，reject 写原因并转 cancelled。
 **坑**：两个 Approve 语义必须分开：Chat draft 是"提交到动作板"，Actions 板是"放行执行"。审批≠免检，SafetyGate 只把 `requires_approval` 从"等待人"推进到"继续校验"，schema、bounds、capability、robot、SAFETY.md 仍照跑；approved action 后续被 Gate 拒绝时，保留 approval 记录并记录 safety rejected feedback/log。B6 后只维护 SQLite，不恢复 `MarkdownStateStore`、markdown backend 矩阵或 legacy runtime backend。
 **F0 实验追加的两个子项**：① **planner 拒绝理由透出**——结构化输出加可选 `refusal_reason`，无提案时 GUI 展示"为什么没方案"，旧调用方缺字段仍兼容。② **Gate 直击组**——绕 planner 直接 propose 越界/幻觉动作，留下 LLM 时代 Gate 拦截审计样本，证明 planner 没产出时 Gate 仍能拦。
 **验收**：chat 起草→Add to Actions→Actions 板 Approve execution→watch 执行→feedback 全程 GUI；非 `requires_approval` 不被审批流程阻塞；`requires_approval` 未 approved 不被 claim，approved 后仍经过 SafetyGate；队首未批准动作不阻塞后续 ready action；拒绝动作进 cancelled 并带原因；approval/source/refusal_reason 进入 LOG 镜像与 audit export；全量 pytest 与前端 build 通过。

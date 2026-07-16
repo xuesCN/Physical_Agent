@@ -237,7 +237,7 @@
 - [x] review-fix 定向门禁：backend/API/provider `97 passed`；frontend production build 通过。
 - [x] review-fix 本地门禁：Python `413 passed`、Safety `32 passed`、TUI typecheck/build + `60 passed`、frontend production build、clean-wheel smoke 全绿；Playwright 26 cases 发现通过。
 - [x] review-fix 真实 Chromium 证据完成：2026-07-14 本机 Playwright 1.61.1 / Chrome for Testing 149.0.7827.55（revision 1228）实际启动，最终完整套件 27/27 通过。
-- [ ] review-fix 独立远端 CI 证据（本提交推送后核验）。
+- [x] review-fix 独立远端 CI 证据：`d1ca53c3`，fork Push run `29321294713`、PR run `29321297674` 均成功。
 
 ### 双轨 consumer
 
@@ -268,7 +268,7 @@
 - [x] fake provider 延迟测试证明首个 delta 在最终 structured output 前到达；中途 abort 停止后续 transport/持久化。
 - [x] 安全扫描：API/chat request path 不实例化 watch/driver（Safety smoke 32 tests）。
 - [x] 双轨以独立本地真实 Chromium 轮次运行并记录证据；2026-07-14 最终 `CI=1 npm run test:e2e -- --project=chromium` 为 27/27 passed（2.0m），不是 discovery。
-- [ ] 本提交的独立远端 CI 证据；本轮 commit/push 已获用户确认，推送后核验。
+- [x] 本提交的独立远端 CI 证据：`d1ca53c3`，fork Push run `29321294713`、PR run `29321297674` 均成功。
 
 ### 2026-07-14 真实 Chromium 验证记录
 
@@ -301,11 +301,12 @@
 - [x] 本地门禁：Python `414 passed`、Safety `32 passed`、frontend production build、TUI typecheck/build + `60 passed`、clean-wheel smoke 全绿；Playwright 26 cases 发现通过。
 - [x] R6 收尾时未删除 fence、proposal 顶层 `actions/action/draft_actions`、approve/reject mutation `action` 或 `/api/state.actions`；R7 已删除前两类，后两类按边界保留。
 - [x] R6 当前树的本地真实 Chromium 证据：2026-07-14 完整 27/27 passed；正式 consumers/read-model 收敛与 R5 双轨同树运行。
-- [x] R6 独立远端 CI 证据：fork Push CI 与 fork PR CI 均成功。
+- [x] R6 独立远端 CI 证据：`0bb7807`，fork Push run `29312317707`、PR run `29312319687` 均成功。
 
 ## R7 wire compatibility 切断
 
-- [x] R5 双轨真实 Chromium 验证证据已完成（2026-07-14 本地独立轮次 27/27）；fork Push CI 与 fork PR CI 均成功。
+- [x] R5 双轨真实 Chromium 验证证据已完成（2026-07-14 本地独立轮次 27/27）；R5 closure `d1ca53c3`，fork Push run `29321294713`、PR run `29321297674` 均成功。
+- [x] R7 独立远端 CI 证据：R7 wire-cut closure `9ba44af`，fork Push run `29399978672`、PR run `29399982326` 均成功。
 - [x] R6 官方 consumer migration 已完成。
 - [x] 停止后端 prompt/rule path 产生 `action-draft` fence。
 - [x] 删除 `_extract_action_drafts_from_reply()` 及 fence formatter/parser。
@@ -325,18 +326,31 @@
 
 ## R8 收口
 
-- [ ] current architecture 文档只描述当前实现；过期 snapshot/HTML 删除或重新生成。
-- [ ] `agent-architecture-vnext` 改为 current architecture/历史决策口径，冻结项不再写成默认下一步。
-- [ ] SPEC、PLAYBOOK、REFACTORING、README 双语、state/backend/hardware/example/CLI help 一致。
-- [ ] Python 全量 pytest。
-- [ ] frontend `tsc -b && vite build`。
-- [ ] Playwright 完整主路径与负用例。
-- [ ] TUI build/test/scenario matrix。
-- [ ] wheel build + clean install + `gui`/`api`/assets smoke。
-- [ ] safety AST/grep 边界扫描。
-- [ ] R0-R8 每个删除项有对应替代/负用例证据。
-- [ ] SPEC R0-R8 标记完成，REFACTORING 追加实现、决策和教训。
+- [x] 正式 current architecture 文档只描述当前实现；用户保留的 `current-architecture-audit.md`、`current-architecture-audit.html` 与 `system-summary.zh-CN.md` 不属于 current-doc contract，不修改、不删除、不重新生成，也不据此阻塞 R8。
+- [x] `agent-architecture-vnext` 改为 current architecture/历史决策口径，冻结项不再写成默认下一步。
+- [x] SPEC、PLAYBOOK、REFACTORING、README 双语、state/backend/hardware/example/CLI help 一致。
+- [x] Python 全量 pytest。
+- [x] frontend `tsc -b && vite build`。
+- [x] Playwright 完整主路径与负用例。
+- [x] TUI build/test/scenario matrix。
+- [x] wheel build + clean install + `gui`/`api`/assets smoke。
+- [x] safety AST/grep 边界扫描。
+- [x] R0-R8 每个删除项有对应替代/负用例证据。
+- [x] SPEC R0-R8 标记为实现与本地验收完成、等待最终提交和远端 CI；REFACTORING 追加实现、决策和教训。
 - [ ] commit/push；不创建独立 handoff。
+
+### 删除证据矩阵
+
+| 删除内容 | 当前替代路径 | 正向测试 | 负向测试或扫描证据 | 提交或 CI 证据 |
+| --- | --- | --- | --- | --- |
+| legacy GUI | `physical-agent gui` 薄入口复用 FastAPI app factory 与 packaged React Dashboard | `tests/test_cli_dashboard.py`、`tests/test_dashboard_parity.py`、Dashboard Playwright 主路径 | wheel member 负断言；正式 legacy routes 404；`physical_agent/gui/` 源码为零 | `5764bac`；fork Push run `29140289239`、PR run `29140290422` 均成功 |
+| Markdown workspace/migration | SQLite `state.db` 唯一运行态；`StateSidecars` 只管 SAFETY/LOG；旧数据用 `9072b4e` 独立历史 checkout 救援 | `tests/test_sidecar_behavior.py`、`scripts/smoke_legacy_workspace_rescue.py` | `tests/test_backend_matrix.py`/`test_state_store.py` 锁显式与隐式 legacy fail-closed；wheel 不含 migrator/full Workspace | `d1713a0`、`6309a1b`、`4a8ec86`、`9698b3e` |
+| auto_step | `physical-agent watch`、`physical-agent api --watch` 或 `physical-agent gui` 的独立 watch 生命周期 | CLI chat/API proposal-only tests 与正式 watch smoke | 生产 `auto_step|auto-step|_run_chat_auto_step` 零命中；R8 再删除固定 `executed=0` 与 CLI 不可达旧文案 | `da14064`；fork Push run `29234483572`、PR run `29234488489` 均成功 |
+| Chat/Watch/Driver 越权路径 | 提案侧只产 intent/`AgentOutput`；watch 在 Gate 后唯一调用 driver | `tests/test_watch_runtime.py`、`tests/test_safety.py` | `tests/test_safety_boundaries.py` AST + request-side monkeypatch；真实 `driver.execute` 只在 `watch/runtime.py` | `da14064`，fork Push run `29234483572`、PR run `29234488489` 均成功；`d1ca53c3`，fork Push run `29321294713`、PR run `29321297674` 均成功；`9ba44af`，fork Push run `29399978672`、PR run `29399982326` 均成功 |
+| 重复 projection/read model | `application.output_projection` 唯一合成 current `AgentOutput`；`/api/state.actions` 保留 board truth | `tests/test_output_projection.py`、React/TUI canonical status 负例 | React/TUI 不重算 Gate；R8 删除可陈旧的 `ChatPlan.actions` 第三份投影并锁旧 payload 忽略 | `9adaf6c` 是先前 status fix；`0bb7807` 是 R6 closure head，fork Push run `29312317707`、PR run `29312319687` 均成功；R8 current fix 仍待最终提交 |
+| `_append_actions` | `ProposalService` + `StateStore.append_pending_actions()` 原子 batch | `tests/test_proposal_service.py`、`tests/test_chat_runtime.py`、batch/dependency 回归 | `chat_runtime.py` 中 `_append_actions|_max_action_number` 零命中 | `0bb7807`；fork Push run `29312317707`、PR run `29312319687` 均成功 |
+| action-draft fence | compiler-owned `AgentOutput.actions` 经 SSE done/assistant metadata 到 Web/TUI Draft | structured-only Chat/Playwright/TUI tests | producer/parser/React fallback/bundle marker 零命中；历史 fence-only 正文断言 0 卡/0 Add | `9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功 |
+| proposal convenience fields | proposal/chat/task/MCP 只通过 `agent_output.actions`；approve/reject mutation `action` 与 `/api/state.actions` 按边界保留 | API/MCP/tool-loop/CLI contract tests；R8 typed OpenAPI response contract | proposal 顶层 `actions/action/draft_actions` 负断言；OpenAPI 禁止旧字段 | `9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功；R8 OpenAPI 锁定待最终提交 |
 
 ## 暂停项（本规格期间不实施）
 

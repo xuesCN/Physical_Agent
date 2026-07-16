@@ -153,7 +153,6 @@ class ChatRuntime:
                         f"Generated files: {', '.join(code_result.changed_files) or 'none'}",
                         f"Tests run: {', '.join(code_result.tests_run) or 'none'}",
                     ],
-                    actions=[],
                     needs_watch=False,
                 )
                 workspace.write_plan(plan)
@@ -165,7 +164,6 @@ class ChatRuntime:
                         "integration": integration,
                         "code_result": code_result_data,
                         "needs_watch": False,
-                        "executed": 0,
                     },
                 )
                 workspace.append_log("Chat assistant generated an integration plan.", actor="agent")
@@ -175,7 +173,6 @@ class ChatRuntime:
                     "reply": assistant.content,
                     "memory": [],
                     "plan": plan.model_dump(mode="json"),
-                    "executed": 0,
                     "feedback": workspace.read_feedback(),
                     "code_result": code_result_data,
                     "skills": self._skills_summary(),
@@ -200,7 +197,6 @@ class ChatRuntime:
                 "reply": assistant.content,
                 "memory": [],
                 "plan": None,
-                "executed": 0,
                 "feedback": workspace.read_feedback(),
                 "code_result": code_result_data,
                 "skills": self._skills_summary(),
@@ -209,13 +205,11 @@ class ChatRuntime:
         if self.enable_hardware_integration and self._looks_like_integration_request(message):
             response = self._respond_with_integration(message)
             notes: list[str] = []
-            executed = 0
             plan = ChatPlan(
                 status="answered",
                 intent="integrate",
                 summary=response["reply"],
                 steps=response.get("steps", []),
-                actions=[],
                 needs_watch=False,
             )
             workspace.write_plan(plan)
@@ -226,7 +220,6 @@ class ChatRuntime:
                     "intent": plan.intent,
                     "integration": response.get("integration", {}),
                     "needs_watch": False,
-                    "executed": 0,
                 },
             )
             workspace.append_log("Chat assistant generated an integration plan.", actor="agent")
@@ -236,7 +229,6 @@ class ChatRuntime:
                 "reply": assistant.content,
                 "memory": notes,
                 "plan": plan.model_dump(mode="json"),
-                "executed": executed,
                 "feedback": workspace.read_feedback(),
                 "integration": response.get("integration", {}),
                 "skills": self._skills_summary(),
@@ -308,8 +300,6 @@ class ChatRuntime:
             if str(note).strip():
                 notes.append(workspace.append_memory_note(str(note).strip()))
 
-        executed = 0
-
         plan = ChatPlan(
             status="answered",
             intent=turn.intent,
@@ -318,7 +308,6 @@ class ChatRuntime:
                 *turn.steps,
                 *(task_graph_steps(agent_output) if agent_output is not None else []),
             ],
-            actions=[],
             needs_watch=False,
             agent_output=agent_output,
         )
@@ -335,7 +324,6 @@ class ChatRuntime:
                 ),
                 "refusal_reason": turn.refusal_reason,
                 "needs_watch": plan.needs_watch,
-                "executed": executed,
             },
         )
         workspace.append_log("Chat agent replied.", actor="agent")
@@ -351,7 +339,6 @@ class ChatRuntime:
             ),
             "memory": notes,
             "plan": plan.model_dump(mode="json"),
-            "executed": executed,
             "feedback": workspace.read_feedback(),
             "code_result": None,
             "refusal_reason": turn.refusal_reason,
@@ -671,7 +658,6 @@ class ChatRuntime:
                 *[str(step) for step in steps],
                 *(task_graph_steps(agent_output) if agent_output is not None else []),
             ],
-            actions=[],
             needs_watch=False,
             agent_output=agent_output,
         )
@@ -687,7 +673,6 @@ class ChatRuntime:
                 completed_turn.refusal_reason if completed_turn is not None else None
             ),
             "needs_watch": False,
-            "executed": 0,
             "streamed": True,
             "stream_status": status,
             "partial": status != "completed",
@@ -711,7 +696,6 @@ class ChatRuntime:
             ),
             "memory": notes,
             "plan": plan.model_dump(mode="json"),
-            "executed": 0,
             "feedback": workspace.read_feedback(),
             "code_result": None,
             "skills": [],
@@ -888,7 +872,6 @@ class ChatRuntime:
                     proposed_actions.append(action)
                     proposed_ids.add(action.id)
         after = workspace.read_actions()
-        executed = 0
 
         step_summaries = [f"Called {step.name}." for step in result.steps]
         reply = result.content.strip() or (
@@ -969,11 +952,6 @@ class ChatRuntime:
                 *turn.steps,
                 *(task_graph_steps(agent_output) if agent_output is not None else []),
             ],
-            actions=(
-                turn.agent_output.actions
-                if turn.agent_output is not None
-                else []
-            ),
             needs_watch=needs_watch,
             agent_output=turn.agent_output,
         )
@@ -998,7 +976,6 @@ class ChatRuntime:
                     if turn.agent_output is not None
                     else None
                 ),
-                "executed": executed,
             },
         )
         workspace.append_log("Chat tool loop replied.", actor="agent")
@@ -1014,7 +991,6 @@ class ChatRuntime:
                 else None
             ),
             "plan": plan.model_dump(mode="json"),
-            "executed": executed,
             "feedback": workspace.read_feedback(),
             "code_result": None,
             "skills": self._skills_summary(),

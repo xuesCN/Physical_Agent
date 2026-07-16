@@ -99,6 +99,38 @@ def _sse_events(body: str) -> list[dict]:
     return events
 
 
+def _openapi_response_properties(schema: dict, path: str) -> dict:
+    response_schema = schema["paths"][path]["post"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
+    reference = response_schema.get("$ref")
+    if reference:
+        component_name = reference.rsplit("/", 1)[-1]
+        response_schema = schema["components"]["schemas"][component_name]
+    return response_schema.get("properties", {})
+
+
+def test_openapi_publishes_canonical_proposal_and_mutation_responses(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    schema = create_app(config_path).openapi()
+
+    for path in ("/api/actions/propose", "/api/tasks/submit", "/api/chat"):
+        properties = _openapi_response_properties(schema, path)
+        assert "agent_output" in properties
+        assert "action" not in properties
+        assert "actions" not in properties
+        assert "draft_actions" not in properties
+        assert "executed" not in properties
+
+    for path in (
+        "/api/actions/{action_id}/approve",
+        "/api/actions/{action_id}/reject",
+    ):
+        properties = _openapi_response_properties(schema, path)
+        assert "action" in properties
+        assert "agent_output" not in properties
+
+
 def test_api_cli_missing_server_extra_has_clear_message(tmp_path, monkeypatch):
     def fail_loader():
         raise MissingServerDependencyError(SERVER_EXTRA_HINT)
@@ -211,7 +243,7 @@ def test_api_controller_contract_runs_without_fastapi(tmp_path):
     }
 
     chat = controller.chat(ChatRequest(message="remember that controller memory is safe"))
-    assert chat["executed"] == 0
+    assert "executed" not in chat
     assert chat["memory"][0]["content"] == "controller memory is safe"
     assert "actions" not in chat
     assert "draft_actions" not in chat
@@ -497,7 +529,7 @@ def test_api_endpoints_cover_state_proposals_memory_ingest_search_and_audit(tmp_
 
     chat = client.post("/api/chat", json={"message": "remember that API memory is safe"})
     assert chat.status_code == 200
-    assert chat.json()["executed"] == 0
+    assert "executed" not in chat.json()
     assert "I will remember" in chat.json()["reply"]
     assert chat.json()["memory"][0]["content"] == "API memory is safe"
     assert "actions" not in chat.json()
@@ -813,7 +845,7 @@ def test_api_chat_uses_chat_runtime_llm_when_settings_exist(tmp_path, monkeypatc
     body = response.json()
     assert body["mode"] == "llm"
     assert body["reply"] == "LLM bridge response."
-    assert body["executed"] == 0
+    assert "executed" not in body
     messages = body["state"]["chat"]["messages"]
     assert [item["role"] for item in messages] == ["user", "assistant"]
     assert messages[0]["content"] == "hello from API"
@@ -901,6 +933,7 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
                 },
                 "memory": [],
                 "plan": {"status": "answered"},
+                # Deliberate legacy internal input: the public SSE payload must drop it.
                 "executed": 0,
             }
 
@@ -932,6 +965,7 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
         "physical-agent/agent-output/v1"
     )
     assert events[3]["payload"]["plan"] == {"status": "answered"}
+    assert "executed" not in events[3]["payload"]
     assert "actions" not in events[3]["payload"]
     assert "draft_actions" not in events[3]["payload"]
     assert "chat_contract" not in events[3]["payload"]

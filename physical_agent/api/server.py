@@ -115,6 +115,50 @@ class ChatRequest(BaseModel):
     stream_id: str | None = None
 
 
+class ActionProposalResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool
+    message: str
+    agent_output: AgentOutput
+    state: dict[str, Any]
+
+
+class SubmitTaskResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool
+    message: str
+    agent_output: AgentOutput
+    refusal_reason: str | None = None
+    proposal_status: str
+    proposal_id: str | None = None
+    state: dict[str, Any]
+
+
+class ChatResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool
+    mode: str
+    reply: str
+    agent_output: AgentOutput | None = None
+    memory: list[Any] = Field(default_factory=list)
+    plan: ChatPlan | None = None
+    refusal_reason: str | None = None
+    state: dict[str, Any]
+
+
+class ActionMutationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool
+    message: str
+    action: Action
+    changed: bool | None = None
+    state: dict[str, Any]
+
+
 class LLMSettingsRequest(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
@@ -357,35 +401,47 @@ def create_app(
             },
         )
 
-    @app.post("/api/actions/propose")
+    @app.post("/api/actions/propose", response_model=ActionProposalResponse)
     def propose_action(payload: ActionProposalRequest) -> dict[str, Any]:
         try:
             return controller.propose_action(payload)
         except ApiRequestError as exc:
             return handle_error(exc)
 
-    @app.post("/api/actions/{action_id}/approve")
+    @app.post(
+        "/api/actions/{action_id}/approve",
+        response_model=ActionMutationResponse,
+        response_model_exclude_none=True,
+    )
     def approve_action(action_id: str, payload: ActionApprovalRequest | None = None) -> dict[str, Any]:
         try:
             return controller.approve_action(action_id, payload or ActionApprovalRequest())
         except ApiRequestError as exc:
             return handle_error(exc)
 
-    @app.post("/api/actions/{action_id}/reject")
+    @app.post(
+        "/api/actions/{action_id}/reject",
+        response_model=ActionMutationResponse,
+        response_model_exclude_none=True,
+    )
     def reject_action(action_id: str, payload: ActionApprovalRequest | None = None) -> dict[str, Any]:
         try:
             return controller.reject_action(action_id, payload or ActionApprovalRequest())
         except ApiRequestError as exc:
             return handle_error(exc)
 
-    @app.post("/api/tasks/submit")
+    @app.post("/api/tasks/submit", response_model=SubmitTaskResponse)
     def submit_task(payload: SubmitTaskRequest) -> dict[str, Any]:
         try:
             return controller.submit_task(payload)
         except ApiRequestError as exc:
             return handle_error(exc)
 
-    @app.post("/api/chat")
+    @app.post(
+        "/api/chat",
+        response_model=ChatResponse,
+        response_model_exclude_none=True,
+    )
     def chat(payload: ChatRequest) -> dict[str, Any]:
         try:
             return controller.chat(payload)
@@ -951,7 +1007,6 @@ class ApiController:
             "agent_output": _json_safe(response.get("agent_output")),
             "memory": _json_safe(response.get("memory", [])),
             "plan": _json_safe(response.get("plan")),
-            "executed": 0,
             "refusal_reason": response.get("refusal_reason"),
             "state": state,
         }
@@ -1794,7 +1849,6 @@ def _write_plan(
             intent=intent,
             summary=summary,
             steps=steps,
-            actions=actions,
             needs_watch=bool(actions),
             agent_output=agent_output,
         )

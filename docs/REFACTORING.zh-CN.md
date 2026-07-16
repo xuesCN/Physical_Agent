@@ -1,7 +1,7 @@
 # 重构过程
 
 > 本文浓缩自原 33 份 session-handoff 与 22 份 brief（已删除，git 历史可查）。姊妹文档：`SPEC.zh-CN.md`（目标与待办矩阵）。
-> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-15。
+> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-16。
 
 ## 0. 基线与纪律
 
@@ -54,7 +54,8 @@
 | R5 | 单调用 structured Chat Turn + fence 双轨消费者 | 双轨窗口完成；fork Push/PR CI 成功 |
 | R6 | application/read-model 去重 + 正式 consumer 收敛到 AgentOutput | consumer migration 完成；fork Push/PR CI 成功 |
 | R5-browser-gate | structured/fence 双轨真实 Chromium、增量去重与 Add→pending 独立验证 | 本地 27/27；fork Push/PR CI 成功 |
-| R7 | 退役 action-draft wire/fence 与 proposal convenience payload | 本轮完成，未提交/未推送 |
+| R7 | 退役 action-draft wire/fence 与 proposal convenience payload | `9ba44af`；fork Push/PR CI 成功 |
+| R8 | 当前架构、文档、示例、OpenAPI、发布包与全量门禁收口 | 实现与本地验收完成；等待最终 commit/push 和远端 CI |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -379,6 +380,24 @@ React 把 strict `AgentOutput` validator 拆到 `agentOutput.ts` 后删除 `acti
 
 最终本地门禁：Python full `415 passed`、Safety smoke `32 passed`、frontend `tsc -b && vite build`、真实 Chromium `27/27 passed`、TUI typecheck/build + `61 passed`、clean-wheel Dashboard smoke、context golden/文档一致性 `11 passed` 与 `git diff --check` 全绿；生产 Python/React/TUI 与 shipped Dashboard bundle 的旧 marker/parser/fallback/provenance 扫描均为零。自审先后抓到并修复一条 retrieval 测试的旧顶层 `actions` 断言、Playwright 跨用例 pending 状态断言过宽，以及 completed stream 对 reply 做二次 trim 导致 delta/正文/AgentOutput message 可能分叉；最终回归锁定同一 reply 在所有层严格一致。本轮按用户要求不 commit、不 push。
 
+### R8：当前架构、发布契约与本地门禁收口
+
+以实际 producer→transport→consumer→persistence 链为准，正式文档统一为唯一协议主链：用户 Chat → rule/LLM action intents → stable ID/dependency normalize → trusted PlanCompiler → `AgentOutput`/`ChatPlan.agent_output` → API/SSE/assistant metadata → structured draft。presentation 与 submission 在这里分支：React/Web 的可操作 Draft card 可由用户 Add to Actions 创建 pending；TUI/CLI 只做结构化展示，不带直接 Add 控制。pending 之后才是 approval（如需要）→ watch SafetyGate → `driver.execute()` → canonical feedback/current projection。reply、Add、Approve、Gate 与 execute 保持独立边界；部署可以是独立 `physical-agent watch`，也可以由 `api --watch`/`gui` 内嵌 watch，但执行权仍只属于 watch 调用栈。
+
+rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Draft card，并可由用户通过 Add to Actions 创建 pending action；TUI/CLI 只显示 structured draft，不提供从该 draft 直接 Add 的控制。显式 `tool_loop` 是例外：它可调用 proposal-only tool 直接提交 pending，但仍绝不 approve 或 execute；既有 task/manual/run proposal 路径也可直接创建 pending。
+
+代码审计发现 `ChatPlan.actions` 仍是可陈旧的第三份投影：Action Board 更新后，`output_projection` 会刷新 `agent_output.actions`，却不会同步顶层列表。R8 删除该 schema、所有 writer 与 React 类型，旧 SQLite plan payload 的额外字段按现有 Pydantic 行为忽略，并用回归证明 active board 只投影到 canonical `agent_output.actions`。同时删除 chat 固定 `executed=0`、CLI 不可达的 “Watch step executed” 文案；真正的 watch event 仍保留 executed/processed/Gate 统计。proposal/task/chat 与 approve/reject 增加 typed 200 response models，OpenAPI 现在明确 proposal 通过 `agent_output` 返回动作、mutation 通过 `action` 返回结果；`/api/state.actions` 继续是 Action Board truth。
+
+正式文档、双语 README、SPEC/PLAYBOOK、架构说明、Moce 示例与 CI 口径同步。Moce partial-hardware 配置改指向干净 SQLite workspace，仓库删除两套会触发 fail-closed 的完整 legacy Markdown runtime 快照，并按当前 driver manifest 修正能力与 Dashboard 操作顺序。用户保留的 `current-architecture-audit.md`、`current-architecture-audit.html`、`system-summary.zh-CN.md` 是阶段快照，不属于 current-doc contract；本轮不修改、不删除、不重新生成。VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 与自动 replan/Level 3 继续冻结，不因 R8 自动恢复。
+
+最终本地证据：Python full `435 passed, 1 warning`；Safety smoke `32 passed`、AST boundary `2 passed`，真实 `driver.execute` 只位于 watch runtime；current-doc/golden/Moce `29 passed`；frontend 独立 `tsc -b` 与 Vite production build 成功，locale 修复后已重建 tracked `physical_agent/dashboard/dist`，并由 source + shipped bundle contract 验证；ignored `frontend/dist` 不作为发布证据；TUI typecheck/build、默认测试 `61 passed`、独立 scenario matrix `11 passed`；`CI=1` 真实 Chromium 完整 `27 passed`；clean wheel 在隔离环境完成 base/server 安装，并验证安装后的 `gui`/`api`、health、index 与 hashed assets 全绿；`git diff --check` 和退役面扫描均 clean。实现与本地验收已经完成，但截至当前仍未 commit、未 push，远端 CI 尚无 R8 本轮证据。
+
+2026-07-16 独立 review-fix 先后发现并修复六类口径/门禁缺口：中英文 README 一度把请求侧描述成会动态加载或以 mock 验证候选 driver，现均改为只做静态 manifest/Python/interface 校验，动态 conformance 明确归属显式 watch 侧工作流；Moce 最小流程仍建议 `chmod 777`，现改为 `dialout`/udev 的最小权限指引；R5 远端 CI checkbox 未按已有事实勾选，R6/R7 与删除证据矩阵又只写了模糊的成功口径，现已按阶段补齐准确 closure commit 与 Push/PR run；Dashboard 通用 `/api/chat` fixture 的 `executed: 0` 已删除，而刻意保留的 legacy internal stream fixture 明确断言公开 SSE 丢弃该字段，锁住两者不同意图；R8 本地证据曾误把 ignored `frontend/dist` 当发布目录，现改为核验 Vite 实际 outDir 与 tracked package resource `physical_agent/dashboard/dist`；R8 第 11 项也不再把仍为 🟡 的 SPEC 状态缩写成“完成”，而是精确记录“实现与本地验收完成、等待最终提交和远端 CI”。新增 current-doc 契约逐行解析删除证据矩阵并锁定各 surface 的 commit/run 映射，同时按门槛身份逐项锁定 R8 的 11 个本地 checkbox、正确发布资源与英文请求侧静态校验边界，只有 commit/push 保持未勾选；两份受保护轮次 brief 与三份受保护 current-architecture audit/system-summary snapshots 均未修改。
+
+终审继续发现并修复三项事实分叉：Dashboard locale source 与 shipped bundle 仍残留“mock 动态验证/只有 watch 加载 driver”的旧文案，现改为静态校验边界、重建 tracked dist 并同时锁 source + bundle；主链把 shared `AgentOutput` 协议误泛化成所有入口都有 Add，现明确 React/Web 的可操作卡片、TUI/CLI 的只读 structured draft、`tool_loop` 的 proposal-only pending 提交例外，以及 task/manual/run 的既有直接 proposal 路径；README 又把执行权唯一误写为 loadability 唯一，现明确 request/proposal 不加载、watch 独占 connect/操作生命周期/`driver.execute`，operator `doctor` 仅可为惰性诊断 import/instantiate，绝不 connect/execute。以上均以 current-doc 与 shipped locale 契约回归锁定，未增加 TUI/CLI Add 功能，也未改变生产 Python/TUI 行为。
+
+同轮晚段复核又发现双语 README 的 OpenAI/chat 使用说明仍沿用旧心智：把普通 LLM chat 写成直接回写 proposed actions，并暗示只要启动 watch 就能执行 CLI 显示的 draft。现按实际分流改正：task/manual/run 与 MCP proposal、显式 `tool_loop` 可提交 pending；普通 rule/LLM chat 只持久化 reply/current intent/structured draft，React/Web Add 后才入板，TUI/CLI 只显示；watch 只看已经进入 Action Board 的 action。新增契约直接截取两份 README 的 OpenAI 晚段，禁止旧句并要求 draft/submitted/watch board-only 区分，避免由文档开头的正确段落掩盖后段回归。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -391,7 +410,7 @@ React 把 strict `AgentOutput` validator 拆到 `agentOutput.ts` 后删除 `acti
 8. **审批死胡同在 F1 收口**：不新增 runtime backend 状态机状态，放行记录落在 action metadata；Actions 板审批改变"是否等人"，不改变 SafetyGate 校验链。
 9. **项目根 `physical-agent.yaml` 是 ignored 本地运行配置**（F0）：本轮按要求切到 `planner: llm` 但不强行纳入版本库；共享默认仍以 `config.py` 的 `rule_based` 与模板为准。
 10. **F0 补测凭据源固定为 `.env`**：真实 provider 测试使用项目 `.env`，实验命令用空 settings workspace 避免旧 `workspace/.llm.json` 覆盖；GUI/runtime 的本地设置机制暂不重构，留给后续配置收口。
-11. **退役 active backend 与保留迁移 reader 分离**（B6）：运行态只支持 SQLite；旧 Markdown 文件只作为迁移输入读取，迁移 reader 不实现 `StateStore`，不进入 factory，也不承担新功能字段。
+11. **[已被 R3 取代] 退役 active backend 与迁移 reader 分离**（B6）：B6 当时只把运行态切到 SQLite 并暂留迁移 reader；R3 已提前结束该兼容窗口，当前版本不再读取旧 workspace，只保留 SAFETY/LOG sidecar、legacy fail-closed 检测与 `9072b4e` 历史救援。
 12. **两个 Approve 必须拆语义**（F1）：Chat draft 的按钮叫 Add to Actions，只代表"创建 action"；Actions 板的 Approve execution 才代表"放行 requires_approval action 被 watch claim/execute"。
 13. **approval.required 不信任认知侧或 UI**（F1）：LLM draft、前端表单、API caller 都不能决定是否需要审批；后端每次写入/读取/claim 前按真实 robot/capability 重新归一化。
 14. **raw/debug 是兜底，不是主界面**（F2/F2.5）：已知协议字段仍写定制组件；unknown/raw/private 字段可以折叠展示，但优先用 AntD 原生 Tree 或轻量摘要，避免把"漂亮 JSON"误当成可读产品。
@@ -402,7 +421,7 @@ React 把 strict `AgentOutput` validator 拆到 `agentOutput.ts` 后删除 `acti
 19. **Typer CLI 与 Ink TUI 并存**（T）：Typer 继续管脚本化/自动化，Ink 管 SSH/无 GUI/开发者日常交互；TUI 是独立 Node 包，不塞进 Python CLI。
 20. **TUI 是纯 API/SSE 客户端**（T）：TUI 不直接读写 SQLite/workspace，不 import watch/runtime/driver，不新增硬件控制命令；审批只解除“等人”，不改变 SafetyGate。
 21. **前端偏好用轻量字典与 AntD token，不上重库**（C4/E3）：当前需求只需要高频文案和主题切换，i18next 与新 UI 库继续不引入。
-22. **默认 CI 测安全契约，full run 手动收口**（CI-lite）：自动阻塞项只覆盖安全边界和主 GUI 构建；慢 e2e、TUI 与 Python 版本矩阵提供信号但不默认卡住日常重构。
+22. **[已被 R2.1 取代] CI-lite 的初始宽松门禁**：CI-lite 当时只阻塞安全与主 GUI；R2.1 起 TUI 在 push/PR 阻塞，PR 还阻塞 Python 3.12 full pytest 与真实 Chromium Playwright。Python 3.11/3.12 全量矩阵继续按需手动运行。
 23. **TUI upload 只通过 API**（T3）：本地文件读取只用于构造 multipart `POST /api/upload`，不直接写 workspace/uploads，不调用后端路径式 ingest 作为交互入口，untrusted/memory/chunks 仍以后端结果为准。
 24. **TUI 不做 YAML 编辑器**（T3）：config 视图只读，robot 注册只调用既有 `POST /api/config/robots`；编辑已有 robot 或任意 yaml 字段继续由人手改配置并重启 watch。
 25. **终端 raw fallback 只做摘要**（T3）：Ink 里没有 dashboard 的可折叠 JSON tree，默认展示已知字段与短 raw summary，避免把 config/robot/upload 视图退回整页 JSON。
@@ -456,6 +475,11 @@ React 把 strict `AgentOutput` validator 拆到 `agentOutput.ts` 后删除 `acti
 73. **turn correlation 读 tool result，不读 Action Board 差分**（R6）：tool-loop 的 submitted actions 由每个 tool step 的 `AgentOutput.actions` 明确归属；Action Board 只负责运行事实，不能用前后 diff 猜本轮输出，否则并发 proposal 会串入错误 turn。
 74. **真实 structured browser fixture 先发布 capabilities、再关闭 setup runtime**（R5-browser-gate）：默认 E2E 的 `init + api` 不发布 runtime capabilities，rule-based chat 会正确返回 reply-only。真实主链验证选择调用正式 `physical-agent setup` 让 watch-owned setup 发布 capabilities 并立即 shutdown，再由不带 watch 的 API 完成 chat/Add；这样既不伪造后端 `AgentOutput`，也不让 executor 抢走刚 Add 的 pending action。
 
+75. **proposal projection 只保留一份 canonical action payload**（R8）：`ChatPlan.actions` 会与 materialized `agent_output.actions` 分叉，因此退役；proposal/draft 读 `agent_output.actions`，运行 Action Board 读 `/api/state.actions`，两者用途不同且都不能由客户端写回 Gate truth。
+76. **OpenAPI 是 wire 删除门禁的一部分**（R8）：运行时 dict 和单测全绿仍不足以发布 breaking shape；proposal/chat/task 与 mutation 必须用 typed response model 明确保留/删除字段，防止 SDK 继续把任意 object 当契约。
+77. **阶段快照不自动升级为 current-doc contract**（R8）：用户明确保留的 audit/system-summary 可以作为历史资料存在；正式 current docs 另行列明范围，既不重写用户快照，也不拿已知历史文本阻塞收口。
+78. **前端发布证据以 tracked package resource 为准**（R8 review-fix）：Vite 唯一正式 outDir 是 `physical_agent/dashboard/dist`，发布核验只认该 tracked 目录与 wheel members；ignored `frontend/dist` 不进入发布判定。
+
 ## 4. 经验教训（流程侧）
 
 - **重写必须先做旧功能 parity checklist**：C3 的静默丢失靠事后审计才发现。
@@ -484,5 +508,10 @@ React 把 strict `AgentOutput` validator 拆到 `agentOutput.ts` 后删除 `acti
 - **源码删除不等于发布物删除**（R2 的教训）：setuptools 增量 staging 会保留已经从源码树移除的 package；退役模块必须增加 wheel member 负断言，并在 build hook 中清理对应 staging 目录。
 - **真实浏览器证据要同时锁服务新鲜度与增量中间态**（R5-browser-gate 的教训）：R5 双轨取证设置 `CI=1` 禁止 Playwright 复用 5173/8766 的陈旧服务；只断言 terminal 卡片数还不够，partial fence→完整 fallback→structured done 当时逐阶段检查 0→1→1，才能排除瞬时重复和错误卡。
 - **兼容 parser 退役要把历史正例改成产品负例**（R7 的教训）：只删除生产 helper 不足以证明 wire 已切断；浏览器必须在 partial/完整/持久化三种旧正文上断言 0 卡、0 Add，同时确认文本仍可读，并由独立 structured output 证明产品功能没有一起被删。
+- **删 wire 字段要追到嵌套 DTO 与 OpenAPI**（R8 的教训）：顶层 proposal convenience fields 删除后，`ChatPlan.actions` 仍可形成第三份陈旧投影，而无 response model 的 OpenAPI 又无法表达 canonical shape；收口扫描必须同时覆盖 schema、writer、持久化旧 payload、TS 类型、浏览器 fixture 和生成契约。
+- **示例 workspace 也是发布契约**（R8 的教训）：文档写 SQLite 并不够；仓库若仍附带完整 legacy Markdown runtime 文件，current loader 会正确 fail closed，示例却不可运行。示例配置、目录内容、能力清单和操作顺序必须由真实 loader/driver 测试共同锁定。
+- **checkbox 测试必须锁门槛身份与状态语义**（R8 review-fix 的教训）：只数已勾选数量会让漏项、错项、暂停项误勾或把 🟡 状态写成“完成”继续通过；应逐一断言 11 个本地门槛各自存在且为 `[x]`，第 11 项精确沿用 SPEC 的“实现与本地验收完成、等待最终提交和远端 CI”，并单独锁定第 12 项 commit/push 仍为 `[ ]`。
+- **证据矩阵测试必须逐行锁映射**（R8 review-fix 的教训）：在整份文档全局搜索 commit/run 名称不能证明证据属于正确删除项；应先按 surface 解析唯一矩阵行，再断言该行的提交与 Push/PR run 映射。
+- **发布目录证据先核对构建配置与 Git 跟踪状态**（R8 review-fix 的教训）：目录名相似不等于发布面；Vite outDir、package-data、tracked resource 与 wheel members 必须指向同一目录，ignored `frontend/dist` 的“无差异”不能证明发布物新鲜。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

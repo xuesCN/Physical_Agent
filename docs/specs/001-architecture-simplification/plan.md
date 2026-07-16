@@ -16,6 +16,7 @@
 | 6 | 收敛 application/read-model 职责和官方消费者 | ✅ official consumers 迁移完成，fork Push/PR CI 成功 | `_append_actions` 等死代码为零；消费者只读 canonical projection/output |
 | 7 | 切断旧 wire compatibility | ✅ 2026-07-15 完成 | 停产/删除 fence；删除 proposal 顶层 `actions/action/draft_actions`，不动 state board |
 | 8 | 文档、发布形态与全量验证收口 | ✅ 本地实现与验收完成；等待 commit/push/远端 CI | 全量测试、wheel、docs/CLI/README grep 和安全扫描全绿；最终提交单独执行 |
+| 8.1 | 阶段 review hardening | 🟡 2026-07-16 开工 | LOG 多进程与安全收尾、Gate claim correlation、嵌套 OpenAPI、证据/PR 元数据全部关闭；新功能继续冻结 |
 
 ## 1. 冻结范围、建立规格与退役清单
 
@@ -192,3 +193,13 @@ Rollback：fence 和 response 字段分两个提交；任一外部兼容问题�
 Go：R8 前 11 项均有本轮真实证据时，可记录“实现与本地验收完成，等待最终提交和远端 CI”；第 12 项只有独立 review 后实际 commit/push 且远端门禁成功才可勾选。
 
 后续：重新评审冻结 backlog；没有真实需求证据的项继续挂起。
+
+## 8.1 阶段 review hardening
+
+R8 远端 closure 后的独立阶段 review 发现三个实现缺口和一组证据偏离。本步只做纠偏，不恢复任何冻结功能：
+
+1. SQLite 继续作为 LOG 真源；`LOG.md` 改成跨进程序列化、原子替换、失败不阻断安全/业务控制流的可诊断镜像。
+2. current projection 使用现有 claim owner 约束 in-progress Gate evidence，避免 successor claim 窗口复用旧 owner pass；不新增 task/attempt ledger。
+3. `ChatPlan.agent_output` 在 OpenAPI 中引用 canonical `AgentOutput`，不改变 JSON wire。
+4. 修复 spec/plan/matrix/PLAYBOOK/REFACTORING/PR 元数据，并如实记录 R5-browser 与 R6 顺序、R6/R7 rollback 粒度偏离。
+5. 通过 Python full、真实 Chromium、TUI、clean-wheel、多进程/安全专项和独立终审后才可关闭；关闭也不自动解冻后续功能。

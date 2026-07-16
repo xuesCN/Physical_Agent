@@ -20,6 +20,8 @@
 
 **当前进度**：R3-R8 的删除与双轨门禁均已完成并有提交/远端 CI 证据。R8 已完成收口：正式 current docs 与示例统一到 SQLite/structured `AgentOutput`/独立 watch 主链；删除可陈旧的 `ChatPlan.actions` 第三份投影和 chat-side `executed=0` 心智残留；proposal/chat/task 与 approve/reject 的 200 响应写入 typed OpenAPI；wheel clean-install、真实 Chromium、TUI、Python full、Safety AST/grep 与文档 golden 均通过。实现 closure commit `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功。旧 fence-only chat 只显示普通文本，Action Board、approve/reject mutation、pending/approval/SafetyGate 与 watch 唯一执行权保持不变；冻结项不自动恢复。
 
+**R8.1 review hardening（进行中）**：只关闭阶段 review 发现的 LOG 多进程 mirror/安全收尾、in-progress Gate evidence 与 claim owner 关联、`ChatPlan.agent_output` 嵌套 OpenAPI 及证据账本缺口。该轮不增加 Agent/runtime 产品能力，R0 冻结清单继续生效。
+
 ## F0 LLM planner 实验
 
 **思路**：三件事互相独立、并行推进。① 启用：项目 `physical-agent.yaml` 改 `agent.planner: llm`（代码默认值 rule_based 不动）；`agent.model` 保持 `fake/local` 即可——它是"此处未配置"的哨兵值，planner 会转而读 `workspace/.llm.json`（GUI 里配好的模型与 key）。② **本地调用留痕**：在 `openai_compatible` 的调用出口（chat/structured/stream 共用点）加薄封装，每次调用追加一行 JSONL 到 `workspace/llm-trace/`（gitignore）：ts / surface（复用 `metadata.physical_agent_surface`）/ model / messages / 响应 / usage / 延迟 / 错误。约 30 行，零新依赖；环境变量 `PA_LLM_TRACE=0` 可关。③ 实验：固定任务集写成脚本（越界坐标/不存在能力/中文/多步/模糊指令各≥3 条），逐条经 `/api/tasks/submit` 提交 + watch step，记录提案 JSON、gate 判定、feedback。

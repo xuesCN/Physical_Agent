@@ -73,6 +73,7 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | 编号 | 内容 | 归属 | 状态 |
 | --- | --- | --- | --- |
 | **R0-R8** | 架构减法与兼容面退役 | `specs/001-architecture-simplification/` | ✅ 2026-07-16 完成：实现 closure commit `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功。R8 已收口 current docs、Moce SQLite 示例、`ChatPlan.actions` 重复投影、typed OpenAPI、chat-side `executed=0` 残留及发布包；`AgentOutput`/`ChatPlan.agent_output` 是唯一 Draft 机器通道，`/api/state.actions` 仍是 board truth，approve/reject mutation `action`、pending/approval/SafetyGate 与 watch 唯一执行权保持。冻结项不自动恢复，仍按 §2 的重启条件重新评审 |
+| **R8.1** | R-stage review hardening：LOG 多进程/安全收尾、Gate claim correlation、嵌套 OpenAPI 与证据闭环 | `specs/001-architecture-simplification/r8-1-review-hardening-plan.md` | 🟡 2026-07-16 开工：只修 review 缺陷并补全门禁；不解冻 VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 或自动 replan |
 | F0 | LLM planner + 本地调用留痕 + 坏任务实验报告 | §2 | ⏸ R0-R8 冻结；既有第一轮 15 条结果保留：10 完成、5 无提案、0 Gate 拦截。**Review 复核（2026-07-06）**：trace 证实 bounds 在 prompt 内、拒绝为知情拒绝；不在本轮继续扩实验或功能 |
 | B6 | 退役 Markdown runtime/migration（保留 SAFETY/LOG sidecar 与 fail-closed） | §2 | ✅ active backend 只剩 SQLite；R3 已删除当前 migrator、reader 与 full Workspace。当前版本不再提供迁移命令，只保留 SAFETY/LOG sidecar、legacy workspace fail-closed 检测和独立历史 checkout `9072b4e` 救援路径 |
 | F1 | 提案卡片 + Add to Actions + 审批流 | §2 | ✅ 2026-07-07 完成：Chat draft 卡片只提交动作板；Actions 板审批才放行 `requires_approval`；approval required 后端计算，SQLite 原子 claim 跳过未批准动作；拒绝/审批元数据进 LOG/audit |

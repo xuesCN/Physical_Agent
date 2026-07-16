@@ -352,6 +352,17 @@
 | action-draft fence | compiler-owned `AgentOutput.actions` 经 SSE done/assistant metadata 到 Web/TUI Draft | structured-only Chat/Playwright/TUI tests | producer/parser/React fallback/bundle marker 零命中；历史 fence-only 正文断言 0 卡/0 Add | `9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功 |
 | proposal convenience fields | proposal/chat/task/MCP 只通过 `agent_output.actions`；approve/reject mutation `action` 与 `/api/state.actions` 按边界保留 | API/MCP/tool-loop/CLI contract tests；R8 typed OpenAPI response contract | proposal 顶层 `actions/action/draft_actions` 负断言；OpenAPI 禁止旧字段 | `9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功；R8 `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功 |
 
+## R8.1 阶段 review hardening
+
+- [ ] LOG mirror 跨进程并发后与 SQLite 条目/revision 一致，并使用原子替换。
+- [ ] LOG mirror 失败不阻断 timeout halt、expectation check 或已提交 API mutation；doctor 仍能诊断 stale mirror。
+- [ ] in-progress Gate evidence 必须匹配当前 claim owner；旧 owner pass 不满足 current obligation。
+- [ ] OpenAPI `ChatPlan.agent_output` 指向 canonical `AgentOutput`，且 `ChatPlan.actions` 继续不存在。
+- [ ] spec/plan/evidence matrix/PLAYBOOK/REFACTORING 与 PR 元数据一致，历史门禁/rollback 偏离有正式记录。
+- [ ] Python full、frontend build/Playwright、TUI、clean-wheel、多进程/安全专项和 docs/golden 全绿。
+- [ ] 独立终审无 Critical/Important；commit/push 与 exact-head Push/PR CI 成功。
+- [ ] 新功能冻结项保持冻结；本轮 brief 收工删除，不创建 handoff。
+
 ## 暂停项（本规格期间不实施）
 
 - [ ] VNext-3 persistent obligation/task table（暂停，不是本规格任务）。

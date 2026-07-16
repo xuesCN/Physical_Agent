@@ -336,8 +336,8 @@
 - [x] wheel build + clean install + `gui`/`api`/assets smoke。
 - [x] safety AST/grep 边界扫描。
 - [x] R0-R8 每个删除项有对应替代/负用例证据。
-- [x] SPEC R0-R8 标记为实现与本地验收完成、等待最终提交和远端 CI；REFACTORING 追加实现、决策和教训。
-- [ ] commit/push；不创建独立 handoff。
+- [x] SPEC R0-R8 标记完成；REFACTORING 追加实现、决策和教训。
+- [x] commit/push：实现 closure commit `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功；不创建独立 handoff。
 
 ### 删除证据矩阵
 
@@ -347,10 +347,10 @@
 | Markdown workspace/migration | SQLite `state.db` 唯一运行态；`StateSidecars` 只管 SAFETY/LOG；旧数据用 `9072b4e` 独立历史 checkout 救援 | `tests/test_sidecar_behavior.py`、`scripts/smoke_legacy_workspace_rescue.py` | `tests/test_backend_matrix.py`/`test_state_store.py` 锁显式与隐式 legacy fail-closed；wheel 不含 migrator/full Workspace | `d1713a0`、`6309a1b`、`4a8ec86`、`9698b3e` |
 | auto_step | `physical-agent watch`、`physical-agent api --watch` 或 `physical-agent gui` 的独立 watch 生命周期 | CLI chat/API proposal-only tests 与正式 watch smoke | 生产 `auto_step|auto-step|_run_chat_auto_step` 零命中；R8 再删除固定 `executed=0` 与 CLI 不可达旧文案 | `da14064`；fork Push run `29234483572`、PR run `29234488489` 均成功 |
 | Chat/Watch/Driver 越权路径 | 提案侧只产 intent/`AgentOutput`；watch 在 Gate 后唯一调用 driver | `tests/test_watch_runtime.py`、`tests/test_safety.py` | `tests/test_safety_boundaries.py` AST + request-side monkeypatch；真实 `driver.execute` 只在 `watch/runtime.py` | `da14064`，fork Push run `29234483572`、PR run `29234488489` 均成功；`d1ca53c3`，fork Push run `29321294713`、PR run `29321297674` 均成功；`9ba44af`，fork Push run `29399978672`、PR run `29399982326` 均成功 |
-| 重复 projection/read model | `application.output_projection` 唯一合成 current `AgentOutput`；`/api/state.actions` 保留 board truth | `tests/test_output_projection.py`、React/TUI canonical status 负例 | React/TUI 不重算 Gate；R8 删除可陈旧的 `ChatPlan.actions` 第三份投影并锁旧 payload 忽略 | `9adaf6c` 是先前 status fix；`0bb7807` 是 R6 closure head，fork Push run `29312317707`、PR run `29312319687` 均成功；R8 current fix 仍待最终提交 |
+| 重复 projection/read model | `application.output_projection` 唯一合成 current `AgentOutput`；`/api/state.actions` 保留 board truth | `tests/test_output_projection.py`、React/TUI canonical status 负例 | React/TUI 不重算 Gate；R8 删除可陈旧的 `ChatPlan.actions` 第三份投影并锁旧 payload 忽略 | `9adaf6c` 是先前 status fix；`0bb7807` 是 R6 closure head，fork Push run `29312317707`、PR run `29312319687` 均成功；R8 `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功 |
 | `_append_actions` | `ProposalService` + `StateStore.append_pending_actions()` 原子 batch | `tests/test_proposal_service.py`、`tests/test_chat_runtime.py`、batch/dependency 回归 | `chat_runtime.py` 中 `_append_actions|_max_action_number` 零命中 | `0bb7807`；fork Push run `29312317707`、PR run `29312319687` 均成功 |
 | action-draft fence | compiler-owned `AgentOutput.actions` 经 SSE done/assistant metadata 到 Web/TUI Draft | structured-only Chat/Playwright/TUI tests | producer/parser/React fallback/bundle marker 零命中；历史 fence-only 正文断言 0 卡/0 Add | `9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功 |
-| proposal convenience fields | proposal/chat/task/MCP 只通过 `agent_output.actions`；approve/reject mutation `action` 与 `/api/state.actions` 按边界保留 | API/MCP/tool-loop/CLI contract tests；R8 typed OpenAPI response contract | proposal 顶层 `actions/action/draft_actions` 负断言；OpenAPI 禁止旧字段 | `9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功；R8 OpenAPI 锁定待最终提交 |
+| proposal convenience fields | proposal/chat/task/MCP 只通过 `agent_output.actions`；approve/reject mutation `action` 与 `/api/state.actions` 按边界保留 | API/MCP/tool-loop/CLI contract tests；R8 typed OpenAPI response contract | proposal 顶层 `actions/action/draft_actions` 负断言；OpenAPI 禁止旧字段 | `9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功；R8 `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功 |
 
 ## 暂停项（本规格期间不实施）
 

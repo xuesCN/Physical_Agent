@@ -18,7 +18,7 @@
 
 **验收**：每个删除项都有前置正反测试或替代入口；双轨有独立一轮证据；wheel 安装后能启动同一 React Dashboard；全量 pytest、frontend build/e2e、TUI build/test、安全扫描与 docs/CLI grep 全绿。R0 已完成；R1.5 正式栈补缺、thin launcher 与 clean-wheel smoke 经 draft PR #1 / `2d5e909` 独立验证，真实 Chromium 25/25。R2 随后删除 legacy controller/server/static/tests/package-data 与 safety allowlist 例外，保留 `physical-agent gui` 命令作为正式 FastAPI + React launcher。
 
-**当前进度**：R3-R7 的删除与双轨门禁均已完成并有提交/远端 CI 证据。R8 已完成本地收口：正式 current docs 与示例统一到 SQLite/structured `AgentOutput`/独立 watch 主链；删除可陈旧的 `ChatPlan.actions` 第三份投影和 chat-side `executed=0` 心智残留；proposal/chat/task 与 approve/reject 的 200 响应写入 typed OpenAPI；wheel clean-install、真实 Chromium、TUI、Python full、Safety AST/grep 与文档 golden 均通过。旧 fence-only chat 只显示普通文本，Action Board、approve/reject mutation、pending/approval/SafetyGate 与 watch 唯一执行权保持不变。实现与本地验收完成，等待最终 commit/push 和远端 CI；冻结项不自动恢复。
+**当前进度**：R3-R8 的删除与双轨门禁均已完成并有提交/远端 CI 证据。R8 已完成收口：正式 current docs 与示例统一到 SQLite/structured `AgentOutput`/独立 watch 主链；删除可陈旧的 `ChatPlan.actions` 第三份投影和 chat-side `executed=0` 心智残留；proposal/chat/task 与 approve/reject 的 200 响应写入 typed OpenAPI；wheel clean-install、真实 Chromium、TUI、Python full、Safety AST/grep 与文档 golden 均通过。实现 closure commit `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功。旧 fence-only chat 只显示普通文本，Action Board、approve/reject mutation、pending/approval/SafetyGate 与 watch 唯一执行权保持不变；冻结项不自动恢复。
 
 ## F0 LLM planner 实验
 

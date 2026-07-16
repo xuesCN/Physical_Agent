@@ -321,6 +321,13 @@ def test_r8_release_evidence_uses_the_tracked_dashboard_dist() -> None:
     assert "ignored `frontend/dist` 不作为发布证据" in final_evidence
     assert "tracked `physical_agent/dashboard/dist` 无差异" not in final_evidence
     assert "`frontend/dist` 无差异" not in final_evidence
+    assert (
+        "实现 closure commit 为 `c4da4f9`；fork Push run `29476327424`、"
+        "PR run `29476329954` 均 completed success，headSha 均为 `c4da4f9`。"
+        in final_evidence
+    )
+    assert "仍未 commit、未 push" not in final_evidence
+    assert "远端 CI 尚无 R8 本轮证据" not in final_evidence
 
     for fragment in (
         "终审继续发现并修复三项",
@@ -414,9 +421,15 @@ def test_r8_deletion_evidence_matrix_covers_every_retired_surface() -> None:
         "`0bb7807` 是 R6 closure head",
         "fork Push run `29312317707`",
         "PR run `29312319687`",
-        "R8 current fix 仍待最终提交",
+        "R8 `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功",
     ):
         assert fragment in projection_evidence
+
+    proposal_evidence = evidence_by_surface["proposal convenience fields"]
+    assert (
+        "R8 `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功"
+        in proposal_evidence
+    )
 
 
 def test_r5_remote_ci_items_record_the_successful_push_and_pr_runs() -> None:
@@ -465,37 +478,97 @@ def test_r5_remote_ci_items_record_the_successful_push_and_pr_runs() -> None:
     assert "`d1ca53c3`" not in r7_item
 
 
-def test_r8_local_checklist_is_complete_but_commit_push_stays_unchecked() -> None:
+def test_r8_final_status_maps_every_gate_and_remote_evidence_to_its_document() -> None:
     tasks_r8 = _section(
         _read("docs/specs/001-architecture-simplification/tasks.md"),
         "## R8 收口",
     )
 
     checklist = [line for line in tasks_r8.splitlines() if line.startswith("- [")]
-    gate_identities = (
-        "正式 current architecture 文档只描述当前实现",
-        "`agent-architecture-vnext` 改为 current architecture/历史决策口径",
-        "SPEC、PLAYBOOK、REFACTORING、README 双语",
-        "Python 全量 pytest",
-        "frontend `tsc -b && vite build`",
-        "Playwright 完整主路径与负用例",
-        "TUI build/test/scenario matrix",
-        "wheel build + clean install",
-        "safety AST/grep 边界扫描",
-        "R0-R8 每个删除项有对应替代/负用例证据",
-        "SPEC R0-R8 标记为实现与本地验收完成、等待最终提交和远端 CI；REFACTORING 追加实现、决策和教训",
+    expected_checklist = (
+        "- [x] 正式 current architecture 文档只描述当前实现；用户保留的 `current-architecture-audit.md`、`current-architecture-audit.html` 与 `system-summary.zh-CN.md` 不属于 current-doc contract，不修改、不删除、不重新生成，也不据此阻塞 R8。",
+        "- [x] `agent-architecture-vnext` 改为 current architecture/历史决策口径，冻结项不再写成默认下一步。",
+        "- [x] SPEC、PLAYBOOK、REFACTORING、README 双语、state/backend/hardware/example/CLI help 一致。",
+        "- [x] Python 全量 pytest。",
+        "- [x] frontend `tsc -b && vite build`。",
+        "- [x] Playwright 完整主路径与负用例。",
+        "- [x] TUI build/test/scenario matrix。",
+        "- [x] wheel build + clean install + `gui`/`api`/assets smoke。",
+        "- [x] safety AST/grep 边界扫描。",
+        "- [x] R0-R8 每个删除项有对应替代/负用例证据。",
+        "- [x] SPEC R0-R8 标记完成；REFACTORING 追加实现、决策和教训。",
+        "- [x] commit/push：实现 closure commit `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功；不创建独立 handoff。",
     )
-    assert len(checklist) == 12
-    for identity in gate_identities:
-        matching_items = [item for item in checklist if identity in item]
-        assert len(matching_items) == 1
-        assert matching_items[0].startswith("- [x] ")
-
-    assert all(item.startswith("- [x] ") for item in checklist[:11])
-    commit_push_items = [item for item in checklist if "commit/push" in item]
-    assert commit_push_items == ["- [ ] commit/push；不创建独立 handoff。"]
-    assert checklist[11] == commit_push_items[0]
+    assert checklist == list(expected_checklist)
     assert all("暂停" not in item for item in checklist)
+
+    spec_backlog = _section(_read("docs/SPEC.zh-CN.md"), "## 4. 待办矩阵")
+    spec_r8_rows = [
+        line for line in spec_backlog.splitlines() if line.startswith("| **R0-R8** |")
+    ]
+    assert len(spec_r8_rows) == 1
+    spec_r8_status = spec_r8_rows[0].rsplit(" | ", 1)[1].removesuffix(" |")
+    assert spec_r8_status.startswith("✅ 2026-07-16 完成：")
+    assert (
+        "实现 closure commit `c4da4f9`；fork Push run `29476327424`、"
+        "PR run `29476329954` 均成功"
+        in spec_r8_status
+    )
+    for boundary in (
+        "`AgentOutput`/`ChatPlan.agent_output` 是唯一 Draft 机器通道",
+        "`/api/state.actions` 仍是 board truth",
+        "approve/reject mutation `action`",
+        "pending/approval/SafetyGate",
+        "watch 唯一执行权",
+        "冻结项不自动恢复",
+    ):
+        assert boundary in spec_r8_status
+    assert "等待最终提交和远端 CI" not in spec_r8_status
+    assert "commit/push 尚未执行" not in spec_r8_status
+
+    playbook_r8 = _section(
+        _read("docs/PLAYBOOK.zh-CN.md"),
+        "## R0-R8 架构减法与兼容面退役",
+    )
+    progress_paragraphs = [
+        paragraph
+        for paragraph in playbook_r8.split("\n\n")
+        if paragraph.startswith("**当前进度**：")
+    ]
+    assert len(progress_paragraphs) == 1
+    current_progress = progress_paragraphs[0]
+    assert "R8 已完成收口" in current_progress
+    assert (
+        "实现 closure commit `c4da4f9`；fork Push run `29476327424`、"
+        "PR run `29476329954` 均成功"
+        in current_progress
+    )
+    assert "冻结项不自动恢复" in current_progress
+    assert "等待最终 commit/push 和远端 CI" not in current_progress
+
+    refactoring_table = _section(
+        _read("docs/REFACTORING.zh-CN.md"),
+        "## 1. 阶段速查表",
+    )
+    refactoring_r8_rows = [
+        line for line in refactoring_table.splitlines() if line.startswith("| R8 |")
+    ]
+    assert refactoring_r8_rows == [
+        "| R8 | 当前架构、文档、示例、OpenAPI、发布包与全量门禁收口 | `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均成功 |"
+    ]
+
+    refactoring_lessons = _section(
+        _read("docs/REFACTORING.zh-CN.md"),
+        "## 4. 经验教训（流程侧）",
+    )
+    checkbox_lessons = [
+        line
+        for line in refactoring_lessons.splitlines()
+        if line.startswith("- **checkbox 测试必须锁门槛身份、阶段与证据语义**")
+    ]
+    assert checkbox_lessons == [
+        "- **checkbox 测试必须锁门槛身份、阶段与证据语义**（R8 review-fix 的教训）：pre-closure 阶段应逐一锁定 11 个本地门槛为 `[x]`，第 11 项沿用 SPEC 🟡 的“实现与本地验收完成、等待最终提交和远端 CI”，第 12 项 commit/push 为 `[ ]`；只有真实 closure commit 已 push 且 fork Push/PR CI 均成功后，才能切换为 12 项全部 `[x]` 与 SPEC ✅ 完成，最终状态测试还必须逐项锁定完整门槛身份和对应 commit/run 证据。"
+    ]
 
 
 def test_moce_example_documents_current_capabilities_and_dashboard_flow() -> None:

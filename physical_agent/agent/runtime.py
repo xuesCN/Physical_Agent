@@ -94,6 +94,7 @@ class AgentRuntime:
             proposal.agent_output,
             actions=workspace.read_actions(),
             feedback=workspace.read_feedback(),
+            claim_owners=workspace.read_action_claim_owners(),
         )
         all_done = (
             len(feedback) == len(actions)

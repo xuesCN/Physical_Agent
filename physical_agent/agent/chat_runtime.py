@@ -912,6 +912,7 @@ class ChatRuntime:
                 agent_output,
                 actions=after,
                 feedback=workspace.read_feedback(),
+                claim_owners=workspace.read_action_claim_owners(),
             )
         active_action_ids = {
             action.id

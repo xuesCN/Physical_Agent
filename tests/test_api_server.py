@@ -485,6 +485,50 @@ def test_api_chat_draft_dependency_requires_prerequisite_first(tmp_path):
     ]
 
 
+def test_api_state_ignores_stale_gate_from_prior_claim_owner(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    controller = ApiController(config_path)
+    controller.propose_action(
+        ActionProposalRequest(
+            id="act_api_claim",
+            robot="arm_1",
+            capability="observe",
+            params={},
+            reason="Project current claim evidence.",
+            depends_on=[],
+        )
+    )
+    stale = store.claim_next_ready_action(claim_owner="watch-old")
+    assert stale is not None
+    store.append_feedback_event(
+        {
+            "event": "safety_gate",
+            "task_id": "task:safety_gate:act_api_claim",
+            "action_id": "act_api_claim",
+            "status": "passed",
+            "decision": "allow",
+            "actor": "watch",
+            "owner": "watch",
+            "executor_id": "watch-old",
+            "mandatory": True,
+            "policy_source": "SAFETY.md",
+        }
+    )
+    assert store.recover_stale_actions(0, claim_owner="watch-old") == 1
+    successor = store.claim_next_ready_action(claim_owner="watch-successor")
+    assert successor is not None
+
+    state = controller.state()
+    projected = state["plan"]["plan"]["agent_output"]
+    gate = next(task for task in projected["tasks"] if task["kind"] == "safety_gate")
+
+    assert gate["status"] == "checking"
+    assert "projection_error" not in gate["details"]
+    assert "claim_owner" not in state["actions"]["in_progress"][0]
+    assert "claim_owner" not in projected["actions"][0]
+
+
 def test_api_endpoints_cover_state_proposals_memory_ingest_search_and_audit(tmp_path):
     TestClient = _client_or_skip()
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)

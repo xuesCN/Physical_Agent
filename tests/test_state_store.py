@@ -526,6 +526,30 @@ def test_sqlite_claim_owner_fences_stale_action_completion(tmp_path):
     assert store.mark_action_completed(current, claim_owner="watch-b") is True
 
 
+def test_sqlite_reads_current_claim_owners_without_exposing_action_fields(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.append_pending_action(
+        Action(id="act_claim_owner", robot="arm_1", capability="observe")
+    )
+
+    claimed = store.claim_next_ready_action(claim_owner="watch-current")
+
+    assert claimed is not None
+    assert store.read_action_claim_owners() == {
+        "act_claim_owner": "watch-current"
+    }
+    board_action = store.read_actions()["in_progress"][0]
+    assert "claim_owner" not in claimed.model_dump(mode="json")
+    assert "claim_owner" not in board_action.model_dump(mode="json")
+
+    assert store.mark_action_completed(
+        claimed,
+        claim_owner="watch-current",
+    ) is True
+    assert store.read_action_claim_owners() == {}
+
+
 def test_sqlite_reset_refuses_to_erase_live_runtime_lease(tmp_path):
     store = SqliteStateStore(tmp_path / "workspace")
     store.initialize()

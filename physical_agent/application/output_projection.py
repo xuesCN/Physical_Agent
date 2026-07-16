@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from physical_agent.application.plan_compiler import compile_agent_output
@@ -17,6 +18,7 @@ def materialize_agent_output(
     *,
     actions: dict[str, Any],
     feedback: dict[str, Any],
+    claim_owners: Mapping[str, str] | None = None,
 ) -> AgentOutput:
     """Project board and feedback facts onto an immutable compiled graph.
 
@@ -44,6 +46,24 @@ def materialize_agent_output(
             if _is_authoritative_gate_event(raw_gate_event, task.action_id)
             else None
         )
+        canonical_gate_event = gate_event is not None
+        current_claim_owner = (
+            str(claim_owners.get(task.action_id) or "") or None
+            if claim_owners is not None
+            else None
+        )
+        claim_owner_missing = (
+            action_state == "in_progress" and current_claim_owner is None
+        )
+        if action_state == "in_progress" and gate_event is not None:
+            if claim_owner_missing:
+                gate_event = None
+            elif str(gate_event.get("executor_id") or "") != current_claim_owner:
+                # A recovered action can be claimed by a successor while the
+                # prior owner's canonical Gate event remains in feedback. The
+                # event is stale for this claim, not forged evidence.
+                raw_gate_event = None
+                gate_event = None
         if (
             action_state == "pending"
             and gate_event is not None
@@ -71,13 +91,22 @@ def materialize_agent_output(
                 status = "requested"
 
         elif task.kind == "safety_gate":
-            if raw_gate_event is not None and gate_event is None:
+            if raw_gate_event is not None and not canonical_gate_event:
                 status = "failed"
                 details["projection_error"] = {
                     "code": "safety.gate.evidence_invalid",
                     "message": (
                         "SafetyGate feedback is not a canonical watch-owned "
                         "decision and cannot satisfy the mandatory task."
+                    ),
+                }
+            elif claim_owner_missing:
+                status = "failed"
+                details["projection_error"] = {
+                    "code": "safety.gate.claim_owner_missing",
+                    "message": (
+                        "In-progress action has no current claim owner, so "
+                        "SafetyGate evidence cannot satisfy the mandatory task."
                     ),
                 }
             elif gate_event is not None:
@@ -155,6 +184,7 @@ def current_agent_output(
     *,
     actions: dict[str, Any],
     feedback: dict[str, Any],
+    claim_owners: Mapping[str, str] | None = None,
     preferred: AgentOutput | dict[str, Any] | None = None,
 ) -> AgentOutput | None:
     """Return a current projection, rebuilding all active submitted tasks.
@@ -189,6 +219,7 @@ def current_agent_output(
                 preferred_output,
                 actions=actions,
                 feedback=feedback,
+                claim_owners=claim_owners,
             )
             if preferred_output is not None
             else None
@@ -222,7 +253,12 @@ def current_agent_output(
         ),
         proposal_id=(next(iter(proposal_ids)) if len(proposal_ids) == 1 else None),
     )
-    return materialize_agent_output(compiled, actions=actions, feedback=feedback)
+    return materialize_agent_output(
+        compiled,
+        actions=actions,
+        feedback=feedback,
+        claim_owners=claim_owners,
+    )
 
 
 def project_chat_plan(
@@ -230,6 +266,7 @@ def project_chat_plan(
     *,
     actions: dict[str, Any],
     feedback: dict[str, Any],
+    claim_owners: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     plan_value = plan_document.get("plan") or {}
     plan = (
@@ -240,6 +277,7 @@ def project_chat_plan(
     projected = current_agent_output(
         actions=actions,
         feedback=feedback,
+        claim_owners=claim_owners,
         preferred=plan.agent_output,
     )
     if projected is None:

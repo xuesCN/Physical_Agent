@@ -74,6 +74,7 @@ class PhysicalAgentMCP:
     def get_state(self) -> dict[str, Any]:
         workspace = self._workspace()
         actions = workspace.read_actions()
+        claim_owners = workspace.read_action_claim_owners()
         feedback = workspace.read_feedback()
         return {
             "capabilities": workspace.read_capabilities(),
@@ -85,6 +86,7 @@ class PhysicalAgentMCP:
                 workspace.read_plan(),
                 actions=actions,
                 feedback=feedback,
+                claim_owners=claim_owners,
             ),
         }
 

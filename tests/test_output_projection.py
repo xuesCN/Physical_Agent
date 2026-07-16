@@ -9,7 +9,12 @@ from physical_agent.application.plan_compiler import compile_agent_output
 from physical_agent.protocol.schemas import Action, ChatPlan
 
 
-def _gate_event(*, status: str, decision: str) -> dict[str, object]:
+def _gate_event(
+    *,
+    status: str,
+    decision: str,
+    executor_id: str = "watch-owner",
+) -> dict[str, object]:
     return {
         "event": "safety_gate",
         "task_id": "task:safety_gate:act_001",
@@ -18,6 +23,7 @@ def _gate_event(*, status: str, decision: str) -> dict[str, object]:
         "decision": decision,
         "actor": "watch",
         "owner": "watch",
+        "executor_id": executor_id,
         "mandatory": True,
         "policy_source": "SAFETY.md",
     }
@@ -50,7 +56,7 @@ def _compiled(*, expected: bool = False):
     )
 
 
-def test_projection_materializes_gate_and_running_physical_task():
+def test_projection_materializes_gate_from_matching_claim_owner():
     action = _compiled().actions[0]
     output = materialize_agent_output(
         _compiled(),
@@ -65,6 +71,7 @@ def test_projection_materializes_gate_and_running_physical_task():
                 _gate_event(status="passed", decision="allow")
             ]
         },
+        claim_owners={"act_001": "watch-owner"},
     )
     tasks = {task.kind: task for task in output.tasks}
 
@@ -72,6 +79,63 @@ def test_projection_materializes_gate_and_running_physical_task():
     assert tasks["safety_gate"].status == "passed"
     assert tasks["physical_action"].status == "checking"
     assert tasks["safety_gate"].details["last_decision"]["decision"] == "allow"
+
+
+def test_projection_ignores_old_owner_gate_after_successor_claim():
+    action = _compiled().actions[0]
+    output = materialize_agent_output(
+        _compiled(),
+        actions={
+            "pending": [],
+            "in_progress": [action],
+            "completed": [],
+            "cancelled": [],
+        },
+        feedback={
+            "history": [
+                _gate_event(
+                    status="passed",
+                    decision="allow",
+                    executor_id="watch-old",
+                )
+            ]
+        },
+        claim_owners={"act_001": "watch-successor"},
+    )
+    tasks = {task.kind: task for task in output.tasks}
+
+    assert output.status == "executing"
+    assert tasks["safety_gate"].status == "checking"
+    assert "last_decision" not in tasks["safety_gate"].details
+    assert "projection_error" not in tasks["safety_gate"].details
+    assert tasks["physical_action"].status == "waiting"
+
+
+def test_projection_fails_closed_when_in_progress_claim_owner_is_missing():
+    action = _compiled().actions[0]
+    output = materialize_agent_output(
+        _compiled(),
+        actions={
+            "pending": [],
+            "in_progress": [action],
+            "completed": [],
+            "cancelled": [],
+        },
+        feedback={
+            "history": [
+                _gate_event(status="passed", decision="allow")
+            ]
+        },
+        claim_owners={},
+    )
+    tasks = {task.kind: task for task in output.tasks}
+
+    assert output.status == "failed"
+    assert tasks["safety_gate"].status == "failed"
+    assert tasks["safety_gate"].details["projection_error"]["code"] == (
+        "safety.gate.claim_owner_missing"
+    )
+    assert tasks["physical_action"].status == "waiting"
 
 
 def test_projection_waits_for_and_materializes_verification():

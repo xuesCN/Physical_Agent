@@ -306,6 +306,21 @@ class SqliteStateStore:
                 ),
             }
 
+    def read_action_claim_owners(self) -> dict[str, str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, claim_owner
+                FROM actions
+                WHERE status = 'in_progress' AND claim_owner IS NOT NULL
+                ORDER BY seq
+                """
+            ).fetchall()
+        return {
+            str(row["id"]): str(row["claim_owner"])
+            for row in rows
+        }
+
     def append_pending_action(self, action: Action | dict[str, Any]) -> Action:
         return self.append_pending_actions([action])[0]
 

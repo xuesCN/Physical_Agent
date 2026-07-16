@@ -1605,11 +1605,13 @@ class ApiController:
 
     def _state(self, config: PhysicalAgentConfig, store: StateStore) -> dict[str, Any]:
         actions = store.read_actions()
+        claim_owners = store.read_action_claim_owners()
         feedback = store.read_feedback()
         plan = project_chat_plan(
             store.read_plan(),
             actions=actions,
             feedback=feedback,
+            claim_owners=claim_owners,
         )
         return self._with_executor(
             {

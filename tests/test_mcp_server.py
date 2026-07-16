@@ -98,6 +98,52 @@ def test_mcp_get_state_includes_safety_and_compiled_plan(tmp_path):
     assert api_output == mcp_output
 
 
+def test_mcp_state_ignores_stale_gate_from_prior_claim_owner(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = open_state_store(config_path=config_path)
+    store.initialize()
+    mcp = PhysicalAgentMCP(config_path)
+    assert mcp.propose_action(
+        {
+            "id": "act_mcp_claim",
+            "robot": "arm_1",
+            "capability": "observe",
+            "params": {},
+            "reason": "Project current claim evidence.",
+        }
+    )["ok"] is True
+    stale = store.claim_next_ready_action(claim_owner="watch-old")
+    assert stale is not None
+    store.append_feedback_event(
+        {
+            "event": "safety_gate",
+            "task_id": "task:safety_gate:act_mcp_claim",
+            "action_id": "act_mcp_claim",
+            "status": "passed",
+            "decision": "allow",
+            "actor": "watch",
+            "owner": "watch",
+            "executor_id": "watch-old",
+            "mandatory": True,
+            "policy_source": "SAFETY.md",
+        }
+    )
+    assert store.recover_stale_actions(0, claim_owner="watch-old") == 1
+    successor = store.claim_next_ready_action(claim_owner="watch-successor")
+    assert successor is not None
+
+    state = mcp.get_state()
+    projected = state["plan"]["plan"].agent_output
+    gate = next(task for task in projected["tasks"] if task["kind"] == "safety_gate")
+
+    assert gate["status"] == "checking"
+    assert "projection_error" not in gate["details"]
+    assert "claim_owner" not in state["actions"]["in_progress"][0].model_dump(
+        mode="json"
+    )
+    assert "claim_owner" not in projected["actions"][0]
+
+
 def test_mcp_duplicate_action_id_returns_structured_error(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     store = open_state_store(config_path=config_path)

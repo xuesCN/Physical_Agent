@@ -3,6 +3,7 @@ import { Box, Text } from "ink";
 import type { AgentState, ConfigResponse, HealthState, RuntimeStatus } from "../types.js";
 import { buildRobotViewModels } from "../formatters/robot.js";
 import { flattenActions } from "../api/client.js";
+import { SectionTitle } from "./SectionTitle.js";
 
 interface StatusPanelProps {
   status: RuntimeStatus;
@@ -16,7 +17,7 @@ export function StatusPanel({ status, health, state, config }: StatusPanelProps)
   const robots = buildRobotViewModels(state, config);
   return (
     <Box flexDirection="column" paddingX={1}>
-      <Text color="cyan">status</Text>
+      <SectionTitle title="status" />
       <Text>api: {status.apiBase}</Text>
       <Text>backend: {status.backend}</Text>
       <Text>executor: {status.executor?.mode ?? "unknown"} ({status.executor?.status ?? "unknown"})</Text>

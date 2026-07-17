@@ -2,6 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { AgentState, ConfigResponse } from "../types.js";
 import { buildRobotViewModels } from "../formatters/robot.js";
+import { SectionTitle } from "./SectionTitle.js";
 
 interface RobotsPanelProps {
   state: AgentState | null;
@@ -23,7 +24,7 @@ export function RobotsPanel({ state, config, selectedRobotId, error }: RobotsPan
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      <Text color="cyan">robots</Text>
+      <SectionTitle title="robots" />
       {selectedRobotId && visibleRows.length === 0 ? (
         <Text color="yellow">Robot not found: {selectedRobotId}</Text>
       ) : null}

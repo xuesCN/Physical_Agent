@@ -2,6 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import { flattenActions } from "../api/client.js";
 import type { AgentState, ActionItem, AgentOutput, AgentTask } from "../types.js";
+import { SectionTitle } from "./SectionTitle.js";
 
 interface ActionsPanelProps {
   state: AgentState | null;
@@ -18,7 +19,7 @@ export function ActionsPanel({ state, error, force = false }: ActionsPanelProps)
   }
   return (
     <Box flexDirection="column" paddingX={1}>
-      <Text color="gray">actions</Text>
+      <SectionTitle title="actions" />
       {error ? <Text color="red">API unavailable: {error}</Text> : null}
       {!error && !state?.ready ? <Text color="yellow">{state?.message ?? "Workspace is not ready."}</Text> : null}
       {output ? (

@@ -5,11 +5,14 @@ import { render } from "ink-testing-library";
 import { ActionsPanel } from "./ActionsPanel.js";
 import { BrandBanner, FULL_MOCE_LOGO, selectBannerVariant } from "./BrandBanner.js";
 import { ChatPanel } from "./ChatPanel.js";
+import { CommandInput } from "./CommandInput.js";
 import { ConfigPanel } from "./ConfigPanel.js";
 import { FinalizedText, parseFinalizedText } from "./FinalizedText.js";
 import { RobotDetailPanel } from "./RobotDetailPanel.js";
 import { RobotsPanel } from "./RobotsPanel.js";
+import { SectionTitle } from "./SectionTitle.js";
 import { StatusBar } from "./StatusBar.js";
+import { StatusPanel } from "./StatusPanel.js";
 import { Transcript } from "./Transcript.js";
 import { UploadsPanel } from "./UploadsPanel.js";
 import { normalizeTerminalText } from "./textFormat.js";
@@ -19,6 +22,13 @@ import type { AgentState, ConfigResponse } from "../types.js";
 test("MOCE theme keeps the approved logo and small-text colors", () => {
   assert.equal(THEME.brandLogo, "#1D4ED8");
   assert.equal(THEME.brandAccent, "#3B82F6");
+});
+
+test("SectionTitle renders a branded title without a fixed divider string", () => {
+  const view = render(<SectionTitle title="status" detail="live" />);
+  assert.match(view.lastFrame() ?? "", /◆ status/);
+  assert.match(view.lastFrame() ?? "", /live/);
+  view.unmount();
 });
 
 test("BrandBanner selects full and compact variants at the terminal boundary", () => {
@@ -204,6 +214,7 @@ test("StatusBar renders connection state", () => {
       }}
     />
   );
+  assert.match(view.lastFrame() ?? "", /MOCE/);
   assert.match(view.lastFrame() ?? "", /Physical Agent TUI/);
   assert.match(view.lastFrame() ?? "", /sqlite/);
   assert.match(view.lastFrame() ?? "", /SSE/);
@@ -313,9 +324,30 @@ test("Transcript content keeps long text and normalizes newlines", () => {
 
 test("ChatPanel renders only live streaming state", () => {
   const view = render(<ChatPanel hasTranscript={true} streamingText="partial reply" streaming={true} />);
-  assert.match(view.lastFrame() ?? "", /streaming/);
-  assert.match(view.lastFrame() ?? "", /partial reply/);
-  assert.doesNotMatch(view.lastFrame() ?? "", /No chat yet/);
+  const frame = view.lastFrame() ?? "";
+  assert.match(frame, /◆ chat/);
+  assert.match(frame, /streaming/);
+  assert.match(frame, /moce\s+│\s+partial reply/);
+  assert.doesNotMatch(frame, /No chat yet/);
+  view.unmount();
+});
+
+test("CommandInput renders a round branded prompt and disabled copy", () => {
+  const view = render(
+    <CommandInput value="" onChange={() => undefined} onSubmit={() => undefined} />
+  );
+  assert.match(view.lastFrame() ?? "", /╭|╰/);
+  assert.match(view.lastFrame() ?? "", /›/);
+  assert.match(view.lastFrame() ?? "", /message or \/help/);
+  Object.assign(view.stdin, {
+    read: () => null,
+    ref: () => undefined,
+    unref: () => undefined
+  });
+  view.rerender(
+    <CommandInput value="" onChange={() => undefined} onSubmit={() => undefined} disabled />
+  );
+  assert.match(view.lastFrame() ?? "", /Working\.\.\./);
   view.unmount();
 });
 
@@ -346,6 +378,7 @@ test("ActionsPanel renders approval status", () => {
       }}
     />
   );
+  assert.match(view.lastFrame() ?? "", /◆ actions/);
   assert.match(view.lastFrame() ?? "", /act_001/);
   assert.match(view.lastFrame() ?? "", /approval required/);
 });
@@ -411,6 +444,7 @@ test("ConfigPanel renders configured robots without exposing secrets", () => {
     />
   );
   const frame = view.lastFrame() ?? "";
+  assert.match(frame, /◆ config/);
   assert.match(frame, /workspace/);
   assert.match(frame, /backend sqlite/);
   assert.match(frame, /arm_1/);
@@ -420,6 +454,13 @@ test("ConfigPanel renders configured robots without exposing secrets", () => {
   assert.doesNotMatch(frame, /super-secret/);
   assert.doesNotMatch(frame, /api_key/);
   assert.doesNotMatch(frame, /token/);
+});
+
+test("ConfigPanel keeps its shared title before the snapshot is loaded", () => {
+  const view = render(<ConfigPanel config={null} state={null} />);
+  assert.match(view.lastFrame() ?? "", /◆ config/);
+  assert.match(view.lastFrame() ?? "", /Config snapshot not loaded/);
+  view.unmount();
 });
 
 test("ConfigPanel renders empty robot config", () => {
@@ -451,6 +492,7 @@ test("RobotsPanel renders multiple robots, unknown health, approval, and capabil
   };
   const view = render(<RobotsPanel state={state} config={config} />);
   const frame = view.lastFrame() ?? "";
+  assert.match(frame, /◆ robots/);
   assert.match(frame, /arm_1/);
   assert.match(frame, /rover_1/);
   assert.match(frame, /health unknown/);
@@ -462,6 +504,7 @@ test("RobotDetailPanel renders params_schema and constraints summaries", () => {
     <RobotDetailPanel state={sampleState()} config={sampleConfig()} robotId="arm_1" mode="capabilities" />
   );
   const frame = view.lastFrame() ?? "";
+  assert.match(frame, /◆ capabilities arm_1/);
   assert.match(frame, /requires_approval/);
   assert.match(frame, /params_schema: type object; props object_id/);
   assert.match(frame, /constraints: bounds/);
@@ -503,9 +546,32 @@ test("UploadsPanel renders metadata without full file preview", () => {
     />
   );
   const frame = view.lastFrame() ?? "";
+  assert.match(frame, /◆ uploads/);
   assert.match(frame, /manual.md/);
   assert.match(frame, /untrusted yes/);
   assert.doesNotMatch(frame, /full file content/);
+});
+
+test("StatusPanel renders the shared status title", () => {
+  const view = render(
+    <StatusPanel
+      status={{
+        apiBase: "http://127.0.0.1:8766",
+        connected: true,
+        mode: "sse",
+        lastRefresh: "12:00:00",
+        backend: "sqlite",
+        executor: { mode: "embedded", status: "active" },
+        llm: { state: "ok", model: "model-a", hasApiKey: true },
+        message: "Ready."
+      }}
+      health={null}
+      state={null}
+      config={null}
+    />
+  );
+  assert.match(view.lastFrame() ?? "", /◆ status/);
+  view.unmount();
 });
 
 function sampleConfig(): ConfigResponse {

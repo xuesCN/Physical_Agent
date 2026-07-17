@@ -3,6 +3,7 @@ import { Box, Text } from "ink";
 import type { AgentState, ConfigResponse } from "../types.js";
 import { buildRobotViewModels } from "../formatters/robot.js";
 import { summarizeConstraints, summarizeSchema } from "../formatters/schema.js";
+import { SectionTitle } from "./SectionTitle.js";
 
 interface RobotDetailPanelProps {
   state: AgentState | null;
@@ -31,7 +32,7 @@ export function RobotDetailPanel({ state, config, robotId, mode }: RobotDetailPa
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      <Text color="cyan">{mode === "capabilities" ? "capabilities" : "robot"} {robot.id}</Text>
+      <SectionTitle title={`${mode === "capabilities" ? "capabilities" : "robot"} ${robot.id}`} />
       {mode === "detail" ? (
         <>
           <Text>driver: {robot.driver}</Text>

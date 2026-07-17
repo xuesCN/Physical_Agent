@@ -2,6 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import Spinner from "ink-spinner";
 import type { RuntimeStatus } from "../types.js";
+import { THEME } from "../theme.js";
 
 interface StatusBarProps {
   status: RuntimeStatus;
@@ -17,21 +18,30 @@ export function StatusBar({ status, busy = false }: StatusBarProps) {
   return (
     <Box flexDirection="column" paddingX={1}>
       <Box gap={1} flexWrap="wrap">
-        <Text bold color="cyan">Physical Agent TUI</Text>
-        {busy ? <Text color="yellow"><Spinner type="dots" /> busy</Text> : null}
-        <Text color="gray">{status.apiBase}</Text>
-        <Text color={status.connected ? "green" : "yellow"}>{connection}</Text>
-        <Text color={status.mode === "degraded" ? "yellow" : "blue"}>{modeText}</Text>
+        <Text bold color={THEME.brandAccent}>MOCE</Text>
+        {busy ? <Text color={THEME.warning}><Spinner type="dots" /> busy</Text> : null}
+        <Text color={status.connected ? THEME.success : THEME.warning}>● {connection}</Text>
+        <Text color={status.mode === "degraded" ? THEME.warning : "blue"}>{modeText}</Text>
+        <Text color={executorColor(status.executor)}>Executor: {executor}</Text>
+        <Text color={llmStatusColor(status.llm.state)}>{llmStateLabel(status.llm.state, status.llm.message)}</Text>
       </Box>
       <Box gap={1} flexWrap="wrap">
-        <Text color="gray">backend {status.backend}</Text>
-        <Text color={executorColor(status.executor)}>Executor: {executor}</Text>
-        <Text color="gray">LLM: {status.llm.model}</Text>
-        <Text color={status.llm.hasApiKey ? "green" : "yellow"}>{llmKeyLabel(status.llm.hasApiKey)}</Text>
-        <Text color={llmStatusColor(status.llm.state)}>{llmStateLabel(status.llm.state, status.llm.message)}</Text>
-        <Text color="gray">last {status.lastRefresh ?? "never"}</Text>
-        <Text color={status.message === "Ready." ? "green" : "yellow"}>{status.message}</Text>
+        <Text color={THEME.muted}>Physical Agent TUI</Text>
+        <Text color={THEME.muted}>{status.apiBase}</Text>
+        <Text color={THEME.muted}>backend {status.backend}</Text>
+        <Text color={THEME.muted}>LLM: {status.llm.model}</Text>
+        <Text color={status.llm.hasApiKey ? THEME.success : THEME.warning}>{llmKeyLabel(status.llm.hasApiKey)}</Text>
+        <Text color={THEME.muted}>last {status.lastRefresh ?? "never"}</Text>
+        <Text color={status.message === "Ready." ? THEME.success : THEME.warning}>{status.message}</Text>
       </Box>
+      <Box
+        width="100%"
+        borderStyle="single"
+        borderTop={false}
+        borderLeft={false}
+        borderRight={false}
+        borderBottomColor={THEME.brandAccent}
+      />
     </Box>
   );
 }

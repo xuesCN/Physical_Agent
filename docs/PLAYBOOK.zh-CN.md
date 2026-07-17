@@ -181,6 +181,18 @@
 **实现口径（2026-07-08 T3）**：补 view/page 概念，默认仍是 chat transcript + actions 的纵向终端体验；`/view status|chat|actions|robots|config|uploads` 可切单主视图，StatusBar 与 CommandInput 常驻。`/config` 复用 `GET /api/config` 展示 workspace/watch/agent/robots 摘要并过滤 `api_key`/secret/token；`/robots`、`/robot <id>`、`/capabilities <id>` 合并 config、world、capabilities 展示 driver/mode/endpoint/health、requires_approval、params_schema 与 constraints 摘要。`/upload <path>` 与 `/ingest <path>` 只用本地文件构造 multipart `POST /api/upload` 请求，沿用 dashboard 的文本后缀与 5MB 限制，前置拒绝目录、过大、明显二进制或非 UTF-8 文件；上传内容不直接注入 LLM，视图只显示 filename/size/sha/id/untrusted/chunks 元数据。`/register-robot <json>` 仅调用既有 `POST /api/config/robots`，不做 YAML 编辑器、不直接写 `physical-agent.yaml`。Windows Terminal / PowerShell 下推荐用 `cd tui; npm start -- --api http://127.0.0.1:8766` 启动；带空格路径用引号传给 `/upload`。
 **验证**：2026-07-07：`cd tui && npm run build` 通过；`cd tui && npm test` 13 passed。2026-07-08 T3：`cd tui && npm test` 44 passed；`cd tui && npm run build` 通过；TUI 安全 grep 覆盖无 `driver.execute`、无 `physical_agent.watch`/`physical_agent.drivers` import、无 SQLite 直接访问。2026-07-08 command acceptance：新增 `tui/tests/scenarios/{basic,chat,actions,config,robots,upload,error}.scenario` 与 `tests/scenario-runner.test.tsx`，按真实 Ink 输入驱动 `App`，mock API/SSE 响应并断言终端输出、API 调用次数和 state/config 变化；覆盖 `/help`、`/view *`、`/task`、`/approve`、`/reject`、`/reset`、`/config`、`/robots`、`/robot`、`/capabilities`、`/upload`、`/refresh`、`/quit` 及 API offline、SSE error/EOF、polling fallback、缺参、非法命令、上传失败、reset confirmation failure；矩阵见 `docs/tui-command-matrix.md`。
 
+### T4 MOCE TUI 品牌与终端视觉刷新
+
+**重启依据**：2026-07-17 用户在真实 Windows Terminal 体验后，以截图明确指出现有 TUI 缺少视觉层级，并批准“启动大 Logo + 常驻紧凑标题栏”的 MOCE 暗蓝方案。这是 R8.1 后的独立显式 SPEC 决策，只重启 TUI 展示层。
+
+**思路**：保持纵向 append-only transcript 与纯 HTTP API/SSE 边界；新增集中 theme token、一次性 `BrandBanner`、紧凑 MOCE `StatusBar`、统一 `SectionTitle`、角色轨道和 round-border `CommandInput`。宽终端使用暗蓝 `#1D4ED8` 块字 Logo，小字号品牌元素使用更亮的 `#3B82F6`；低于 58 列或宽度未知时用 compact fallback。finalized assistant 文本只做 heading/list/bold/inline-code 的轻量呈现，streaming partial 保持纯文本，避免未闭合 token 闪烁；不引入完整 Markdown 依赖。
+
+**关键文件**：`tui/src/App.tsx`、`components/{BrandBanner,StatusBar,SectionTitle,Transcript,CommandInput}.tsx`、各 view panel、`tui/src/theme.ts`、`components/render.test.tsx`、`tests/scenario-runner.test.tsx`。详细设计见 `docs/superpowers/specs/2026-07-17-tui-moce-visual-refresh-design.md`。
+
+**坑**：Ink 只保留一个持续挂载的 Static feed，Logo 作为首个稳定 item 与 finalized transcript 共用该 feed，不能因 health/SSE rerender 或 view 切换重复打印；Ink stdout columns 在非 TTY 可缺失，必须 fallback；暗蓝不能用于黑底小字或成为唯一状态表达；现有 scenario 固定 100 列且剥离 ANSI，需要补 48/100/未定义列宽行为断言；formatter 对 fenced code、未配对/嵌套标记与旧 `action-draft` 必须原样保真；外部 PowerShell `WindowTitle` 红字属于启动命令转义问题，不要把 shell 管理塞进 TUI。
+
+**验收**：先 RED 后 GREEN；覆盖宽/窄/未知列宽 Banner、单一 Static feed 且只打印一次、48 列完整 App 无固定超宽行、紧凑标题栏、角色轨道、轻量 finalized Markdown 正反例、输入框与既有命令不变；完整 `npm run typecheck && npm test && npm run build`、scenario matrix 与 TUI 安全扫描全绿；真实 Windows Terminal 确认暗蓝 Logo 与小字强调色可读、无折行/重复 Logo，并用文档化命令手工确认无外部启动红字。API、watch、driver、SafetyGate、Action Board 与审批语义零改动。
+
 ## C4 i18n / E3 视觉打磨
 
 **思路**：C4：antd `ConfigProvider locale` + 文案抽到 `locales/{zh,en}.ts` 键值表（不上 i18next，工程量不值），默认跟浏览器语言，切换存 localStorage。E3：暗色模式用 antd `theme.darkAlgorithm` token 切换 + localStorage；首次引导用 antd Tour 组件串 setup→watch→demo 三步。

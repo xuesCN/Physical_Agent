@@ -40,11 +40,12 @@ rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Dr
 三入口 = 同一提案管线的自主档位：**档位0** 手动表单（jog）· **档位1** Chat 起草→人批 · **档位2** Task 一次规划 · **档位3** 闭环自主（未建）。
 分工恒定：LLM 只起草 action intent 与 advisory `SafetyIntent`；可信 application 层为每个物理 Action 注入唯一、mandatory、watch-owned `SafetyGateTask`；人类只完成审批义务；watch 最终校验并执行；F4 expected 只做执行后诊断。`SafetyGateTask` 不是 Action/tool，模型不能创建、删除、完成或绕过。
 
-## 2. 当前目标（R0-R8：架构减法；Phase F 功能扩张冻结）
+## 2. 当前目标（R0-R8.1 已收口；T4 TUI 视觉刷新；Phase F 其余功能扩张冻结）
 
 | 编号 | 内容 | 要点 |
 | --- | --- | --- |
-| **R0-R8** | 架构减法与兼容面退役（当前唯一实施主线） | 不新增 SPEC 功能；按 `docs/specs/001-architecture-simplification/` 的原子门禁依次完成 GUI parity→legacy GUI 退役→Markdown migration/完整 Workspace 退役→`auto_step` 退役→structured Chat 双轨→read-model/response 去重→全量收口。删除前必须有 parity/双轨/救援证据 |
+| **R0-R8.1** | 架构减法、兼容面退役与 review hardening（已完成主线） | 已完成 GUI parity→legacy GUI 退役→Markdown migration/完整 Workspace 退役→`auto_step` 退役→structured Chat 双轨→read-model/response 去重→全量与 review hardening 收口；历史证据见 §4 与 `REFACTORING.zh-CN.md` |
+| **T4** | MOCE TUI 品牌与终端视觉层级 | 用户于 2026-07-17 在真实 Windows Terminal 体验后明确重启此展示条目；只改 Ink TUI 品牌、布局、finalized text 呈现与宽度兼容，不改 API、watch、driver、SafetyGate、命令或状态语义；设计见 `docs/superpowers/specs/2026-07-17-tui-moce-visual-refresh-design.md` |
 | F0 | LLM planner 实验（后续暂停） | 已有实验与本地 JSONL trace 保留；R0-R8 期间不扩样本、不引观测平台、不据此新增 runtime 能力，收口后再按真实失败数据评审 |
 | **B6（已完成历史收口项）** | 状态层收口 | 已删 `MarkdownStateStore`/factory 分支/config legacy backend 自动选择/矩阵测试 md 侧与 `test_e2e_markdown_loop`，但保留旧目录检测以 fail closed；当时承诺 `migrate-md-to-sqlite`/reader 保留一个版本周期。R0 已决定在 R3 提前退役该入口：先抽 SAFETY/LOG sidecar，再删 full Workspace，并用 `9072b4e` 独立 worktree 留历史救援路径；这不改变 SQLite-only runtime 的既有事实 |
 | F1 | 提案卡片 + Add to Actions + 审批流（已完成） | chat draft 只从 compiler 生成的 draft `AgentOutput.actions` 创建；reply 永远是用户可读文本，不再承载或解析 `action-draft` 机器协议。旧 fence-only chat 升级后仍可阅读，但不会恢复为可操作 Draft；已经进入 Action Board 的 pending/approved action 不受影响。Chat 卡片的 Add to Actions 只创建 pending action，不等同执行审批。`requires_approval` 由后端按 robot/capability 计算；Actions 板的 Approve execution / Reject 才改变执行放行状态。watch claim 会原子跳过未批准动作但不阻塞后续 ready action；SafetyGate 仍照常校验 schema、bounds、capability、robot、SAFETY.md。 |
@@ -103,6 +104,7 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | MuJoCo-harness | 无头批量评测（原 F6.2，降级为远期候选） | git 历史可查设计 | ⏸ |
 | T1 | Ink 终端 UI 只读三面板（状态/chat/actions） | T 独立线 | ✅ 2026-07-07 完成：`tui/` 独立 Node/TS/Ink 包，状态/chat/actions 三面板，SSE 优先 + polling/degraded fallback，纯 HTTP API/SSE 客户端；2026-07-08 review fix：SSE clean EOF 降级轮询、真实 watch enabled/disabled/unknown 状态；2026-07-08 chat/actions 持久化修复：`/api/events` summary 不再覆盖完整 state，而是触发完整 `/api/state` 刷新；2026-07-08 LLM 状态显示：启动/`/refresh` 检查 LLM settings/test，显示模型、key 是否配置与短失败原因；2026-07-08 Windows/npm 启动参数兼容裸 API URL（`npm start -- http://127.0.0.1:8766`） |
 | T2/T3 | Ink 交互（审批依赖 F1.3）与补齐 | T 独立线 | ✅ 2026-07-07 T2-lite 完成：chat、`/task`、`/approve`、`/reject`、`/reset true`、`/refresh`、`/help`、`/quit`；2026-07-08 review fix：chat stream 异常/AbortError 均清理 streaming/busy 状态；2026-07-08 交互改为更接近 Claude Code 的纵向 transcript；2026-07-08 取消单条 chat 220 字符硬截断并保留换行；2026-07-08 chat 历史改为 Ink `Static` append-only 输出，空闲 `watch_step` 不再触发 live 刷新；2026-07-08 T3 完成 config/robots/uploads 视图、`/view`/`/config`/`/robots`/`/robot`/`/capabilities`/`/upload`/`/ingest`/`/register-robot` 命令、API-only multipart 上传与 TUI 安全 grep；2026-07-08 command acceptance 收口：新增 `tui/tests/scenarios/*.scenario` 与 runner，覆盖全部用户命令、API offline、SSE error/EOF、polling fallback、缺参、非法命令、上传失败、reset confirmation failure，并生成 `docs/tui-command-matrix.md`；`cd tui && npm test` 场景纳入默认测试，`npm run build` 通过 |
+| T4 | MOCE TUI 品牌与终端视觉刷新 | `PLAYBOOK` T4 + `superpowers/specs/2026-07-17-tui-moce-visual-refresh-design.md` | 🟡 2026-07-17：用户以真实终端截图明确要求重启，已批准“启动大 Logo + 常驻紧凑标题栏”的克制品牌化方案；书面设计已写入，等待规格复核与实现计划。范围只含 TUI 展示与对应测试，不改变 API/watch/driver/SafetyGate 或解冻其他功能 |
 | C4 | 前端 zh/EN i18n | PLAYBOOK 同名条目 | ✅ 2026-07-07 完成：轻量字典 + AntD locale + Settings 切换 + localStorage；高频导航/状态/Actions/Chat/Settings/Hardware/Config 文案已抽取 |
 | E3 | 暗色模式 + 首次引导 | PLAYBOOK 同名条目 | ✅ 2026-07-07 完成：AntD `darkAlgorithm` + CSS 变量暗色适配 + localStorage；首次 3 步 Tour 与 Settings 重开入口 |
 | E0-e2e | Hardware/注册/DangerZone/ConfigPanel 的 Playwright 用例 | PLAYBOOK 同名条目 | ✅ 2026-07-07 完成：补 Danger Zone reset、Hardware scaffold→register→ConfigPanel、i18n、dark mode、Tour；dashboard e2e 18 passed |

@@ -595,14 +595,16 @@ def test_r81_formal_status_and_stage_evidence_are_current() -> None:
     r8_plan = _section(stage_plan, "## 8. 文档、发布形态与全量验证收口")
 
     assert (
-        "状态：R0-R8 已完成；R8.1 最终树本地门禁与独立终审已完成，"
-        "等待 push 与 exact-head 远端 CI"
+        "状态：R0-R8.1 已完成；R8.1 implementation/local closure `8438cb7` "
+        "的 exact-head Push/PR CI 均成功"
         in stage_spec
     )
     r81_rows = [line for line in overview.splitlines() if line.startswith("| 8.1 |")]
     assert len(r81_rows) == 1
-    assert "🟡 最终树本地门禁与独立终审已完成" in r81_rows[0]
-    assert "push/exact-head Push/PR CI 待执行" in r81_rows[0]
+    assert "✅ implementation/local closure `8438cb7`" in r81_rows[0]
+    assert "fork Push run `29553985591`" in r81_rows[0]
+    assert "PR run `29553987358`" in r81_rows[0]
+    assert "🟡" not in r81_rows[0]
     assert "正式文档修正中" not in r81_rows[0]
     assert "R8 commit/push 项仍未完成" not in stage_spec
 
@@ -671,7 +673,7 @@ def test_r81_corrects_t3_status_and_records_historical_gate_deviations() -> None
     assert "承诺的 rollback unit 必须落实为实际提交边界" in lessons
 
 
-def test_r81_records_local_closure_without_claiming_remote_evidence() -> None:
+def test_r81_final_status_maps_local_and_remote_evidence() -> None:
     playbook_r81 = next(
         paragraph
         for paragraph in _read("docs/PLAYBOOK.zh-CN.md").split("\n\n")
@@ -723,6 +725,11 @@ def test_r81_records_local_closure_without_claiming_remote_evidence() -> None:
         "snapshot diff 均 clean；独立终审经四轮 fix/re-review 后 "
         "Critical=0、Important=0、Minor=0。"
     )
+    remote_evidence = (
+        "远端 closure 证据（2026-07-17）：implementation/local closure `8438cb7`；"
+        "fork Push run `29553985591`、PR run `29553987358` 均 completed success，"
+        "headSha 均为 `8438cb7bf5f356021cb602908552a069e8227bc4`。"
+    )
     checklist = [line for line in tasks_r81.splitlines() if line.startswith("- [")]
     assert checklist == [
         "- [x] LOG mirror 跨进程并发后与 SQLite 条目/revision 一致，并使用原子替换。",
@@ -732,7 +739,7 @@ def test_r81_records_local_closure_without_claiming_remote_evidence() -> None:
         "- [x] spec/plan/evidence matrix/PLAYBOOK/REFACTORING 已纠偏；draft PR #1 title/body 已更新为 R8.1 范围并保持 OPEN + draft；历史门禁/rollback 偏离已正式记录。",
         "- [x] Python full、frontend build/Playwright、TUI、clean-wheel、多进程/安全专项和 docs/golden 全绿。",
         "- [x] 独立终审无 Critical/Important/Minor。",
-        "- [ ] push 与 exact-head Push/PR CI 成功。",
+        "- [x] push 与 exact-head Push/PR CI 成功：implementation/local closure `8438cb7`；fork Push run `29553985591`、PR run `29553987358` 均 completed success，headSha 均为 `8438cb7bf5f356021cb602908552a069e8227bc4`。",
         "- [x] 新功能冻结项保持冻结。",
         "- [x] 本轮 brief 收工删除，不创建 handoff。",
     ]
@@ -762,23 +769,25 @@ def test_r81_records_local_closure_without_claiming_remote_evidence() -> None:
         "- [x] Dispatch an independent whole-change review; fix all Critical/Important findings and re-review.",
         "- [x] Remove the round brief, update final local evidence, and do not create a handoff.",
         "- [x] Confirm protected untracked paths and snapshots remain outside the diff; do not unfreeze new features.",
-        "- [ ] Push the local closure commit and wait for exact-head Push/PR CI success.",
-        "- [ ] Confirm the post-push clean index and zero ahead/behind.",
+        "- [x] Push local closure `8438cb7`; fork Push run `29553985591` and PR run `29553987358` completed successfully at exact head `8438cb7bf5f356021cb602908552a069e8227bc4`.",
+        "- [x] Confirm the post-push clean index and zero ahead/behind.",
     ]
 
     r81_rows = [
         line for line in refactoring_table.splitlines() if line.startswith("| R8.1 |")
     ]
     assert len(r81_rows) == 1
-    assert "最终树本地门禁与独立终审已完成" in r81_rows[0]
-    assert "push/exact-head Push/PR CI 待执行" in r81_rows[0]
+    assert "implementation/local closure `8438cb7`" in r81_rows[0]
+    assert "fork Push run `29553985591`" in r81_rows[0]
+    assert "PR run `29553987358`" in r81_rows[0]
+    assert "push/exact-head Push/PR CI 待执行" not in r81_rows[0]
 
     spec_r81_rows = [
         line for line in spec_backlog.splitlines() if line.startswith("| **R8.1** |")
     ]
     assert len(spec_r81_rows) == 1
-    assert "🟡 2026-07-17" in spec_r81_rows[0]
-    assert "✅" not in spec_r81_rows[0]
+    assert "✅ 2026-07-17 完成" in spec_r81_rows[0]
+    assert "🟡" not in spec_r81_rows[0]
 
     assert not (ROOT / "docs/brief-r8-1-review-hardening.zh-CN.md").exists()
     evidence_surfaces = (
@@ -790,12 +799,11 @@ def test_r81_records_local_closure_without_claiming_remote_evidence() -> None:
     )
     for section in evidence_surfaces:
         assert final_local_evidence in section
-        assert "远端 push 与 exact-head Push/PR CI 尚未执行" in section
-        assert re.search(r"(?:Push|PR) run `\d+`", section) is None
-        assert "exact-head CI 成功" not in section
+        assert remote_evidence in section
+        assert "PR 保持 OPEN + draft" in section
+        assert "远端 push 与 exact-head Push/PR CI 尚未执行" not in section
 
-    assert re.search(r"(?:Push|PR) run `\d+`", r81_rows[0]) is None
-    assert "exact-head CI 成功" not in r81_rows[0]
+    assert "8438cb7bf5f356021cb602908552a069e8227bc4" in r81_rows[0]
 
 
 def test_r81_keeps_every_feature_freeze_until_an_explicit_spec_decision() -> None:

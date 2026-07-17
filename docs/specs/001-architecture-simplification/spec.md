@@ -1,6 +1,6 @@
 # 001：架构减法与兼容面退役
 
-状态：R0-R8 已完成；R8.1 最终树本地门禁与独立终审已完成，等待 push 与 exact-head 远端 CI
+状态：R0-R8.1 已完成；R8.1 implementation/local closure `8438cb7` 的 exact-head Push/PR CI 均成功
 
 日期：2026-07-17
 

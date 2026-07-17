@@ -126,5 +126,5 @@
 - [x] Dispatch an independent whole-change review; fix all Critical/Important findings and re-review.
 - [x] Remove the round brief, update final local evidence, and do not create a handoff.
 - [x] Confirm protected untracked paths and snapshots remain outside the diff; do not unfreeze new features.
-- [ ] Push the local closure commit and wait for exact-head Push/PR CI success.
-- [ ] Confirm the post-push clean index and zero ahead/behind.
+- [x] Push local closure `8438cb7`; fork Push run `29553985591` and PR run `29553987358` completed successfully at exact head `8438cb7bf5f356021cb602908552a069e8227bc4`.
+- [x] Confirm the post-push clean index and zero ahead/behind.

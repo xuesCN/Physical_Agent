@@ -144,6 +144,20 @@ test("FinalizedText rejects underscore emphasis containing internal underscores"
   }
 });
 
+test("FinalizedText rejects unsupported delimiter runs without losing content", () => {
+  const values = [
+    "`foo``bar` and **bold**",
+    "_foo\nbar_\n**bold**"
+  ];
+
+  for (const value of values) {
+    assert.equal(parseFinalizedText(value), null, value);
+    const view = render(<FinalizedText value={value} />);
+    assert.equal(view.lastFrame() ?? "", normalizeTerminalText(value), value);
+    view.unmount();
+  }
+});
+
 test("FinalizedText preserves blank and trailing normalized lines exactly", () => {
   const value = "plain\n\nlast\n";
   const view = render(<FinalizedText value={value} />);

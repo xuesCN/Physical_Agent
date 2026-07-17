@@ -686,6 +686,13 @@ def test_r81_records_code_evidence_without_claiming_final_closure() -> None:
         "独立终审、push 与 exact-head CI 仍待执行",
     ):
         assert evidence in tasks_r81
+    assert (
+        "- [x] spec/plan/evidence matrix/PLAYBOOK/REFACTORING 已纠偏；"
+        "draft PR #1 title 已更新为 `R0-R8 architecture simplification and R8.1 "
+        "review hardening`，body 已更新并明确 Task 5/独立终审/push/exact-head CI "
+        "仍待执行且 no-unfreeze，PR 保持 OPEN + draft；历史门禁/rollback 偏离已正式记录。"
+        in tasks_r81
+    )
 
     r81_rows = [
         line for line in refactoring_table.splitlines() if line.startswith("| R8.1 |")

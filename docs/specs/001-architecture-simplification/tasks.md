@@ -360,7 +360,7 @@
 - [x] LOG mirror 失败不阻断 timeout halt、expectation check 或已提交 API mutation；doctor 仍能诊断 stale mirror。
 - [x] in-progress Gate evidence 必须匹配当前 claim owner；旧 owner pass 不满足 current obligation。
 - [x] OpenAPI `ChatPlan.agent_output` 指向 canonical `AgentOutput`，且 `ChatPlan.actions` 继续不存在。
-- [ ] spec/plan/evidence matrix/PLAYBOOK/REFACTORING 已纠偏；draft PR 元数据更新仍待执行，历史门禁/rollback 偏离已正式记录。
+- [x] spec/plan/evidence matrix/PLAYBOOK/REFACTORING 已纠偏；draft PR #1 title 已更新为 `R0-R8 architecture simplification and R8.1 review hardening`，body 已更新并明确 Task 5/独立终审/push/exact-head CI 仍待执行且 no-unfreeze，PR 保持 OPEN + draft；历史门禁/rollback 偏离已正式记录。
 - [ ] Python full、frontend build/Playwright、TUI、clean-wheel、多进程/安全专项和 docs/golden 全绿。
 - [ ] 独立终审无 Critical/Important；commit/push 与 exact-head Push/PR CI 成功。
 - [x] 新功能冻结项保持冻结。

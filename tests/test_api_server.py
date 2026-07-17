@@ -641,6 +641,69 @@ def test_api_state_uses_final_claim_owner_read_to_fence_late_feedback(
     assert "last_decision" not in gate["details"]
 
 
+def test_api_state_uses_final_owner_gate_after_late_prior_owner_reject(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    controller = ApiController(config_path)
+    controller.propose_action(
+        ActionProposalRequest(
+            id="act_api_terminal_owner",
+            robot="arm_1",
+            capability="observe",
+            params={},
+            reason="Keep terminal Gate evidence bound to the final owner.",
+            depends_on=[],
+        )
+    )
+    stale = store.claim_next_ready_action(claim_owner="watch-old")
+    assert stale is not None
+    assert store.recover_stale_actions(0, claim_owner="watch-old") == 1
+    successor = store.claim_next_ready_action(claim_owner="watch-successor")
+    assert successor is not None
+    store.append_feedback_event(
+        {
+            "event": "safety_gate",
+            "task_id": "task:safety_gate:act_api_terminal_owner",
+            "action_id": "act_api_terminal_owner",
+            "status": "passed",
+            "decision": "allow",
+            "actor": "watch",
+            "owner": "watch",
+            "executor_id": "watch-successor",
+            "mandatory": True,
+            "policy_source": "SAFETY.md",
+        }
+    )
+    assert store.mark_action_completed(
+        successor,
+        claim_owner="watch-successor",
+    ) is True
+    store.append_feedback_event(
+        {
+            "event": "safety_gate",
+            "task_id": "task:safety_gate:act_api_terminal_owner",
+            "action_id": "act_api_terminal_owner",
+            "status": "rejected",
+            "decision": "deny",
+            "actor": "watch",
+            "owner": "watch",
+            "executor_id": "watch-old",
+            "mandatory": True,
+            "policy_source": "SAFETY.md",
+        }
+    )
+
+    state = controller.state()
+    projected = state["plan"]["plan"]["agent_output"]
+    gate = next(task for task in projected["tasks"] if task["kind"] == "safety_gate")
+
+    assert projected["status"] == "completed"
+    assert gate["status"] == "passed"
+    assert gate["details"]["last_decision"]["executor_id"] == "watch-successor"
+    assert "claim_owner" not in state["actions"]["completed"][0]
+    assert "claim_owner" not in projected["actions"][0]
+
+
 def test_api_endpoints_cover_state_proposals_memory_ingest_search_and_audit(tmp_path):
     TestClient = _client_or_skip()
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)

@@ -41,29 +41,50 @@ def materialize_agent_output(
         action = action_values.get(task.action_id)
         action_state = action_states.get(task.action_id)
         raw_gate_event = latest_gate.get(task.action_id)
+        raw_gate_is_canonical = _is_authoritative_gate_event(
+            raw_gate_event,
+            task.action_id,
+        )
         gate_event = (
             raw_gate_event
-            if _is_authoritative_gate_event(raw_gate_event, task.action_id)
+            if raw_gate_is_canonical
             else None
         )
-        canonical_gate_event = gate_event is not None
         current_claim_owner = (
             str(claim_owners.get(task.action_id) or "") or None
             if claim_owners is not None
             else None
         )
-        claim_owner_missing = (
-            action_state == "in_progress" and current_claim_owner is None
+        terminal_claim_owner_required = action_state == "completed" or (
+            action_state == "cancelled" and _approval_status(action) != "rejected"
         )
-        if action_state == "in_progress" and gate_event is not None:
-            if claim_owner_missing:
-                gate_event = None
-            elif str(gate_event.get("executor_id") or "") != current_claim_owner:
-                # A recovered action can be claimed by a successor while the
-                # prior owner's canonical Gate event remains in feedback. The
-                # event is stale for this claim, not forged evidence.
-                raw_gate_event = None
-                gate_event = None
+        claim_owner_missing = current_claim_owner is None and (
+            action_state == "in_progress"
+            or (claim_owners is not None and terminal_claim_owner_required)
+        )
+        if gate_event is not None and action_state in {
+            "in_progress",
+            "completed",
+            "cancelled",
+        }:
+            if current_claim_owner is None:
+                if action_state == "in_progress" or claim_owners is not None:
+                    gate_event = None
+            else:
+                matching_gate_event = _latest_authoritative_gate_event_for_owner(
+                    events,
+                    action_id=task.action_id,
+                    executor_id=current_claim_owner,
+                )
+                if matching_gate_event is None:
+                    # A recovered action can be claimed by a successor while
+                    # the prior owner's canonical Gate event remains in
+                    # feedback. The event is stale for this claim, not forged
+                    # evidence.
+                    raw_gate_event = None
+                    gate_event = None
+                else:
+                    gate_event = matching_gate_event
         if (
             action_state == "pending"
             and gate_event is not None
@@ -91,7 +112,7 @@ def materialize_agent_output(
                 status = "requested"
 
         elif task.kind == "safety_gate":
-            if raw_gate_event is not None and not canonical_gate_event:
+            if raw_gate_event is not None and not raw_gate_is_canonical:
                 status = "failed"
                 details["projection_error"] = {
                     "code": "safety.gate.evidence_invalid",
@@ -102,12 +123,21 @@ def materialize_agent_output(
                 }
             elif claim_owner_missing:
                 status = "failed"
+                error_code = (
+                    "safety.gate.claim_owner_missing"
+                    if action_state == "in_progress"
+                    else "safety.gate.final_claim_owner_missing"
+                )
+                error_message = (
+                    "In-progress action has no current claim owner, so "
+                    "SafetyGate evidence cannot satisfy the mandatory task."
+                    if action_state == "in_progress"
+                    else "Terminal action has no final claim owner, so "
+                    "SafetyGate evidence cannot satisfy the mandatory task."
+                )
                 details["projection_error"] = {
-                    "code": "safety.gate.claim_owner_missing",
-                    "message": (
-                        "In-progress action has no current claim owner, so "
-                        "SafetyGate evidence cannot satisfy the mandatory task."
-                    ),
+                    "code": error_code,
+                    "message": error_message,
                 }
             elif gate_event is not None:
                 gate_status = str(gate_event.get("status") or "")
@@ -388,6 +418,23 @@ def _latest_events(
             continue
         result[str(event["action_id"])] = event
     return result
+
+
+def _latest_authoritative_gate_event_for_owner(
+    events: list[dict[str, Any]],
+    *,
+    action_id: str,
+    executor_id: str,
+) -> dict[str, Any] | None:
+    for event in reversed(events):
+        if (
+            event.get("event") == "safety_gate"
+            and str(event.get("action_id") or "") == action_id
+            and str(event.get("executor_id") or "") == executor_id
+            and _is_authoritative_gate_event(event, action_id)
+        ):
+            return event
+    return None
 
 
 def _is_authoritative_gate_event(

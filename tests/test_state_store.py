@@ -526,7 +526,9 @@ def test_sqlite_claim_owner_fences_stale_action_completion(tmp_path):
     assert store.mark_action_completed(current, claim_owner="watch-b") is True
 
 
-def test_sqlite_reads_current_claim_owners_without_exposing_action_fields(tmp_path):
+def test_sqlite_reads_current_and_final_claim_owners_without_exposing_action_fields(
+    tmp_path,
+):
     store = SqliteStateStore(tmp_path / "workspace")
     store.initialize()
     store.append_pending_action(
@@ -547,7 +549,15 @@ def test_sqlite_reads_current_claim_owners_without_exposing_action_fields(tmp_pa
         claimed,
         claim_owner="watch-current",
     ) is True
-    assert store.read_action_claim_owners() == {}
+    assert store.read_action_claim_owners() == {
+        "act_claim_owner": "watch-current"
+    }
+    with sqlite3.connect(store.db_path) as conn:
+        terminal = conn.execute(
+            "SELECT status, claim_owner FROM actions WHERE id = ?",
+            ("act_claim_owner",),
+        ).fetchone()
+    assert terminal == ("completed", "watch-current")
 
 
 def test_sqlite_reset_refuses_to_erase_live_runtime_lease(tmp_path):

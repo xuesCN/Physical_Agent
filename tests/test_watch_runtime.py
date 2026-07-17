@@ -615,7 +615,9 @@ def test_watch_runtime_driver_exception_cancels_sqlite_action(tmp_path, monkeypa
             """,
             ("Action `act_boom` failed%",),
         ).fetchone()[0]
-    assert row == ("cancelled", None, None)
+    assert row[:2] == ("cancelled", None)
+    assert row[2] == runtime._watch_lease_owner
+    assert store.read_action_claim_owners() == {"act_boom": row[2]}
     assert "Action `act_boom` failed" in log_message
     assert "boom" in log_message
 

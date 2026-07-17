@@ -113,6 +113,79 @@ def test_projection_ignores_old_owner_gate_after_successor_claim():
     assert tasks["physical_action"].status == "waiting"
 
 
+def test_projection_uses_final_claim_owner_gate_after_late_prior_owner_event():
+    action = _compiled().actions[0]
+    output = materialize_agent_output(
+        _compiled(),
+        actions={
+            "pending": [],
+            "in_progress": [],
+            "completed": [action],
+            "cancelled": [],
+        },
+        feedback={
+            "history": [
+                _gate_event(
+                    status="passed",
+                    decision="allow",
+                    executor_id="watch-successor",
+                ),
+                {
+                    "action_id": "act_001",
+                    "executor_id": "watch-successor",
+                    "status": "completed",
+                    "message": "completed by the successor",
+                    "result": {},
+                    "artifacts": [],
+                },
+                _gate_event(
+                    status="passed",
+                    decision="allow",
+                    executor_id="watch-old",
+                ),
+            ]
+        },
+        claim_owners={"act_001": "watch-successor"},
+    )
+    tasks = {task.kind: task for task in output.tasks}
+
+    assert output.status == "completed"
+    assert tasks["safety_gate"].status == "passed"
+    assert tasks["safety_gate"].details["last_decision"]["executor_id"] == (
+        "watch-successor"
+    )
+
+
+def test_projection_fails_closed_when_completed_final_claim_owner_is_missing():
+    action = _compiled().actions[0]
+    output = materialize_agent_output(
+        _compiled(),
+        actions={
+            "pending": [],
+            "in_progress": [],
+            "completed": [action],
+            "cancelled": [],
+        },
+        feedback={
+            "history": [
+                _gate_event(
+                    status="passed",
+                    decision="allow",
+                    executor_id="watch-old",
+                )
+            ]
+        },
+        claim_owners={},
+    )
+    tasks = {task.kind: task for task in output.tasks}
+
+    assert output.status == "failed"
+    assert tasks["safety_gate"].status == "failed"
+    assert tasks["safety_gate"].details["projection_error"]["code"] == (
+        "safety.gate.final_claim_owner_missing"
+    )
+
+
 def test_projection_fails_closed_when_in_progress_claim_owner_is_missing():
     action = _compiled().actions[0]
     output = materialize_agent_output(

@@ -312,7 +312,7 @@ class SqliteStateStore:
                 """
                 SELECT id, claim_owner
                 FROM actions
-                WHERE status = 'in_progress' AND claim_owner IS NOT NULL
+                WHERE claim_owner IS NOT NULL
                 ORDER BY seq
                 """
             ).fetchall()
@@ -1554,6 +1554,7 @@ class SqliteStateStore:
                     _json_dumps(parsed.depends_on),
                     _json_dumps(parsed.metadata),
                     status,
+                    claim_owner,
                     timestamp,
                     parsed.id,
                 ]
@@ -1573,7 +1574,7 @@ class SqliteStateStore:
                         metadata = ?,
                         status = ?,
                         claimed_at = NULL,
-                        claim_owner = NULL,
+                        claim_owner = ?,
                         updated_at = ?
                     WHERE id = ?
                     {owner_predicate}

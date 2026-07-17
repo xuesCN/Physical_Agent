@@ -155,6 +155,37 @@ def test_execute_timeout_halts_even_when_result_log_mirror_fails(tmp_path, monke
     assert action_events[-1]["status"] == "failed"
 
 
+def test_execute_timeout_halts_before_terminal_persistence_failure(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = _write_config(tmp_path, action_timeout_s=0.1)
+    watch = WatchRuntime(config_path)
+    asyncio.run(watch.setup())
+    driver = watch.loaded_drivers["arm_1"].driver
+    halted: list[bool] = []
+
+    async def record_halt(*args, **kwargs):
+        halted.append(True)
+
+    def fail_terminal_persistence(*args, **kwargs):
+        assert halted == [True]
+        raise RuntimeError("simulated terminal persistence failure")
+
+    driver.execute = _hang
+    driver.halt = record_halt
+    monkeypatch.setattr(watch, "_finalize_claimed_action", fail_terminal_persistence)
+    _propose_observe(config_path, "act_hang_persistence_failure")
+
+    try:
+        with pytest.raises(RuntimeError, match="terminal persistence failure"):
+            asyncio.run(watch.step(setup=False))
+    finally:
+        asyncio.run(watch.shutdown())
+
+    assert halted
+
+
 def test_completed_action_verification_survives_result_log_mirror_failure(
     tmp_path,
     monkeypatch,

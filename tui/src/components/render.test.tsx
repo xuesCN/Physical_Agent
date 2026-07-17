@@ -3,6 +3,7 @@ import test from "node:test";
 import React from "react";
 import { render } from "ink-testing-library";
 import { ActionsPanel } from "./ActionsPanel.js";
+import { BrandBanner, FULL_MOCE_LOGO, selectBannerVariant } from "./BrandBanner.js";
 import { ChatPanel } from "./ChatPanel.js";
 import { ConfigPanel } from "./ConfigPanel.js";
 import { RobotDetailPanel } from "./RobotDetailPanel.js";
@@ -10,7 +11,39 @@ import { RobotsPanel } from "./RobotsPanel.js";
 import { StatusBar } from "./StatusBar.js";
 import { UploadsPanel } from "./UploadsPanel.js";
 import { normalizeTerminalText } from "./textFormat.js";
+import { THEME } from "../theme.js";
 import type { AgentState, ConfigResponse } from "../types.js";
+
+test("MOCE theme keeps the approved logo and small-text colors", () => {
+  assert.equal(THEME.brandLogo, "#1D4ED8");
+  assert.equal(THEME.brandAccent, "#3B82F6");
+});
+
+test("BrandBanner selects full and compact variants at the terminal boundary", () => {
+  assert.equal(selectBannerVariant(100), "full");
+  assert.equal(selectBannerVariant(58), "full");
+  assert.equal(selectBannerVariant(57), "compact");
+  assert.equal(selectBannerVariant(48), "compact");
+  assert.equal(selectBannerVariant(0), "compact");
+  assert.equal(selectBannerVariant(Number.NaN), "compact");
+  assert.equal(selectBannerVariant(undefined), "compact");
+});
+
+test("BrandBanner renders block art only for a wide terminal", () => {
+  const wide = render(<BrandBanner columns={100} />);
+  assert.match(wide.lastFrame() ?? "", new RegExp(FULL_MOCE_LOGO[0]));
+  assert.match(wide.lastFrame() ?? "", /PHYSICAL AGENT · SAFE CONTROL PLANE/);
+  wide.unmount();
+
+  const narrow = render(<BrandBanner columns={48} />);
+  assert.match(narrow.lastFrame() ?? "", /MOCE · PHYSICAL AGENT/);
+  assert.doesNotMatch(narrow.lastFrame() ?? "", new RegExp(FULL_MOCE_LOGO[0]));
+  narrow.unmount();
+
+  const unknown = render(<BrandBanner columns={undefined} />);
+  assert.match(unknown.lastFrame() ?? "", /MOCE · PHYSICAL AGENT/);
+  unknown.unmount();
+});
 
 test("StatusBar renders connection state", () => {
   const view = render(

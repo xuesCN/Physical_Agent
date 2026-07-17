@@ -142,6 +142,7 @@ test("FinalizedText falls back wholly when supported tokens mix with unsupported
 test("FinalizedText preserves GFM tables with optional outer pipes literally", () => {
   const values = [
     "Name | State\n--- | ---\narm | **idle**",
+    "Name | State\n- | -\narm | **idle**",
     "| Name | State |\n| :--- | ---: |\n| arm | **idle** |"
   ];
 

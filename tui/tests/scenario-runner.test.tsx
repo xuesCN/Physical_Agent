@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events";
 import React from "react";
 import { render as inkRender } from "ink";
 import { App, type TuiClient } from "../src/App.js";
+import { FULL_MOCE_LOGO } from "../src/components/BrandBanner.js";
 import type {
   AgentOutput,
   AgentState,
@@ -28,9 +29,12 @@ interface ScenarioFile {
 interface ScenarioCase {
   name: string;
   useSse?: boolean;
+  columns?: number | null;
   initialState?: string;
   initialConfig?: string;
   initialExpectOutput?: string[];
+  initialRejectOutput?: string[];
+  initialMaxLineWidth?: number;
   fail?: Partial<Record<CallName, string>>;
   events?: {
     behavior?: EventBehavior;
@@ -46,6 +50,7 @@ interface ScenarioStep {
   covers?: string[];
   expectOutput?: string[];
   rejectOutput?: string[];
+  maxLineWidth?: number;
   expectCalls?: Partial<Record<CallName, number>>;
   expectState?: Record<string, unknown>;
   expectConfig?: Record<string, unknown>;
@@ -112,6 +117,10 @@ interface TestInkInstance {
   cleanup(): void;
 }
 
+interface PhysicalTestInkInstance extends TestInkInstance {
+  physicalOutput(): string;
+}
+
 const scenarioRoot = path.resolve("tests", "scenarios");
 
 const requiredCoverage = [
@@ -155,6 +164,8 @@ for (const scenario of scenarioFiles) {
         } else {
           await waitForOutput(context.view, ["Physical Agent TUI"]);
         }
+        assertLatestRejectOutput(context.view, scenarioCase.initialRejectOutput);
+        assertMaxLineWidth(context.view, scenarioCase.initialMaxLineWidth);
 
         for (const step of scenarioCase.steps) {
           await submitCommand(context.view, step.input);
@@ -184,6 +195,92 @@ test("scenario coverage includes every documented TUI command and failure mode",
   }
 });
 
+test("complete App selects branding at default, 100, 48, and unknown columns", async () => {
+  const selections: string[] = [];
+
+  for (const columns of [undefined, 100, 48, null] as const) {
+    const client = new ScenarioClient({
+      name: `width ${String(columns)}`,
+      useSse: false,
+      initialState: "ready",
+      initialConfig: "default",
+      steps: []
+    });
+    const view = renderTui(
+      <App apiBase="http://mock.local" pollIntervalMs={60_000} useSse={false} client={client} />,
+      columns
+    );
+    try {
+      await waitForOutput(view, ["Physical Agent TUI", "message or /help"]);
+      const output = latestSnapshot(view);
+      selections.push(
+        output.includes(FULL_MOCE_LOGO[0])
+          ? "full"
+          : output.includes("MOCE · PHYSICAL AGENT")
+            ? "compact"
+            : "missing"
+      );
+    } finally {
+      view.unmount();
+    }
+  }
+
+  assert.deepEqual(selections, ["full", "full", "compact", "compact"]);
+});
+
+for (const { label, columns, marker } of [
+  { label: "full", columns: 100, marker: FULL_MOCE_LOGO[0] },
+  { label: "compact", columns: 48, marker: "MOCE · PHYSICAL AGENT" }
+] as const) {
+  test(`complete App physically prints ${label} branding once across rerenders`, async () => {
+    const client = new ScenarioClient({
+      name: `physical ${label}-brand rerenders`,
+      useSse: false,
+      initialState: "ready",
+      initialConfig: "default",
+      steps: []
+    });
+    const view = renderPhysicalTui(
+      <App apiBase="http://mock.local" pollIntervalMs={60_000} useSse={false} client={client} />,
+      columns
+    );
+
+    try {
+      await waitForCallCounts(client, {
+        health: 1,
+        state: 1,
+        config: 1,
+        llmSettings: 1,
+        testLlmSettings: 1
+      });
+      await delay(50);
+      assertPhysicalMarkerCount(view, marker, 1, "initial render");
+
+      await submitCommand(view, "/view status");
+      await waitForCallCounts(client, { health: 2, state: 2, config: 2 });
+      await delay(50);
+      assertPhysicalMarkerCount(view, marker, 1, "/view status");
+
+      await submitCommand(view, "/view chat");
+      await delay(50);
+      assertPhysicalMarkerCount(view, marker, 1, "/view chat");
+
+      await submitCommand(view, "/refresh");
+      await waitForCallCounts(client, {
+        health: 3,
+        state: 3,
+        config: 3,
+        llmSettings: 2,
+        testLlmSettings: 2
+      });
+      await delay(50);
+      assertPhysicalMarkerCount(view, marker, 1, "/refresh");
+    } finally {
+      view.unmount();
+    }
+  });
+}
+
 async function loadScenarios(): Promise<ScenarioFile[]> {
   const files = (await readdir(scenarioRoot))
     .filter((file) => file.endsWith(".scenario"))
@@ -208,13 +305,15 @@ async function loadScenarios(): Promise<ScenarioFile[]> {
 
 function renderScenarioCase(scenario: ScenarioFile, scenarioCase: ScenarioCase): ScenarioCaseContext {
   const client = new ScenarioClient(scenarioCase);
+  const columns = scenarioCase.columns === undefined ? 100 : scenarioCase.columns;
   const view = renderTui(
     <App
       apiBase="http://mock.local"
       pollIntervalMs={60_000}
       useSse={scenarioCase.useSse ?? true}
       client={client}
-    />
+    />,
+    columns
   );
   return { scenario, scenarioCase, client, view };
 }
@@ -237,6 +336,7 @@ async function assertStep(context: ScenarioCaseContext, step: ScenarioStep): Pro
   for (const expected of step.rejectOutput ?? []) {
     assert.equal(output.includes(expected), false, `${context.scenario.name}/${step.input} unexpectedly rendered ${expected}`);
   }
+  assertMaxLineWidth(context.view, step.maxLineWidth);
 
   for (const [name, expectedCount] of Object.entries(step.expectCalls ?? {})) {
     assert.equal(
@@ -275,8 +375,75 @@ async function waitForOutput(view: TestInkInstance, expected: string[], timeoutM
   assert.fail(`Timed out waiting for ${expected.join(", ")}.\n\nOutput:\n${terminalOutput(view)}`);
 }
 
+async function waitForCallCounts(
+  client: ScenarioClient,
+  expected: Partial<Record<CallName, number>>,
+  timeoutMs = 2500
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (
+      Object.entries(expected).every(
+        ([name, count]) => client.callCount(name as CallName) >= count
+      )
+    ) {
+      return;
+    }
+    await delay(10);
+  }
+  assert.fail(
+    `Timed out waiting for calls: ${Object.entries(expected)
+      .map(([name, count]) => `${name} >= ${count}`)
+      .join(", ")}`
+  );
+}
+
 function terminalOutput(view: TestInkInstance): string {
-  return normalizeOutput([...view.frames, view.lastFrame() ?? ""].join("\n"));
+  const frames = view.frames.length > 0 ? view.frames : [view.lastFrame() ?? ""];
+  return normalizeOutput(frames.join("\n"));
+}
+
+function latestSnapshot(view: TestInkInstance): string {
+  for (let index = view.frames.length - 1; index >= 0; index -= 1) {
+    const output = normalizeOutput(view.frames[index]);
+    if (output.trim()) {
+      return output;
+    }
+  }
+  return normalizeOutput(view.lastFrame() ?? "");
+}
+
+function assertLatestRejectOutput(view: TestInkInstance, rejected: string[] = []): void {
+  const output = latestSnapshot(view);
+  for (const marker of rejected) {
+    assert.equal(output.includes(marker), false, `latest snapshot unexpectedly rendered ${marker}`);
+  }
+}
+
+function assertMaxLineWidth(view: TestInkInstance, maximum?: number): void {
+  if (maximum === undefined) {
+    return;
+  }
+  for (const [frameIndex, frame] of view.frames.entries()) {
+    for (const line of normalizeOutput(frame).split("\n")) {
+      assert.equal(
+        [...line].length <= maximum,
+        true,
+        `frame ${frameIndex + 1} line exceeds ${maximum} columns: ${line}`
+      );
+    }
+  }
+}
+
+function assertPhysicalMarkerCount(
+  view: PhysicalTestInkInstance,
+  marker: string,
+  expected: number,
+  stage: string
+): void {
+  const output = normalizeOutput(view.physicalOutput());
+  const actual = output.split(marker).length - 1;
+  assert.equal(actual, expected, `${stage} physically printed ${marker} ${actual} times`);
 }
 
 function normalizeOutput(value: string): string {
@@ -545,9 +712,9 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function renderTui(tree: React.ReactElement): TestInkInstance {
-  const stdout = new TestStdout();
-  const stderr = new TestStdout();
+function renderTui(tree: React.ReactElement, columns: number | null = 100): TestInkInstance {
+  const stdout = new TestStdout(columns);
+  const stderr = new TestStdout(columns);
   const stdin = new TestStdin();
   const instance = inkRender(tree, {
     stdout: stdout as NodeJS.WriteStream,
@@ -567,22 +734,57 @@ function renderTui(tree: React.ReactElement): TestInkInstance {
   };
 }
 
+function renderPhysicalTui(tree: React.ReactElement, columns: number | null): PhysicalTestInkInstance {
+  const stdout = new TestStdout(columns);
+  const stderr = new TestStdout(columns);
+  const stdin = new TestStdin();
+  const instance = inkRender(tree, {
+    stdout: stdout as NodeJS.WriteStream,
+    stderr: stderr as NodeJS.WriteStream,
+    stdin: stdin as NodeJS.ReadStream,
+    debug: false,
+    exitOnCtrlC: false,
+    patchConsole: false
+  });
+
+  return {
+    stdin,
+    frames: stdout.frames,
+    lastFrame: () => stdout.lastFrame(),
+    physicalOutput: () => stdout.physicalOutput(),
+    unmount: () => instance.unmount(),
+    cleanup: () => instance.cleanup()
+  };
+}
+
 class TestStdout extends EventEmitter {
   readonly frames: string[] = [];
+  readonly isTTY = true;
+  readonly rows = 10_000;
   private frame: string | undefined;
+  private output = "";
+
+  constructor(private readonly columnCount: number | null = 100) {
+    super();
+  }
 
   get columns(): number {
-    return 100;
+    return this.columnCount === null ? undefined as unknown as number : this.columnCount;
   }
 
   write = (value: string): boolean => {
     this.frames.push(value);
     this.frame = value;
+    this.output += value;
     return true;
   };
 
   lastFrame(): string | undefined {
     return this.frame;
+  }
+
+  physicalOutput(): string {
+    return this.output;
   }
 }
 

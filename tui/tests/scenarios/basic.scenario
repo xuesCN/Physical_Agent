@@ -3,10 +3,12 @@
   "cases": [
     {
       "name": "local help, polling status, refresh, and quit",
+      "columns": 100,
       "useSse": false,
       "initialState": "ready",
       "initialConfig": "default",
-      "initialExpectOutput": ["Physical Agent TUI", "polling", "Ready."],
+      "initialExpectOutput": ["███╗   ███╗", "Physical Agent TUI", "polling", "Ready."],
+      "initialRejectOutput": ["MOCE · PHYSICAL AGENT"],
       "steps": [
         {
           "input": "/help",
@@ -36,6 +38,38 @@
           "expectCalls": { "submitTask": 0, "approveAction": 0, "rejectAction": 0, "resetWorkspace": 0 }
         }
       ]
+    },
+    {
+      "name": "compact layout at 48 columns",
+      "columns": 48,
+      "useSse": false,
+      "initialState": "ready",
+      "initialConfig": "default",
+      "initialExpectOutput": ["MOCE · PHYSICAL AGENT", "Physical Agent TUI", "message or /help"],
+      "initialRejectOutput": ["███╗   ███╗"],
+      "initialMaxLineWidth": 48,
+      "steps": [
+        {
+          "input": "/view status",
+          "expectOutput": ["status", "backend: sqlite"],
+          "maxLineWidth": 48
+        },
+        {
+          "input": "/view chat",
+          "expectOutput": ["View: chat", "message or /help"],
+          "maxLineWidth": 48
+        }
+      ]
+    },
+    {
+      "name": "compact fallback when stdout width is unknown",
+      "columns": null,
+      "useSse": false,
+      "initialState": "ready",
+      "initialConfig": "default",
+      "initialExpectOutput": ["MOCE · PHYSICAL AGENT", "Physical Agent TUI", "message or /help"],
+      "initialRejectOutput": ["███╗   ███╗"],
+      "steps": []
     }
   ]
 }

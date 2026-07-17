@@ -119,6 +119,7 @@ interface TestInkInstance {
 
 interface PhysicalTestInkInstance extends TestInkInstance {
   physicalOutput(): string;
+  physicalWriteCount(): number;
 }
 
 const scenarioRoot = path.resolve("tests", "scenarios");
@@ -253,19 +254,17 @@ for (const { label, columns, marker } of [
         llmSettings: 1,
         testLlmSettings: 1
       });
-      await delay(50);
+      await waitForPhysicalWriteAfter(view, 0);
       assertPhysicalMarkerCount(view, marker, 1, "initial render");
 
-      await submitCommand(view, "/view status");
+      await submitPhysicalCommand(view, "/view status");
       await waitForCallCounts(client, { health: 2, state: 2, config: 2 });
-      await delay(50);
       assertPhysicalMarkerCount(view, marker, 1, "/view status");
 
-      await submitCommand(view, "/view chat");
-      await delay(50);
+      await submitPhysicalCommand(view, "/view chat");
       assertPhysicalMarkerCount(view, marker, 1, "/view chat");
 
-      await submitCommand(view, "/refresh");
+      await submitPhysicalCommand(view, "/refresh");
       await waitForCallCounts(client, {
         health: 3,
         state: 3,
@@ -273,7 +272,6 @@ for (const { label, columns, marker } of [
         llmSettings: 2,
         testLlmSettings: 2
       });
-      await delay(50);
       assertPhysicalMarkerCount(view, marker, 1, "/refresh");
     } finally {
       view.unmount();
@@ -323,6 +321,14 @@ async function submitCommand(view: TestInkInstance, input: string): Promise<void
   await delay(100);
   view.stdin.write("\r");
   await delay(0);
+}
+
+async function submitPhysicalCommand(view: PhysicalTestInkInstance, input: string): Promise<void> {
+  view.stdin.write(input);
+  await delay(100);
+  const writeCountBeforeEnter = view.physicalWriteCount();
+  view.stdin.write("\r");
+  await waitForPhysicalWriteAfter(view, writeCountBeforeEnter);
 }
 
 async function assertStep(context: ScenarioCaseContext, step: ScenarioStep): Promise<void> {
@@ -395,6 +401,24 @@ async function waitForCallCounts(
     `Timed out waiting for calls: ${Object.entries(expected)
       .map(([name, count]) => `${name} >= ${count}`)
       .join(", ")}`
+  );
+}
+
+async function waitForPhysicalWriteAfter(
+  view: PhysicalTestInkInstance,
+  previousWriteCount: number,
+  timeoutMs = 2500
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    await delay(10);
+    if (view.physicalWriteCount() > previousWriteCount) {
+      return;
+    }
+  }
+  assert.fail(
+    `Timed out waiting for physical stdout write count to exceed ${previousWriteCount}; ` +
+      `got ${view.physicalWriteCount()}`
   );
 }
 
@@ -752,6 +776,7 @@ function renderPhysicalTui(tree: React.ReactElement, columns: number | null): Ph
     frames: stdout.frames,
     lastFrame: () => stdout.lastFrame(),
     physicalOutput: () => stdout.physicalOutput(),
+    physicalWriteCount: () => stdout.physicalWriteCount(),
     unmount: () => instance.unmount(),
     cleanup: () => instance.cleanup()
   };
@@ -785,6 +810,10 @@ class TestStdout extends EventEmitter {
 
   physicalOutput(): string {
     return this.output;
+  }
+
+  physicalWriteCount(): number {
+    return this.frames.length;
   }
 }
 

@@ -3,6 +3,7 @@ import { Box, Static, Text } from "ink";
 import type { TranscriptEntry } from "../types.js";
 import { THEME } from "../theme.js";
 import { BrandBanner } from "./BrandBanner.js";
+import { FinalizedText } from "./FinalizedText.js";
 import { normalizeTerminalText } from "./textFormat.js";
 
 interface TranscriptProps {
@@ -31,7 +32,11 @@ export function Transcript({ entries, columns }: TranscriptProps) {
         <Box key={item.id} paddingX={1} flexDirection="row">
           <Text color={roleColor(item.entry.role)}>{rolePrefix(item.entry.role)} </Text>
           <Box flexDirection="column" flexGrow={1}>
-            <Text>{normalizeTerminalText(item.entry.content)}</Text>
+            {item.entry.role === "assistant" ? (
+              <FinalizedText value={item.entry.content} />
+            ) : (
+              <Text>{normalizeTerminalText(item.entry.content)}</Text>
+            )}
           </Box>
         </Box>
       )}

@@ -6,6 +6,7 @@ import { ActionsPanel } from "./ActionsPanel.js";
 import { BrandBanner, FULL_MOCE_LOGO, selectBannerVariant } from "./BrandBanner.js";
 import { ChatPanel } from "./ChatPanel.js";
 import { ConfigPanel } from "./ConfigPanel.js";
+import { FinalizedText, parseFinalizedText } from "./FinalizedText.js";
 import { RobotDetailPanel } from "./RobotDetailPanel.js";
 import { RobotsPanel } from "./RobotsPanel.js";
 import { StatusBar } from "./StatusBar.js";
@@ -63,6 +64,66 @@ test("Transcript prints the MOCE banner once while finalized entries append", ()
   assert.match(output, /you\s+›\s+hello/);
   assert.match(output, /moce\s+│\s+ready/);
   assert.match(output, /draft\s+◇\s+review only/);
+  view.unmount();
+});
+
+test("FinalizedText formats the supported heading list bold and inline-code subset", () => {
+  const value = "## Workspace\n- **arm_1** is `idle`\n1. Inspect tray";
+  const view = render(<FinalizedText value={value} />);
+  const frame = view.lastFrame() ?? "";
+  assert.match(frame, /Workspace/);
+  assert.match(frame, /• arm_1 is idle/);
+  assert.match(frame, /1\. Inspect tray/);
+  assert.doesNotMatch(frame, /##|\*\*|`idle`/);
+  view.unmount();
+});
+
+test("FinalizedText preserves unsupported malformed or nested Markdown literally", () => {
+  const values = [
+    "```ts\nconst x = 1;\n```",
+    "unclosed **bold",
+    "unclosed `code",
+    "**bold with `nested` code**",
+    "**outer **inner** outer**",
+    "*unsupported emphasis*",
+    "\\**escaped bold**",
+    "\\`escaped code`",
+    "  - nested item",
+    "- [ ] task item",
+    "- > nested quote",
+    ">quoted block",
+    "## Heading ##",
+    "[link](https://example.com)",
+    "<https://example.com>",
+    "```action-draft\n{\"actions\":[]}\n```"
+  ];
+  for (const value of values) {
+    assert.equal(parseFinalizedText(value), null);
+    const view = render(<FinalizedText value={value} />);
+    assert.match(
+      view.lastFrame() ?? "",
+      new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\n/g, "\\s*"))
+    );
+    view.unmount();
+  }
+});
+
+test("Transcript formats only finalized assistant entries", () => {
+  const view = render(
+    <Transcript
+      columns={48}
+      entries={[
+        { id: "a1", role: "assistant", content: "## Assistant heading" },
+        { id: "u1", role: "user", content: "## User literal" },
+        { id: "d1", role: "draft", content: "**Draft literal**" }
+      ]}
+    />
+  );
+  const frame = view.lastFrame() ?? "";
+  assert.match(frame, /moce\s+│\s+Assistant heading/);
+  assert.doesNotMatch(frame, /## Assistant heading/);
+  assert.match(frame, /you\s+›\s+## User literal/);
+  assert.match(frame, /draft\s+◇\s+\*\*Draft literal\*\*/);
   view.unmount();
 });
 
@@ -198,6 +259,12 @@ test("ChatPanel renders only live streaming state", () => {
   assert.match(view.lastFrame() ?? "", /streaming/);
   assert.match(view.lastFrame() ?? "", /partial reply/);
   assert.doesNotMatch(view.lastFrame() ?? "", /No chat yet/);
+  view.unmount();
+});
+
+test("ChatPanel leaves incomplete streaming Markdown untouched", () => {
+  const view = render(<ChatPanel hasTranscript streamingText="**partial" streaming />);
+  assert.match(view.lastFrame() ?? "", /\*\*partial/);
   view.unmount();
 });
 

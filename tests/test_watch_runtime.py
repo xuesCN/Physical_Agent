@@ -6,6 +6,8 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
+from physical_agent.application.output_projection import materialize_agent_output
+from physical_agent.application.plan_compiler import compile_agent_output
 from physical_agent.config import load_config, write_default_config
 from physical_agent.drivers.transport import (
     TransportClosedError,
@@ -398,21 +400,22 @@ def test_failed_dependency_terminalizes_downstream_action_in_same_step(tmp_path)
     runtime = WatchRuntime(config_path)
     asyncio.run(runtime.setup())
     store = open_state_store(config_path=config_path)
+    submitted = [
+        Action(
+            id="act_bad_upstream",
+            robot="arm_1",
+            capability="move_to",
+            params={"x": 99.0, "y": 0.0, "z": 0.4},
+        ),
+        Action(
+            id="act_downstream",
+            robot="arm_1",
+            capability="observe",
+            depends_on=["act_bad_upstream"],
+        ),
+    ]
     store.write_actions(
-        [
-            Action(
-                id="act_bad_upstream",
-                robot="arm_1",
-                capability="move_to",
-                params={"x": 99.0, "y": 0.0, "z": 0.4},
-            ),
-            Action(
-                id="act_downstream",
-                robot="arm_1",
-                capability="observe",
-                depends_on=["act_bad_upstream"],
-            ),
-        ],
+        submitted,
         [],
         [],
     )
@@ -434,6 +437,26 @@ def test_failed_dependency_terminalizes_downstream_action_in_same_step(tmp_path)
     )
     assert downstream_gate["status"] == "rejected"
     assert downstream_gate["code"] == "safety.dependencies.completed"
+    projected = materialize_agent_output(
+        compile_agent_output(
+            submitted,
+            status="waiting_execution",
+            decision="propose",
+            lifecycle="submitted",
+            message="Exercise dependency terminalization.",
+        ),
+        actions=store.read_actions(),
+        feedback=store.read_feedback(),
+        claim_owners=store.read_action_claim_owners(),
+    )
+    downstream_tasks = {
+        task.kind: task
+        for task in projected.tasks
+        if task.action_id == "act_downstream"
+    }
+    assert downstream_tasks["safety_gate"].status == "rejected"
+    assert "projection_error" not in downstream_tasks["safety_gate"].details
+    assert downstream_tasks["physical_action"].status == "skipped"
 
 
 def test_update_world_observes_robots_concurrently(tmp_path, monkeypatch):

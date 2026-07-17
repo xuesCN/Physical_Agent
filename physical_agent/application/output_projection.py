@@ -35,6 +35,7 @@ def materialize_agent_output(
     events = _feedback_events(feedback)
     latest_gate = _latest_events(events, "safety_gate")
     latest_verification = _latest_events(events, "expectation_check")
+    latest_result_owners = _latest_action_result_owners(events)
     tasks: list[AgentTask] = []
 
     for task in output.tasks:
@@ -50,11 +51,17 @@ def materialize_agent_output(
             if raw_gate_is_canonical
             else None
         )
-        current_claim_owner = (
+        stored_claim_owner = (
             str(claim_owners.get(task.action_id) or "") or None
             if claim_owners is not None
             else None
         )
+        terminal_result_owner = (
+            latest_result_owners.get(task.action_id)
+            if action_state in {"completed", "cancelled"}
+            else None
+        )
+        current_claim_owner = stored_claim_owner or terminal_result_owner
         terminal_claim_owner_required = action_state == "completed" or (
             action_state == "cancelled" and _approval_status(action) != "rejected"
         )
@@ -71,20 +78,25 @@ def materialize_agent_output(
                 if action_state == "in_progress" or claim_owners is not None:
                     gate_event = None
             else:
-                matching_gate_event = _latest_authoritative_gate_event_for_owner(
-                    events,
-                    action_id=task.action_id,
-                    executor_id=current_claim_owner,
-                )
-                if matching_gate_event is None:
+                if str(gate_event.get("executor_id") or "") != current_claim_owner:
+                    raw_gate_event = _latest_gate_event_for_owner(
+                        events,
+                        action_id=task.action_id,
+                        executor_id=current_claim_owner,
+                    )
+                    raw_gate_is_canonical = _is_authoritative_gate_event(
+                        raw_gate_event,
+                        task.action_id,
+                    )
+                    gate_event = (
+                        raw_gate_event if raw_gate_is_canonical else None
+                    )
+                if raw_gate_event is None:
                     # A recovered action can be claimed by a successor while
                     # the prior owner's canonical Gate event remains in
                     # feedback. The event is stale for this claim, not forged
                     # evidence.
-                    raw_gate_event = None
                     gate_event = None
-                else:
-                    gate_event = matching_gate_event
         if (
             action_state == "pending"
             and gate_event is not None
@@ -420,7 +432,7 @@ def _latest_events(
     return result
 
 
-def _latest_authoritative_gate_event_for_owner(
+def _latest_gate_event_for_owner(
     events: list[dict[str, Any]],
     *,
     action_id: str,
@@ -431,10 +443,28 @@ def _latest_authoritative_gate_event_for_owner(
             event.get("event") == "safety_gate"
             and str(event.get("action_id") or "") == action_id
             and str(event.get("executor_id") or "") == executor_id
-            and _is_authoritative_gate_event(event, action_id)
         ):
             return event
     return None
+
+
+def _latest_action_result_owners(
+    events: list[dict[str, Any]],
+) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for event in events:
+        if event.get("event") not in {None, "action_result"}:
+            continue
+        action_id = str(event.get("action_id") or "")
+        executor_id = str(event.get("executor_id") or "")
+        if (
+            action_id
+            and executor_id
+            and str(event.get("status") or "")
+            in {"completed", "failed", "cancelled"}
+        ):
+            result[action_id] = executor_id
+    return result
 
 
 def _is_authoritative_gate_event(

@@ -35,7 +35,6 @@ def materialize_agent_output(
     events = _feedback_events(feedback)
     latest_gate = _latest_events(events, "safety_gate")
     latest_verification = _latest_events(events, "expectation_check")
-    latest_result_owners = _latest_action_result_owners(events)
     tasks: list[AgentTask] = []
 
     for task in output.tasks:
@@ -57,8 +56,12 @@ def materialize_agent_output(
             else None
         )
         terminal_result_owner = (
-            latest_result_owners.get(task.action_id)
-            if action_state in {"completed", "cancelled"}
+            _preclaim_dependency_rejection_owner(
+                events,
+                action_id=task.action_id,
+                gate_event=raw_gate_event,
+            )
+            if action_state == "cancelled" and stored_claim_owner is None
             else None
         )
         current_claim_owner = stored_claim_owner or terminal_result_owner
@@ -448,23 +451,35 @@ def _latest_gate_event_for_owner(
     return None
 
 
-def _latest_action_result_owners(
+def _preclaim_dependency_rejection_owner(
     events: list[dict[str, Any]],
-) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for event in events:
-        if event.get("event") not in {None, "action_result"}:
-            continue
-        action_id = str(event.get("action_id") or "")
-        executor_id = str(event.get("executor_id") or "")
+    *,
+    action_id: str,
+    gate_event: dict[str, Any] | None,
+) -> str | None:
+    if (
+        not _is_authoritative_gate_event(gate_event, action_id)
+        or gate_event.get("status") != "rejected"
+        or gate_event.get("decision") != "deny"
+        or gate_event.get("code") != "safety.dependencies.completed"
+    ):
+        return None
+    executor_id = str(gate_event.get("executor_id") or "")
+    if not executor_id:
+        return None
+    for event in reversed(events):
         if (
-            action_id
-            and executor_id
-            and str(event.get("status") or "")
-            in {"completed", "failed", "cancelled"}
+            event.get("event") in {None, "action_result"}
+            and str(event.get("action_id") or "") == action_id
+            and str(event.get("executor_id") or "") == executor_id
+            and str(event.get("status") or "") in {"failed", "cancelled"}
         ):
-            result[action_id] = executor_id
-    return result
+            # This fallback is intentionally denial-only. It exists for the
+            # watch-owned dependency cascade, which terminalizes a pending
+            # action before it is claimable. Feedback can never establish an
+            # allow/pass owner for completed execution.
+            return executor_id
+    return None
 
 
 def _is_authoritative_gate_event(

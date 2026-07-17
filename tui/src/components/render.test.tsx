@@ -139,6 +139,28 @@ test("FinalizedText falls back wholly when supported tokens mix with unsupported
   }
 });
 
+test("FinalizedText preserves GFM tables with optional outer pipes literally", () => {
+  const values = [
+    "Name | State\n--- | ---\narm | **idle**",
+    "| Name | State |\n| :--- | ---: |\n| arm | **idle** |"
+  ];
+
+  for (const value of values) {
+    assert.equal(parseFinalizedText(value), null, value);
+    const view = render(<FinalizedText value={value} />);
+    assert.equal(view.lastFrame() ?? "", normalizeTerminalText(value), value);
+    view.unmount();
+  }
+});
+
+test("FinalizedText keeps an ordinary prose pipe in the supported subset", () => {
+  const value = "Name | **idle**";
+  assert.notEqual(parseFinalizedText(value), null);
+  const view = render(<FinalizedText value={value} />);
+  assert.equal(view.lastFrame() ?? "", "Name | idle");
+  view.unmount();
+});
+
 test("FinalizedText rejects underscore emphasis containing internal underscores", () => {
   const values = [
     "_foo_bar_ and **bold**",

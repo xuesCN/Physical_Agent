@@ -33,7 +33,7 @@ const unsupportedMarkdownPatterns = [
   /^\s*(?:\+|\d+\))\s+/m,
   /^[ \t]+(?:#{1,6}|[-*]|\d+\.)\s+/m
 ];
-const unsupportedUnderscoreEmphasis = /(^|[^A-Za-z0-9])_[^_\n]+_(?=$|[^A-Za-z0-9])/m;
+const unsupportedUnderscoreEmphasis = /(^|[^A-Za-z0-9])_(?!\s)[^\n]*?\S_(?=$|[^A-Za-z0-9])/m;
 
 export function parseFinalizedText(value: string): FormattedLine[] | null {
   const normalized = normalizeTerminalText(value);

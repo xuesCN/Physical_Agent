@@ -129,6 +129,21 @@ test("FinalizedText falls back wholly when supported tokens mix with unsupported
   }
 });
 
+test("FinalizedText rejects underscore emphasis containing internal underscores", () => {
+  const values = [
+    "_foo_bar_ and **bold**",
+    "**_foo_bar_**",
+    "before _foo_bar_ after\n`code`"
+  ];
+
+  for (const value of values) {
+    assert.equal(parseFinalizedText(value), null, value);
+    const view = render(<FinalizedText value={value} />);
+    assert.equal(view.lastFrame() ?? "", normalizeTerminalText(value), value);
+    view.unmount();
+  }
+});
+
 test("FinalizedText preserves blank and trailing normalized lines exactly", () => {
   const value = "plain\n\nlast\n";
   const view = render(<FinalizedText value={value} />);

@@ -595,10 +595,15 @@ def test_r81_formal_status_and_stage_evidence_are_current() -> None:
     r8_plan = _section(stage_plan, "## 8. 文档、发布形态与全量验证收口")
 
     assert (
-        "状态：R0-R8 已完成；R8.1 实现与定向验收完成，等待 Task 5 "
-        "最终树全量验证、独立终审、commit/push 与 exact-head 远端 CI"
+        "状态：R0-R8 已完成；R8.1 最终树本地门禁与独立终审已完成，"
+        "等待 push 与 exact-head 远端 CI"
         in stage_spec
     )
+    r81_rows = [line for line in overview.splitlines() if line.startswith("| 8.1 |")]
+    assert len(r81_rows) == 1
+    assert "🟡 最终树本地门禁与独立终审已完成" in r81_rows[0]
+    assert "push/exact-head Push/PR CI 待执行" in r81_rows[0]
+    assert "正式文档修正中" not in r81_rows[0]
     assert "R8 commit/push 项仍未完成" not in stage_spec
 
     expected_stage_evidence = {
@@ -666,40 +671,131 @@ def test_r81_corrects_t3_status_and_records_historical_gate_deviations() -> None
     assert "承诺的 rollback unit 必须落实为实际提交边界" in lessons
 
 
-def test_r81_records_code_evidence_without_claiming_final_closure() -> None:
+def test_r81_records_local_closure_without_claiming_remote_evidence() -> None:
+    playbook_r81 = next(
+        paragraph
+        for paragraph in _read("docs/PLAYBOOK.zh-CN.md").split("\n\n")
+        if "**R8.1 review hardening" in paragraph
+    )
     tasks_r81 = _section(
         _read("docs/specs/001-architecture-simplification/tasks.md"),
         "## R8.1 阶段 review hardening",
     )
+    stage_plan_r81 = _section(
+        _read("docs/specs/001-architecture-simplification/plan.md"),
+        "## 8.1 阶段 review hardening",
+    )
+    implementation_plan = _read(
+        "docs/specs/001-architecture-simplification/r8-1-review-hardening-plan.md"
+    )
+    refactoring = _read("docs/REFACTORING.zh-CN.md")
+    refactoring_r81 = _section(refactoring, "### R8.1：阶段 review hardening")
     refactoring_table = _section(
-        _read("docs/REFACTORING.zh-CN.md"),
+        refactoring,
         "## 1. 阶段速查表",
     )
+    spec_backlog = _section(_read("docs/SPEC.zh-CN.md"), "## 4. 待办矩阵")
 
-    for commit in ("`6d53db3`", "`4c9c6a4`", "`c38e3ec`", "`89f84c8`"):
+    for commit in (
+        "`6d53db3`",
+        "`4c9c6a4`",
+        "`c38e3ec`",
+        "`89f84c8`",
+        "`241fe8d`",
+        "`fc282cf`",
+        "`b2c93bb`",
+    ):
         assert commit in tasks_r81
     for evidence in (
         "Task 1 focused `60 passed`、group `177 passed`、阶段 full `439 passed`",
         "Task 2 combined `127 passed`",
         "Task 3 focused `78 passed + 78 passed`",
-        "不替代 Task 5 最终树全量验证",
-        "独立终审、push 与 exact-head CI 仍待执行",
     ):
         assert evidence in tasks_r81
-    assert (
-        "- [x] spec/plan/evidence matrix/PLAYBOOK/REFACTORING 已纠偏；"
-        "draft PR #1 title 已更新为 `R0-R8 architecture simplification and R8.1 "
-        "review hardening`，body 已更新并明确 Task 5/独立终审/push/exact-head CI "
-        "仍待执行且 no-unfreeze，PR 保持 OPEN + draft；历史门禁/rollback 偏离已正式记录。"
-        in tasks_r81
+
+    final_local_evidence = (
+        "最终本地证据（2026-07-17）：Python full `462 passed, 1 warning`；"
+        "TUI typecheck/test/build `61 passed`；frontend `tsc -b && vite build` "
+        "（3309 modules）与真实 Chromium `27 passed`；clean-wheel base/server-extra "
+        "smoke 通过；多进程 LOG + halt + Gate owner + OpenAPI + Safety AST + "
+        "docs/golden/Moce 专项 `71 passed`；受影响 state/projection/API/MCP/watch/safety "
+        "`152 passed`；`git diff --check`、tracked dist、退役 production markers 与受保护 "
+        "snapshot diff 均 clean；独立终审经四轮 fix/re-review 后 "
+        "Critical=0、Important=0、Minor=0。"
     )
+    checklist = [line for line in tasks_r81.splitlines() if line.startswith("- [")]
+    assert checklist == [
+        "- [x] LOG mirror 跨进程并发后与 SQLite 条目/revision 一致，并使用原子替换。",
+        "- [x] LOG mirror 失败不阻断 timeout halt、expectation check 或已提交 API mutation；doctor 仍能诊断 stale mirror。",
+        "- [x] in-progress Gate evidence 必须匹配当前 claim owner；旧 owner pass 不满足 current obligation。",
+        "- [x] OpenAPI `ChatPlan.agent_output` 指向 canonical `AgentOutput`，且 `ChatPlan.actions` 继续不存在。",
+        "- [x] spec/plan/evidence matrix/PLAYBOOK/REFACTORING 已纠偏；draft PR #1 title/body 已更新为 R8.1 范围并保持 OPEN + draft；历史门禁/rollback 偏离已正式记录。",
+        "- [x] Python full、frontend build/Playwright、TUI、clean-wheel、多进程/安全专项和 docs/golden 全绿。",
+        "- [x] 独立终审无 Critical/Important/Minor。",
+        "- [ ] push 与 exact-head Push/PR CI 成功。",
+        "- [x] 新功能冻结项保持冻结。",
+        "- [x] 本轮 brief 收工删除，不创建 handoff。",
+    ]
+
+    for task_heading in (
+        "### Task 1: Make LOG mirror cross-process safe and non-blocking to control flow",
+        "### Task 2: Correlate in-progress Gate evidence with the current claim owner",
+        "### Task 3: Publish canonical ChatPlan.agent_output in OpenAPI",
+        "### Task 4: Close formal docs, evidence, and PR metadata",
+    ):
+        task_remainder = implementation_plan.split(task_heading, 1)[1]
+        next_task = task_remainder.find("\n### Task ")
+        task_section = (
+            task_remainder if next_task < 0 else task_remainder[:next_task]
+        )
+        assert "- [ ]" not in task_section
+
+    task5 = implementation_plan.split(
+        "### Task 5: Full verification, independent review, and branch closure", 1
+    )[1]
+    assert [line for line in task5.splitlines() if line.startswith("- [")] == [
+        "- [x] Run full Python pytest.",
+        "- [x] Run frontend `tsc -b && vite build` and `CI=1` Playwright.",
+        "- [x] Run TUI typecheck, tests, scenario matrix, and build.",
+        "- [x] Run clean-wheel base/server-extra smoke.",
+        "- [x] Run multiprocessing LOG, timeout-halt, stale-Gate, OpenAPI, safety AST, docs/golden, and residue scans.",
+        "- [x] Dispatch an independent whole-change review; fix all Critical/Important findings and re-review.",
+        "- [x] Remove the round brief, update final local evidence, and do not create a handoff.",
+        "- [x] Confirm protected untracked paths and snapshots remain outside the diff; do not unfreeze new features.",
+        "- [ ] Push the local closure commit and wait for exact-head Push/PR CI success.",
+        "- [ ] Confirm the post-push clean index and zero ahead/behind.",
+    ]
 
     r81_rows = [
         line for line in refactoring_table.splitlines() if line.startswith("| R8.1 |")
     ]
     assert len(r81_rows) == 1
-    assert "Task 5 全量验证/终审/push/CI 待执行" in r81_rows[0]
-    assert "exact-head CI 成功" not in tasks_r81
+    assert "最终树本地门禁与独立终审已完成" in r81_rows[0]
+    assert "push/exact-head Push/PR CI 待执行" in r81_rows[0]
+
+    spec_r81_rows = [
+        line for line in spec_backlog.splitlines() if line.startswith("| **R8.1** |")
+    ]
+    assert len(spec_r81_rows) == 1
+    assert "🟡 2026-07-17" in spec_r81_rows[0]
+    assert "✅" not in spec_r81_rows[0]
+
+    assert not (ROOT / "docs/brief-r8-1-review-hardening.zh-CN.md").exists()
+    evidence_surfaces = (
+        tasks_r81,
+        playbook_r81,
+        refactoring_r81,
+        stage_plan_r81,
+        spec_r81_rows[0],
+    )
+    for section in evidence_surfaces:
+        assert final_local_evidence in section
+        assert "远端 push 与 exact-head Push/PR CI 尚未执行" in section
+        assert re.search(r"(?:Push|PR) run `\d+`", section) is None
+        assert "exact-head CI 成功" not in section
+
+    assert re.search(r"(?:Push|PR) run `\d+`", r81_rows[0]) is None
+    assert "exact-head CI 成功" not in r81_rows[0]
 
 
 def test_r81_keeps_every_feature_freeze_until_an_explicit_spec_decision() -> None:

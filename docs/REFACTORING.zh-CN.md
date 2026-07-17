@@ -1,7 +1,7 @@
 # 重构过程
 
 > 本文浓缩自原 33 份 session-handoff 与 22 份 brief（已删除，git 历史可查）。姊妹文档：`SPEC.zh-CN.md`（目标与待办矩阵）。
-> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-16。
+> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-17。
 
 ## 0. 基线与纪律
 
@@ -56,7 +56,7 @@
 | R5-browser-gate | structured/fence 双轨真实 Chromium、增量去重与 Add→pending 独立验证 | 本地 27/27；`d1ca53c3` 的 fork Push run `29321294713`、PR run `29321297674` 均成功 |
 | R7 | 退役 action-draft wire/fence 与 proposal convenience payload | `9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功 |
 | R8 | 当前架构、文档、示例、OpenAPI、发布包与全量门禁收口 | implementation closure `c4da4f9`，fork Push run `29476327424`、PR run `29476329954`；evidence closure `33b062b`，fork Push run `29477199756`、PR run `29477202468`；均成功 |
-| R8.1 | review hardening：LOG mirror、Gate owner correlation、nested OpenAPI 与证据纠偏 | `6d53db3`、`4c9c6a4` + `c38e3ec`、`89f84c8`；Task 5 全量验证/终审/push/CI 待执行 |
+| R8.1 | review hardening：LOG mirror、Gate owner correlation、nested OpenAPI 与证据纠偏 | `6d53db3`、`4c9c6a4` + `c38e3ec`、`89f84c8`，review follow-up `241fe8d`、`fc282cf`、`b2c93bb`；最终树本地门禁与独立终审已完成，push/exact-head Push/PR CI 待执行 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -401,11 +401,11 @@ rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Dr
 
 ### R8.1：阶段 review hardening
 
-阶段 review 发现三处实现缺口。`6d53db3` 把 SQLite 已提交日志作为唯一镜像输入，以第二个 `BEGIN IMMEDIATE` 跨进程序列化 snapshot/read/publish，并通过同目录临时文件、flush/fsync 和 `os.replace` 原子发布 `LOG.md`；mirror-only 失败被限制在 SQLite commit 之后，doctor 仍可诊断 stale revision，execute timeout 的 halt 又提前到持久化之前。`4c9c6a4` 使用既有 `actions.claim_owner` 约束 in-progress Gate evidence，旧 owner pass 只作 stale evidence；review 再以 `c38e3ec` 把 claim-owner read 放到 feedback 之后，挡住 late prior-owner event 与 earlier owner snapshot 的错误配对。`89f84c8` 让 `ChatPlan.agent_output` 的 Pydantic/FastAPI schema 引用 canonical `AgentOutput`，同时保持 runtime dict、JSON alias 与旧 extra-field 忽略边界不变。
+阶段 review 发现三处实现缺口。`6d53db3` 把 SQLite 已提交日志作为唯一镜像输入，以第二个 `BEGIN IMMEDIATE` 跨进程序列化 snapshot/read/publish，并通过同目录临时文件、flush/fsync 和 `os.replace` 原子发布 `LOG.md`；mirror-only 失败被限制在 SQLite commit 之后，doctor 仍可诊断 stale revision，execute timeout 的 halt 又提前到持久化之前。`4c9c6a4` 使用既有 `actions.claim_owner` 约束 in-progress Gate evidence，旧 owner pass 只作 stale evidence；review 再以 `c38e3ec` 把 claim-owner read 放到 feedback 之后，挡住 late prior-owner event 与 earlier owner snapshot 的错误配对。`89f84c8` 让 `ChatPlan.agent_output` 的 Pydantic/FastAPI schema 引用 canonical `AgentOutput`，同时保持 runtime dict、JSON alias 与旧 extra-field 忽略边界不变。后续四轮 fix/re-review 又以 `241fe8d` 绑定 terminal final owner，以 `fc282cf` 按 newest raw owner 校验 Gate 并覆盖真实 dependency path，以 `b2c93bb` 将缺失 owner 的兼容 fallback 收窄为 denial-only。
 
-定向证据：Task 1 focused `60 passed`、state/backend/watch/safety group `177 passed`、阶段 full `439 passed`；Task 2 combined `127 passed`；Task 3 API/chat/projection `78 passed`，额外 protocol/state adapters `78 passed`。这些结果只证明各实现任务与阶段基线，不替代 Task 5 在最终树重跑 Python full、真实 Chromium、TUI、clean-wheel、多进程/安全专项与 docs/golden；独立终审、push 和 exact-head Push/PR CI 也仍待执行。
+定向/阶段证据保留：Task 1 focused `60 passed`、state/backend/watch/safety group `177 passed`、阶段 full `439 passed`；Task 2 combined `127 passed`；Task 3 API/chat/projection `78 passed`，额外 protocol/state adapters `78 passed`。最终本地证据（2026-07-17）：Python full `462 passed, 1 warning`；TUI typecheck/test/build `61 passed`；frontend `tsc -b && vite build` （3309 modules）与真实 Chromium `27 passed`；clean-wheel base/server-extra smoke 通过；多进程 LOG + halt + Gate owner + OpenAPI + Safety AST + docs/golden/Moce 专项 `71 passed`；受影响 state/projection/API/MCP/watch/safety `152 passed`；`git diff --check`、tracked dist、退役 production markers 与受保护 snapshot diff 均 clean；独立终审经四轮 fix/re-review 后 Critical=0、Important=0、Minor=0。远端 push 与 exact-head Push/PR CI 尚未执行。
 
-本轮同步修复 spec/plan/evidence matrix/PLAYBOOK 的历史口径并准备 draft PR 元数据，但不把尚未执行的远端动作写成证据。R8.1 不解冻 VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 或自动 replan；只有出现可复现的真实需求并形成显式 SPEC 决策后，才可重启对应条目。
+本轮已同步修复 spec/plan/evidence matrix/PLAYBOOK 的历史口径，并已更新 draft PR #1 title/body 到 R8.1 范围；PR 保持 OPEN + draft，不把尚未执行的 push 或远端 CI 写成证据。R8.1 不解冻 VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 或自动 replan；只有出现可复现的真实需求并形成显式 SPEC 决策后，才可重启对应条目。
 
 ## 3. 关键决策与偏离（跨阶段汇总）
 

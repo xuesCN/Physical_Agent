@@ -354,17 +354,20 @@
 
 ## R8.1 阶段 review hardening
 
-实现与定向证据（2026-07-16）：LOG 修复 `6d53db3`；Gate claim-owner correlation `4c9c6a4` 及 late-feedback fencing `c38e3ec`；nested OpenAPI `89f84c8`。Task 1 focused `60 passed`、group `177 passed`、阶段 full `439 passed`；Task 2 combined `127 passed`；Task 3 focused `78 passed + 78 passed`。以上不替代 Task 5 最终树全量验证；独立终审、push 与 exact-head CI 仍待执行。
+实现与定向证据（2026-07-16）：LOG 修复 `6d53db3`；Gate claim-owner correlation `4c9c6a4` 及 late-feedback fencing `c38e3ec`；nested OpenAPI `89f84c8`。Task 1 focused `60 passed`、group `177 passed`、阶段 full `439 passed`；Task 2 combined `127 passed`；Task 3 focused `78 passed + 78 passed`。后续 review follow-up 为 `241fe8d` terminal final owner、`fc282cf` newest raw owner Gate validation + real dependency path、`b2c93bb` denial-only fallback。
+
+最终本地证据（2026-07-17）：Python full `462 passed, 1 warning`；TUI typecheck/test/build `61 passed`；frontend `tsc -b && vite build` （3309 modules）与真实 Chromium `27 passed`；clean-wheel base/server-extra smoke 通过；多进程 LOG + halt + Gate owner + OpenAPI + Safety AST + docs/golden/Moce 专项 `71 passed`；受影响 state/projection/API/MCP/watch/safety `152 passed`；`git diff --check`、tracked dist、退役 production markers 与受保护 snapshot diff 均 clean；独立终审经四轮 fix/re-review 后 Critical=0、Important=0、Minor=0。远端 push 与 exact-head Push/PR CI 尚未执行；PR 保持 OPEN + draft。
 
 - [x] LOG mirror 跨进程并发后与 SQLite 条目/revision 一致，并使用原子替换。
 - [x] LOG mirror 失败不阻断 timeout halt、expectation check 或已提交 API mutation；doctor 仍能诊断 stale mirror。
 - [x] in-progress Gate evidence 必须匹配当前 claim owner；旧 owner pass 不满足 current obligation。
 - [x] OpenAPI `ChatPlan.agent_output` 指向 canonical `AgentOutput`，且 `ChatPlan.actions` 继续不存在。
-- [x] spec/plan/evidence matrix/PLAYBOOK/REFACTORING 已纠偏；draft PR #1 title 已更新为 `R0-R8 architecture simplification and R8.1 review hardening`，body 已更新并明确 Task 5/独立终审/push/exact-head CI 仍待执行且 no-unfreeze，PR 保持 OPEN + draft；历史门禁/rollback 偏离已正式记录。
-- [ ] Python full、frontend build/Playwright、TUI、clean-wheel、多进程/安全专项和 docs/golden 全绿。
-- [ ] 独立终审无 Critical/Important；commit/push 与 exact-head Push/PR CI 成功。
+- [x] spec/plan/evidence matrix/PLAYBOOK/REFACTORING 已纠偏；draft PR #1 title/body 已更新为 R8.1 范围并保持 OPEN + draft；历史门禁/rollback 偏离已正式记录。
+- [x] Python full、frontend build/Playwright、TUI、clean-wheel、多进程/安全专项和 docs/golden 全绿。
+- [x] 独立终审无 Critical/Important/Minor。
+- [ ] push 与 exact-head Push/PR CI 成功。
 - [x] 新功能冻结项保持冻结。
-- [ ] 本轮 brief 收工删除，不创建 handoff。
+- [x] 本轮 brief 收工删除，不创建 handoff。
 
 R8.1 不解冻 VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 或自动 replan；只有出现可复现的真实需求并形成显式 SPEC 决策后，才可重启对应条目。
 

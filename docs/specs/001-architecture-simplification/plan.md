@@ -16,7 +16,7 @@
 | 6 | 收敛 application/read-model 职责和官方消费者 | ✅ `0bb7807`；fork Push run `29312317707`、PR run `29312319687` 均成功 | `_append_actions` 等死代码为零；消费者只读 canonical projection/output |
 | 7 | 切断旧 wire compatibility | ✅ `9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功 | 停产/删除 fence；删除 proposal 顶层 `actions/action/draft_actions`，不动 state board |
 | 8 | 文档、发布形态与全量验证收口 | ✅ implementation closure `c4da4f9`，fork Push run `29476327424`、PR run `29476329954` 均成功；evidence closure `33b062b`，fork Push run `29477199756`、PR run `29477202468` 均成功 | 全量测试、wheel、docs/CLI/README grep 和安全扫描全绿；实现与最终证据均已闭环 |
-| 8.1 | 阶段 review hardening | 🟡 实现提交 `6d53db3`、`4c9c6a4` + `c38e3ec`、`89f84c8` 已完成；正式文档修正中，Task 5 全量验证/终审/push/CI 待执行 | LOG 多进程与安全收尾、Gate claim correlation、嵌套 OpenAPI、证据/PR 元数据全部关闭；新功能继续冻结 |
+| 8.1 | 阶段 review hardening | 🟡 最终树本地门禁与独立终审已完成；push/exact-head Push/PR CI 待执行 | LOG 多进程与安全收尾、Gate claim correlation、嵌套 OpenAPI、证据/PR 元数据全部关闭；新功能继续冻结 |
 
 ## 1. 冻结范围、建立规格与退役清单
 
@@ -204,6 +204,6 @@ R8 远端 closure 后的独立阶段 review 发现三个实现缺口和一组证
 4. 修复 spec/plan/matrix/PLAYBOOK/REFACTORING/PR 元数据，并如实记录 R5-browser 与 R6 顺序、R6/R7 rollback 粒度偏离。
 5. 通过 Python full、真实 Chromium、TUI、clean-wheel、多进程/安全专项和独立终审后才可关闭；关闭也不自动解冻后续功能。
 
-实现与定向证据（2026-07-16）：LOG 修复 `6d53db3`；Gate claim-owner correlation `4c9c6a4` 及 late-feedback fencing `c38e3ec`；nested OpenAPI `89f84c8`。Task 1 focused `60 passed`、group `177 passed`、阶段 full `439 passed`；Task 2 combined `127 passed`；Task 3 focused `78 passed + 78 passed`。这些阶段证据不替代 Task 5 最终树全量验证，独立终审、push 与 exact-head CI 仍待执行。
+实现与定向证据（2026-07-16）：LOG 修复 `6d53db3`；Gate claim-owner correlation `4c9c6a4` 及 late-feedback fencing `c38e3ec`；nested OpenAPI `89f84c8`。Task 1 focused `60 passed`、group `177 passed`、阶段 full `439 passed`；Task 2 combined `127 passed`；Task 3 focused `78 passed + 78 passed`。后续 review follow-up 为 `241fe8d` terminal final owner、`fc282cf` newest raw owner Gate validation + real dependency path、`b2c93bb` denial-only fallback。最终本地证据（2026-07-17）：Python full `462 passed, 1 warning`；TUI typecheck/test/build `61 passed`；frontend `tsc -b && vite build` （3309 modules）与真实 Chromium `27 passed`；clean-wheel base/server-extra smoke 通过；多进程 LOG + halt + Gate owner + OpenAPI + Safety AST + docs/golden/Moce 专项 `71 passed`；受影响 state/projection/API/MCP/watch/safety `152 passed`；`git diff --check`、tracked dist、退役 production markers 与受保护 snapshot diff 均 clean；独立终审经四轮 fix/re-review 后 Critical=0、Important=0、Minor=0。远端 push 与 exact-head Push/PR CI 尚未执行；PR 保持 OPEN + draft。
 
 R8.1 不解冻 VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 或自动 replan；只有出现可复现的真实需求并形成显式 SPEC 决策后，才可重启对应条目。

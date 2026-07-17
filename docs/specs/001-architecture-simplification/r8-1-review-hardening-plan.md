@@ -34,14 +34,14 @@
 - A focused sidecar renderer writes the complete SQLite log snapshot at an exact revision through same-directory temp file + flush/fsync + `os.replace`.
 - A second `BEGIN IMMEDIATE` phase serializes snapshot/read/write across processes; every sync reads the latest committed SQLite entries, so a late writer cannot overwrite a newer mirror.
 
-- [ ] Write a spawn-based multiprocessing regression proving all messages and the exact revision survive in both SQLite and `LOG.md`.
-- [ ] Run the multiprocessing test and capture RED lost entries/revision mismatch against `33b062b`.
-- [ ] Write mirror-failure regressions proving SQLite truth and doctor stale diagnostics remain, while append callers do not fail.
-- [ ] Write watch/API RED regressions proving a mirror failure currently skips timeout halt or post-execution verification and can turn a committed API mutation into an error.
-- [ ] Implement latest-snapshot mirror rebuild, atomic replace, and mirror-only error containment.
-- [ ] Move timeout halt ahead of persistence work so even a non-mirror persistence failure cannot suppress the safety mitigation.
-- [ ] Run focused sidecar/watch/API tests GREEN, then run the complete state/backend/watch/safety group.
-- [ ] Commit only Task 1 files.
+- [x] Write a spawn-based multiprocessing regression proving all messages and the exact revision survive in both SQLite and `LOG.md`.
+- [x] Run the multiprocessing test and capture RED lost entries/revision mismatch against `33b062b`.
+- [x] Write mirror-failure regressions proving SQLite truth and doctor stale diagnostics remain, while append callers do not fail.
+- [x] Write watch/API RED regressions proving a mirror failure currently skips timeout halt or post-execution verification and can turn a committed API mutation into an error.
+- [x] Implement latest-snapshot mirror rebuild, atomic replace, and mirror-only error containment.
+- [x] Move timeout halt ahead of persistence work so even a non-mirror persistence failure cannot suppress the safety mitigation.
+- [x] Run focused sidecar/watch/API tests GREEN, then run the complete state/backend/watch/safety group.
+- [x] Commit only Task 1 files.
 
 ### Task 2: Correlate in-progress Gate evidence with the current claim owner
 
@@ -62,12 +62,12 @@
 - Add optional `claim_owners: Mapping[str, str] | None` to materialization/project functions and pass it from every current-state adapter.
 - For `in_progress`, a canonical watch Gate event satisfies the task only when `event.executor_id == claim_owners[action_id]`; mismatched prior-owner evidence is treated as stale, not forged. Pending behavior remains unchanged.
 
-- [ ] Write RED projection tests for successor claim + old owner pass, matching owner pass, and missing owner fail-closed behavior.
-- [ ] Write RED state/API/MCP adapter tests proving claim owners reach current projection but are not added as a new public Action payload.
-- [ ] Implement the read-only claim-owner query and projection correlation.
-- [ ] Update all current projection call sites without adding a second read model.
-- [ ] Run focused projection/state/API/MCP tests GREEN and safety AST tests.
-- [ ] Commit only Task 2 files.
+- [x] Write RED projection tests for successor claim + old owner pass, matching owner pass, and missing owner fail-closed behavior.
+- [x] Write RED state/API/MCP adapter tests proving claim owners reach current projection but are not added as a new public Action payload.
+- [x] Implement the read-only claim-owner query and projection correlation.
+- [x] Update all current projection call sites without adding a second read model.
+- [x] Run focused projection/state/API/MCP tests GREEN and safety AST tests.
+- [x] Commit only Task 2 files.
 
 ### Task 3: Publish canonical ChatPlan.agent_output in OpenAPI
 
@@ -83,11 +83,11 @@
 - Pydantic/FastAPI schema must resolve `ChatPlan.agent_output` to the canonical `AgentOutput` component, not `additionalProperties: true`.
 - `ChatPlan.actions` remains absent and old persisted extra fields remain ignored according to the existing compatibility boundary.
 
-- [ ] Write a RED OpenAPI test that resolves `ChatPlan.agent_output` and requires an `AgentOutput` reference/schema.
-- [ ] Implement the minimal cycle-safe forward reference or explicit canonical JSON-schema binding.
-- [ ] Add/adjust runtime serialization tests only where the typed value changes Python-side behavior.
-- [ ] Run API/chat/projection tests GREEN.
-- [ ] Commit only Task 3 files.
+- [x] Write a RED OpenAPI test that resolves `ChatPlan.agent_output` and requires an `AgentOutput` reference/schema.
+- [x] Implement the minimal cycle-safe forward reference or explicit canonical JSON-schema binding.
+- [x] Add/adjust runtime serialization tests only where the typed value changes Python-side behavior.
+- [x] Run API/chat/projection tests GREEN.
+- [x] Commit only Task 3 files.
 
 ### Task 4: Close formal docs, evidence, and PR metadata
 
@@ -107,22 +107,24 @@
 - Evidence matrix rows identify the correct R3 and R8 commit/run mapping.
 - REFACTORING §3 records the R5-browser/R6 ordering deviation and combined R6/R7 rollback granularity without rewriting history.
 
-- [ ] Write RED current-doc assertions for spec header, plan rows, evidence mappings, PLAYBOOK T3 status, deviation record, and R8.1 freeze statement.
-- [ ] Update formal docs to the post-review state; keep protected snapshots untouched.
-- [ ] Run current-doc/golden/Moce tests GREEN and `git diff --check`.
-- [ ] Update PR #1 title/body to describe R0-R8 plus R8.1, retaining draft state.
-- [ ] Commit the documentation/test closure after implementation evidence exists.
+- [x] Write RED current-doc assertions for spec header, plan rows, evidence mappings, PLAYBOOK T3 status, deviation record, and R8.1 freeze statement.
+- [x] Update formal docs to the post-review state; keep protected snapshots untouched.
+- [x] Run current-doc/golden/Moce tests GREEN and `git diff --check`.
+- [x] Update PR #1 title/body to describe R0-R8 plus R8.1, retaining draft state.
+- [x] Commit the documentation/test closure after implementation evidence exists.
 
 ### Task 5: Full verification, independent review, and branch closure
 
 **Files:**
 - Verify only; fixes from review must follow the same TDD and scoped-review rules.
 
-- [ ] Run full Python pytest.
-- [ ] Run frontend `tsc -b && vite build` and `CI=1` Playwright.
-- [ ] Run TUI typecheck, tests, scenario matrix, and build.
-- [ ] Run clean-wheel base/server-extra smoke.
-- [ ] Run multiprocessing LOG, timeout-halt, stale-Gate, OpenAPI, safety AST, docs/golden, and residue scans.
-- [ ] Dispatch an independent whole-change review; fix all Critical/Important findings and re-review.
-- [ ] Remove the round brief, update final evidence, commit, push, and wait for exact-head Push/PR CI success.
-- [ ] Confirm protected brief hashes/snapshots, clean index, and zero ahead/behind; do not unfreeze new features.
+- [x] Run full Python pytest.
+- [x] Run frontend `tsc -b && vite build` and `CI=1` Playwright.
+- [x] Run TUI typecheck, tests, scenario matrix, and build.
+- [x] Run clean-wheel base/server-extra smoke.
+- [x] Run multiprocessing LOG, timeout-halt, stale-Gate, OpenAPI, safety AST, docs/golden, and residue scans.
+- [x] Dispatch an independent whole-change review; fix all Critical/Important findings and re-review.
+- [x] Remove the round brief, update final local evidence, and do not create a handoff.
+- [x] Confirm protected untracked paths and snapshots remain outside the diff; do not unfreeze new features.
+- [ ] Push the local closure commit and wait for exact-head Push/PR CI success.
+- [ ] Confirm the post-push clean index and zero ahead/behind.

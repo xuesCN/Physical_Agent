@@ -29,6 +29,7 @@ interface ScenarioFile {
 interface ScenarioCase {
   name: string;
   useSse?: boolean;
+  responseDelayMs?: number;
   columns?: number | null;
   initialState?: string;
   initialConfig?: string;
@@ -239,6 +240,7 @@ for (const { label, columns, marker } of [
       useSse: false,
       initialState: "ready",
       initialConfig: "default",
+      responseDelayMs: 250,
       steps: []
     });
     const view = renderPhysicalTui(
@@ -254,17 +256,19 @@ for (const { label, columns, marker } of [
         llmSettings: 1,
         testLlmSettings: 1
       });
-      await waitForPhysicalWriteAfter(view, 0);
+      await waitForPhysicalTextAfter(view, 0, marker);
       assertPhysicalMarkerCount(view, marker, 1, "initial render");
 
-      await submitPhysicalCommand(view, "/view status");
+      await submitPhysicalCommand(view, "/view status", "View: status");
       await waitForCallCounts(client, { health: 2, state: 2, config: 2 });
+      assertPhysicalOutputIncludes(view, "View: status", "/view status");
       assertPhysicalMarkerCount(view, marker, 1, "/view status");
 
-      await submitPhysicalCommand(view, "/view chat");
+      await submitPhysicalCommand(view, "/view chat", "View: chat");
+      assertPhysicalOutputIncludes(view, "View: chat", "/view chat");
       assertPhysicalMarkerCount(view, marker, 1, "/view chat");
 
-      await submitPhysicalCommand(view, "/refresh");
+      await submitPhysicalCommand(view, "/refresh", "Snapshot refreshed.");
       await waitForCallCounts(client, {
         health: 3,
         state: 3,
@@ -272,6 +276,7 @@ for (const { label, columns, marker } of [
         llmSettings: 2,
         testLlmSettings: 2
       });
+      assertPhysicalOutputIncludes(view, "Snapshot refreshed.", "/refresh");
       assertPhysicalMarkerCount(view, marker, 1, "/refresh");
     } finally {
       view.unmount();
@@ -323,12 +328,17 @@ async function submitCommand(view: TestInkInstance, input: string): Promise<void
   await delay(0);
 }
 
-async function submitPhysicalCommand(view: PhysicalTestInkInstance, input: string): Promise<void> {
+async function submitPhysicalCommand(
+  view: PhysicalTestInkInstance,
+  input: string,
+  completionText: string
+): Promise<void> {
+  const writeCountBeforeInput = view.physicalWriteCount();
   view.stdin.write(input);
-  await delay(100);
+  await waitForPhysicalTextAfter(view, writeCountBeforeInput, input);
   const writeCountBeforeEnter = view.physicalWriteCount();
   view.stdin.write("\r");
-  await waitForPhysicalWriteAfter(view, writeCountBeforeEnter);
+  await waitForPhysicalTextAfter(view, writeCountBeforeEnter, completionText);
 }
 
 async function assertStep(context: ScenarioCaseContext, step: ScenarioStep): Promise<void> {
@@ -404,21 +414,23 @@ async function waitForCallCounts(
   );
 }
 
-async function waitForPhysicalWriteAfter(
+async function waitForPhysicalTextAfter(
   view: PhysicalTestInkInstance,
   previousWriteCount: number,
+  expected: string,
   timeoutMs = 2500
 ): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     await delay(10);
-    if (view.physicalWriteCount() > previousWriteCount) {
+    const output = normalizeOutput(view.frames.slice(previousWriteCount).join(""));
+    if (output.includes(expected)) {
       return;
     }
   }
   assert.fail(
-    `Timed out waiting for physical stdout write count to exceed ${previousWriteCount}; ` +
-      `got ${view.physicalWriteCount()}`
+    `Timed out waiting for physical stdout after write ${previousWriteCount} to include ${expected}; ` +
+      `got ${normalizeOutput(view.frames.slice(previousWriteCount).join(""))}`
   );
 }
 
@@ -468,6 +480,14 @@ function assertPhysicalMarkerCount(
   const output = normalizeOutput(view.physicalOutput());
   const actual = output.split(marker).length - 1;
   assert.equal(actual, expected, `${stage} physically printed ${marker} ${actual} times`);
+}
+
+function assertPhysicalOutputIncludes(
+  view: PhysicalTestInkInstance,
+  expected: string,
+  stage: string
+): void {
+  assert.ok(normalizeOutput(view.physicalOutput()).includes(expected), stage);
 }
 
 function normalizeOutput(value: string): string {
@@ -543,6 +563,7 @@ class ScenarioClient implements TuiClient {
 
   async health(): Promise<HealthState> {
     this.record("health");
+    await this.delayResponse();
     this.throwIfFailed("health");
     return {
       ok: true,
@@ -556,24 +577,28 @@ class ScenarioClient implements TuiClient {
 
   async state(): Promise<AgentState> {
     this.record("state");
+    await this.delayResponse();
     this.throwIfFailed("state");
     return clone(this.currentState);
   }
 
   async config(): Promise<ConfigResponse> {
     this.record("config");
+    await this.delayResponse();
     this.throwIfFailed("config");
     return clone(this.currentConfig);
   }
 
   async llmSettings(): Promise<LLMSettingsResponse> {
     this.record("llmSettings");
+    await this.delayResponse();
     this.throwIfFailed("llmSettings");
     return clone(llmOk);
   }
 
   async testLlmSettings(): Promise<LLMSettingsResponse> {
     this.record("testLlmSettings");
+    await this.delayResponse();
     this.throwIfFailed("testLlmSettings");
     return { ...clone(llmOk), message: "LLM connection test passed." };
   }
@@ -683,6 +708,13 @@ class ScenarioClient implements TuiClient {
 
   private record(name: CallName, ...args: unknown[]): void {
     this.calls[name].push(args);
+  }
+
+  private async delayResponse(): Promise<void> {
+    const responseDelayMs = this.scenarioCase.responseDelayMs ?? 0;
+    if (responseDelayMs > 0) {
+      await delay(responseDelayMs);
+    }
   }
 
   private throwIfFailed(name: CallName): void {

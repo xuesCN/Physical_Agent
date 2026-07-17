@@ -9,6 +9,7 @@ import { ConfigPanel } from "./ConfigPanel.js";
 import { RobotDetailPanel } from "./RobotDetailPanel.js";
 import { RobotsPanel } from "./RobotsPanel.js";
 import { StatusBar } from "./StatusBar.js";
+import { Transcript } from "./Transcript.js";
 import { UploadsPanel } from "./UploadsPanel.js";
 import { normalizeTerminalText } from "./textFormat.js";
 import { THEME } from "../theme.js";
@@ -43,6 +44,26 @@ test("BrandBanner renders block art only for a wide terminal", () => {
   const unknown = render(<BrandBanner columns={undefined} />);
   assert.match(unknown.lastFrame() ?? "", /MOCE · PHYSICAL AGENT/);
   unknown.unmount();
+});
+
+test("Transcript prints the MOCE banner once while finalized entries append", () => {
+  const view = render(<Transcript entries={[]} columns={100} />);
+  view.rerender(
+    <Transcript
+      columns={100}
+      entries={[
+        { id: "u1", role: "user", content: "hello" },
+        { id: "a1", role: "assistant", content: "ready" },
+        { id: "d1", role: "draft", content: "review only" }
+      ]}
+    />
+  );
+  const output = view.lastFrame() ?? "";
+  assert.equal(output.split(FULL_MOCE_LOGO[0]).length - 1, 1);
+  assert.match(output, /you\s+›\s+hello/);
+  assert.match(output, /moce\s+│\s+ready/);
+  assert.match(output, /draft\s+◇\s+review only/);
+  view.unmount();
 });
 
 test("StatusBar renders connection state", () => {

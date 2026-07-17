@@ -30,7 +30,7 @@
         {
           "input": "hello robot",
           "covers": ["<text chat>"],
-          "expectOutput": ["> hello robot", "assistant Hello from agent"],
+          "expectOutput": ["you › hello robot", "moce │ Hello from agent"],
           "expectCalls": { "sendChatStream": 1 },
           "expectState": { "chat.messages.2.content": "Hello from agent" }
         },

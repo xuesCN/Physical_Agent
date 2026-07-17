@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useApp } from "ink";
+import { Box, Text, useApp, useStdout } from "ink";
 import { ApiClient } from "./api/client.js";
 import { COMMAND_HELP, parseCommand } from "./commands/parser.js";
 import { ActionsPanel } from "./components/ActionsPanel.js";
@@ -61,6 +61,11 @@ interface AppProps {
 export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }: AppProps) {
   const client = useMemo<TuiClient>(() => injectedClient ?? new ApiClient(apiBase), [apiBase, injectedClient]);
   const { exit } = useApp();
+  const { stdout } = useStdout();
+  const stdoutColumns = stdout.columns;
+  const terminalColumns = Number.isFinite(stdoutColumns) && stdoutColumns > 0
+    ? stdoutColumns
+    : undefined;
   const [health, setHealth] = useState<HealthState | null>(null);
   const [state, setState] = useState<AgentState | null>(null);
   const [configResponse, setConfigResponse] = useState<ConfigResponse | null>(null);
@@ -365,7 +370,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
 
   return (
     <>
-      {activeView === "chat" ? <Transcript entries={transcriptEntries} /> : null}
+      <Transcript entries={transcriptEntries} columns={terminalColumns} />
       <Box flexDirection="column" gap={1}>
         <StatusBar status={status} busy={busy || streaming} />
         {renderActiveView({

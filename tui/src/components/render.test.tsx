@@ -108,6 +108,34 @@ test("FinalizedText preserves unsupported malformed or nested Markdown literally
   }
 });
 
+test("FinalizedText falls back wholly when supported tokens mix with unsupported CommonMark", () => {
+  const values = [
+    "<b>raw</b> and **bold**",
+    "<foo@example.com> and **bold**",
+    "<ftp://example.com> and **bold**",
+    "[](https://example.com) and **bold**",
+    "[ref][id] and **bold**",
+    "[id]: https://example.com\n**bold**",
+    "    const x = 1;\n**bold**",
+    "\\# escaped heading and **bold**",
+    "**_nested_**"
+  ];
+
+  for (const value of values) {
+    assert.equal(parseFinalizedText(value), null, value);
+    const view = render(<FinalizedText value={value} />);
+    assert.equal(view.lastFrame() ?? "", normalizeTerminalText(value), value);
+    view.unmount();
+  }
+});
+
+test("FinalizedText preserves blank and trailing normalized lines exactly", () => {
+  const value = "plain\n\nlast\n";
+  const view = render(<FinalizedText value={value} />);
+  assert.equal(view.lastFrame() ?? "", value);
+  view.unmount();
+});
+
 test("Transcript formats only finalized assistant entries", () => {
   const view = render(
     <Transcript

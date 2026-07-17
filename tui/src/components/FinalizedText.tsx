@@ -1,5 +1,5 @@
 import React from "react";
-import { Box, Text } from "ink";
+import { Text } from "ink";
 import { THEME } from "../theme.js";
 import { normalizeTerminalText } from "./textFormat.js";
 
@@ -17,12 +17,30 @@ export interface FormattedLine {
   segments: FormattedSegment[];
 }
 
-const unsupportedMarkdown = /```|~~~|\*\*\*|__|~~|\\(?:\*\*|`)|!\[[^\]]*\]\([^)]*\)|\[[^\]]+\]\([^)]*\)|\[[^\]\n]+\]\[[^\]\n]*\]|<(?:https?:\/\/|mailto:)[^>\n]+>|(^|\n)\s*>|(^|\n)\s*\|.*\|\s*($|\n)|(^|\n)\s*(?:-{3,}|={3,})\s*($|\n)|(^|\n)\s*(?:\+|\d+\))\s+|(^|\n)[ \t]+(?:#{1,6}|[-*]|\d+\.)\s+/m;
-const unsupportedUnderscoreEmphasis = /(^|[\s(])_[^_\n]+_(?=$|[\s).,!?:;])/m;
+const unsupportedMarkdownPatterns = [
+  /```|~~~/,
+  /\*\*\*|__|~~/,
+  /\\[!-/:-@[-`{-~]/,
+  /<[^>\n]+>/,
+  /!\[[^\]\n]*\]\([^)]*\)/,
+  /\[[^\]\n]*\]\([^)]*\)/,
+  /\[[^\]\n]*\]\[[^\]\n]*\]/,
+  /^ {0,3}\[[^\]\n]+\]:/m,
+  /^(?: {4}|\t)/m,
+  /^\s*>/m,
+  /^\s*\|.*\|\s*$/m,
+  /^\s*(?:-{3,}|={3,})\s*$/m,
+  /^\s*(?:\+|\d+\))\s+/m,
+  /^[ \t]+(?:#{1,6}|[-*]|\d+\.)\s+/m
+];
+const unsupportedUnderscoreEmphasis = /(^|[^A-Za-z0-9])_[^_\n]+_(?=$|[^A-Za-z0-9])/m;
 
 export function parseFinalizedText(value: string): FormattedLine[] | null {
   const normalized = normalizeTerminalText(value);
-  if (unsupportedMarkdown.test(normalized) || unsupportedUnderscoreEmphasis.test(normalized)) {
+  if (
+    unsupportedMarkdownPatterns.some((pattern) => pattern.test(normalized)) ||
+    unsupportedUnderscoreEmphasis.test(normalized)
+  ) {
     return null;
   }
 
@@ -45,26 +63,30 @@ export function FinalizedText({ value }: { value: string }): React.JSX.Element {
   }
 
   return (
-    <Box flexDirection="column">
+    <Text>
       {lines.map((line, lineIndex) => (
-        <Text
+        <React.Fragment
           key={`${lineIndex}:${line.prefix}:${line.segments.map((segment) => segment.text).join("")}`}
-          bold={line.kind === "heading"}
-          color={line.kind === "heading" ? THEME.brandAccent : undefined}
         >
-          {line.prefix ? <Text color={THEME.muted}>{line.prefix}</Text> : null}
-          {line.segments.map((segment, segmentIndex) => (
-            <Text
-              key={`${segmentIndex}:${segment.kind}:${segment.text}`}
-              bold={segment.kind === "bold"}
-              color={segment.kind === "code" ? "cyan" : undefined}
-            >
-              {segment.text}
-            </Text>
-          ))}
-        </Text>
+          {lineIndex > 0 ? "\n" : null}
+          <Text
+            bold={line.kind === "heading"}
+            color={line.kind === "heading" ? THEME.brandAccent : undefined}
+          >
+            {line.prefix ? <Text color={THEME.muted}>{line.prefix}</Text> : null}
+            {line.segments.map((segment, segmentIndex) => (
+              <Text
+                key={`${segmentIndex}:${segment.kind}:${segment.text}`}
+                bold={segment.kind === "bold"}
+                color={segment.kind === "code" ? "cyan" : undefined}
+              >
+                {segment.text}
+              </Text>
+            ))}
+          </Text>
+        </React.Fragment>
       ))}
-    </Box>
+    </Text>
   );
 }
 

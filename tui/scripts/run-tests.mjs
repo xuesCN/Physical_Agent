@@ -32,7 +32,13 @@ if (files.length === 0) {
 const result = spawnSync(
   process.execPath,
   ["--import", "tsx", "--test", ...files],
-  { stdio: "inherit" }
+  {
+    stdio: "inherit",
+    // Ink intentionally suppresses dynamic frames when CI=true and debug=false,
+    // but the physical stdout contract exercises the interactive terminal path.
+    // Normalize only the test child so local and hosted runners cover that same path.
+    env: { ...process.env, CI: "false" }
+  }
 );
 
 if (result.error) {

@@ -57,7 +57,7 @@
 | R7 | 退役 action-draft wire/fence 与 proposal convenience payload | `9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功 |
 | R8 | 当前架构、文档、示例、OpenAPI、发布包与全量门禁收口 | implementation closure `c4da4f9`，fork Push run `29476327424`、PR run `29476329954`；evidence closure `33b062b`，fork Push run `29477199756`、PR run `29477202468`；均成功 |
 | R8.1 | review hardening：LOG mirror、Gate owner correlation、nested OpenAPI 与证据纠偏 | `6d53db3`、`4c9c6a4` + `c38e3ec`、`89f84c8`，review follow-up `241fe8d`、`fc282cf`、`b2c93bb`；implementation/local closure `8438cb7`，fork Push run `29553985591`、PR run `29553987358` 均 completed success，headSha 均为 `8438cb7bf5f356021cb602908552a069e8227bc4` |
-| T4 | MOCE TUI 品牌、单一 Static transcript、轻量 finalized text 与宽度/物理 stdout 验收 | `7a968d9`、`69615dd`、`ed7cc4a`、`4fb0f57`、`e4ea0d4`、`c9981f0`、`83d9efe`、`88f7b5d`；review follow-up `a3d1d22`、`d25c80e`、`7e391b3`、`e9f886f`、`1d758f5`；cross-platform CI follow-up `a8deeac`；docs closure `8e30a42`；首次 exact-head `038c1c6` 的 Push run `29629559330`、PR run `29629560483` 均因 Ink TUI 失败，Push 的 safety/frontend+wheel 与 PR 的 Python full/safety/frontend+wheel/Playwright 成功，Push 条件型 full/Playwright skipped；修复后 exact-head CI 待 push 后另行记录 |
+| T4 | MOCE TUI 品牌、单一 Static transcript、轻量 finalized text 与宽度/物理 stdout 验收 | `7a968d9`、`69615dd`、`ed7cc4a`、`4fb0f57`、`e4ea0d4`、`c9981f0`、`83d9efe`、`88f7b5d`；review follow-up `a3d1d22`、`d25c80e`、`7e391b3`、`e9f886f`、`1d758f5`；test/CI follow-up `a8deeac`、`647ce53`；docs closure `8e30a42`；`038c1c6` runs `29629559330`/`29629560483` 与 `7d380f9` runs `29630023334`/`29630024721` 均仅 Ink TUI 失败，已执行的其余 jobs 成功；Push 条件型 full/Playwright skipped；修复后 exact-head CI 待 push 后另行记录 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -414,7 +414,9 @@ rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Dr
 
 验收由 `88f7b5d` 覆盖默认/100/48/未知列宽、完整 App 重绘和 raw stdout 一次性打印；`d25c80e`、`e9f886f` 进一步把物理输出检查从固定 sleep/任意 write 改为 post-Enter 的 `View: status`、`View: chat`、`Snapshot refreshed.` 语义完成标记，并在 250ms delayed client 下证明不会抢跑。最终本地证据：TUI typecheck、render `30 passed`、scenario `16 passed`、API-only safety `1 passed`、full `84 passed`、build 全绿；Python safety `2 passed`，full `463 passed, 1 warning`；`git diff --check` clean；独立 spec/quality 终审 Critical=0、Important=0、Minor=0。Windows 可见启动把 `$Host.UI.RawUI.WindowTitle` 放在子进程脚本内并使用 `npm.cmd`，避免原截图中的外部 `WindowTitle` 命令错误。
 
-首次 push 暴露了一次真实跨平台门禁偏离：exact-head `038c1c6` 的 Push run `29629559330`、PR run `29629560483` 均只有已执行的 Ink TUI job 失败，full/compact 物理用例在 Ubuntu 上于 Enter 前超时；Push 中 safety 与 frontend+wheel 成功，条件型 Python full/Playwright skipped；PR 中 Python full/safety、frontend+wheel 与真实 Chromium Playwright 成功。根因不是产品输出，而是测试把“stdin 已被 Ink 消费”误等同于“键入字符已物理回显到 stdout”；后者在 Windows 可见、在 Linux `debug: false` custom stdin 下没有保证。`a8deeac` 给 `TestStdin.read()` 增加真实消费计数，发送命令正文后等待消费，再发送 Enter；Enter 后仍按新的 command-specific stdout 区间等待语义完成，不放松 Logo=1、`rows=10000`、delayed client 或 API call-count 断言。fresh scenario `16 passed`、full `84 passed`、typecheck/build 全绿，两个物理用例连续复跑 3 轮全绿；独立 review Critical=0、Important=0、Minor=0。
+首次 push 暴露了两层真实测试环境偏离。exact-head `038c1c6` 的 Push run `29629559330`、PR run `29629560483` 均只有已执行的 Ink TUI job 失败，full/compact 物理用例在 Enter 前超时；`a8deeac` 给 `TestStdin.read()` 增加真实消费计数，发送命令正文后等待消费，再发送 Enter。第二次 exact-head `7d380f9` 的 Push run `29630023334`、PR run `29630024721` 均推进到 Enter 后的 `View: status` 等待才失败；源码核对确认 Ink v5 在 `isInCi && debug:false` 时只即时写 Static，动态 frame 只保存为 `lastOutput` 并延迟到 unmount，因此 hosted runner 不可能在交互过程中从物理 stdout 看到完成标记。这两轮 Push 中 safety 与 frontend+wheel 成功，条件型 Python full/Playwright skipped；两轮 PR 中 Python full/safety、frontend+wheel 与真实 Chromium Playwright 成功。
+
+`647ce53` 因此只在 `tui/scripts/run-tests.mjs` 启动的 Node test child 中把 `CI` 规范化为 `false`，让 `isTTY=true`、`debug:false` 的物理 stdout test harness 在本地与 hosted runner 都走 Ink 非 CI 动态渲染分支；harness 仍是模拟流，typecheck、build、安装与产品 runtime 仍保留真实 CI 环境。Enter 后仍按新的 command-specific stdout 区间等待语义完成，不放松 Logo=1、`rows=10000`、delayed client 或 API call-count 断言。`CI=true npm.cmd test` 在修复前稳定 82/84、修复后 84/84，typecheck/build 全绿；独立复核 Critical=0、Important=0，Minor=1（未来 CI 专属行为须放入独立保留 `CI=true` 的子进程）。
 
 本轮没有修改 FastAPI、SQLite、watch、driver、SafetyGate、Action Board、审批或命令语义；TUI 仍是纯 HTTP API/SSE 客户端。Phase F 其余功能、VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 与自动 replan 继续冻结；远端 exact-head CI 只在 push 成功后追加真实 run 证据。
 
@@ -503,7 +505,8 @@ rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Dr
 80. **R6/R7 实际提交没有兑现计划承诺的 rollback units**（R8.1 review）：R6 在 `0bb7807` 合并 consumer migration 与 dead-code removal，R7 在 `9ba44af` 合并 fence 与 response-field removal，均不是 plan 所写的独立回退提交。历史不拆分、不 force rewrite；恢复整阶段时使用父提交/完整提交边界，若只恢复单一 compatibility surface，则必须先列出显式 file/hunk 选择，复跑 wire、consumer、projection 与安全契约后再提交，不能引用不存在的 split commit。
 81. **TUI finalized text 以整条 fail-closed 为边界**（T4）：只支持明确列出的 heading/list/bold/inline-code 子集；同一条消息一旦出现 fence、link、table、嵌套或畸形 token，就整条 literal 呈现，不能只格式化“看得懂”的局部。这样保住模型正文与旧 action-draft 的字符事实，也避免轻量 parser 冒充 CommonMark。
 82. **物理终端回归必须等待语义完成，不等待任意重绘**（T4 review）：Ink 的 input clear、busy 或其他异步状态都可能产生 stdout write；Logo 一次性断言必须在 Enter 后新的命令完成标记出现后再检查。测试 client 刻意延迟响应，防止固定 sleep、call-start count 或首个 write 造成假绿。
-83. **测试 stdin 消费与 stdout 回显必须解耦**（T4 exact-head CI）：custom stdin 的 `read()` 消费是跨平台可控的输入边界，键入字符是否物理回显则是终端/Ink 平台行为，不能作为发送 Enter 的前置条件。输入同步等待真实消费；结果同步仍等待 Enter 后命令专属语义标记，两者不能合并成任意 write 或固定 sleep。
+83. **测试 stdin 消费与 stdout 写入必须解耦**（T4 exact-head CI）：custom stdin 的 `read()` 消费是可控的输入边界，stdout 写入还受 Ink render mode 与 CI 策略影响，不能作为发送 Enter 的前置条件。输入同步等待真实消费；结果同步仍等待 Enter 后命令专属语义标记，两者不能合并成任意 write 或固定 sleep。
+84. **物理 stdout 契约必须显式选择 Ink 非 CI 动态渲染分支**（T4 exact-head CI）：Ink v5 的 `isInCi && debug:false` 分支刻意抑制动态 frame，只在 unmount 写末帧；它不等价于 `isTTY=true` test harness 的目标路径。该测试可只对子测试进程设 `CI=false`，但 typecheck/build/runtime 继续保留真实 CI；未来若要测 CI 专属输出，必须另开保留 `CI=true` 的独立子进程，不能复用非 CI 契约冒充覆盖。
 
 ## 4. 经验教训（流程侧）
 
@@ -540,6 +543,6 @@ rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Dr
 - **发布目录证据先核对构建配置与 Git 跟踪状态**（R8 review-fix 的教训）：目录名相似不等于发布面；Vite outDir、package-data、tracked resource 与 wheel members 必须指向同一目录，ignored `frontend/dist` 的“无差异”不能证明发布物新鲜。
 - **门禁顺序必须核对 commit ancestry 与 CI headSha**（R8.1 的教训）：文档表格顺序或后来成功的 run 不能证明前置门槛当时已经关闭；每个 hard gate 都要记录依赖 commit、实际祖先关系与对应 run 的 headSha，发现偏离就保留事实并说明安全影响。
 - **承诺的 rollback unit 必须落实为实际提交边界**（R8.1 的教训）：计划写“可单独回退”时，实现就应拆成对应 commits；若已合并提交，则不得事后把它描述成可独立 revert，必须记录父提交/完整提交或显式 file/hunk selective recovery，并在恢复后重跑相关契约。
-- **跨平台 TUI 测试不要把输入消费当成字符回显**（T4 CI 的教训）：Windows 本地 stdout 中可见键入正文不代表 Linux runner 也会回显；测试 harness 应分别暴露 stdin consumption 与 post-Enter semantic completion，前者控制输入顺序，后者证明命令完成。
+- **TUI 测试先区分模拟 TTY 与 Ink CI 输出策略**（T4 CI 的教训）：`CI=true + debug:false` 会让 Ink 抑制动态 frame，这不是 Windows/Linux 产品差异。测试 harness 应分别暴露 stdin consumption 与 post-Enter semantic completion；物理 stdout 契约只在显式非 CI test child 中运行，CI 专属输出另设独立用例。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

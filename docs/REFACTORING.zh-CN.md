@@ -57,7 +57,7 @@
 | R7 | 退役 action-draft wire/fence 与 proposal convenience payload | `9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功 |
 | R8 | 当前架构、文档、示例、OpenAPI、发布包与全量门禁收口 | implementation closure `c4da4f9`，fork Push run `29476327424`、PR run `29476329954`；evidence closure `33b062b`，fork Push run `29477199756`、PR run `29477202468`；均成功 |
 | R8.1 | review hardening：LOG mirror、Gate owner correlation、nested OpenAPI 与证据纠偏 | `6d53db3`、`4c9c6a4` + `c38e3ec`、`89f84c8`，review follow-up `241fe8d`、`fc282cf`、`b2c93bb`；implementation/local closure `8438cb7`，fork Push run `29553985591`、PR run `29553987358` 均 completed success，headSha 均为 `8438cb7bf5f356021cb602908552a069e8227bc4` |
-| T4 | MOCE TUI 品牌、单一 Static transcript、轻量 finalized text 与宽度/物理 stdout 验收 | `7a968d9`、`69615dd`、`ed7cc4a`、`4fb0f57`、`e4ea0d4`、`c9981f0`、`83d9efe`、`88f7b5d`；review follow-up `a3d1d22`、`d25c80e`、`7e391b3`、`e9f886f`；远端 exact-head CI 待 push 后另行记录 |
+| T4 | MOCE TUI 品牌、单一 Static transcript、轻量 finalized text 与宽度/物理 stdout 验收 | `7a968d9`、`69615dd`、`ed7cc4a`、`4fb0f57`、`e4ea0d4`、`c9981f0`、`83d9efe`、`88f7b5d`；review follow-up `a3d1d22`、`d25c80e`、`7e391b3`、`e9f886f`、`1d758f5`；docs closure `8e30a42`；远端 exact-head CI 待 push 后另行记录 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -410,7 +410,7 @@ rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Dr
 
 ### T4：MOCE TUI 品牌与终端视觉刷新
 
-2026-07-17 用户在真实 Windows Terminal 体验后明确重启 TUI 展示条目，并批准“启动大 Logo + 常驻紧凑标题栏”的 MOCE 暗蓝方案。实现以 `7a968d9` 建立响应式 Banner 与 theme token，以 `69615dd` 把 Banner 和 finalized transcript 收敛进唯一持久 `Static` feed，再由 `83d9efe` 统一 StatusBar、SectionTitle、角色轨道与 round-border 输入框。`ed7cc4a` 引入 finalized assistant 的 heading/list/bold/inline-code 轻量格式化，后续 `4fb0f57`、`e4ea0d4`、`c9981f0`、`a3d1d22`、`7e391b3` 按逐条 RED→GREEN review 把换行、嵌套下划线、delimiter run、含/不含外层 pipe 的 GFM table 全部收紧为整条 literal fallback。streaming partial、其他角色和旧 action-draft 文本始终不进入格式化器。
+2026-07-17 用户在真实 Windows Terminal 体验后明确重启 TUI 展示条目，并批准“启动大 Logo + 常驻紧凑标题栏”的 MOCE 暗蓝方案。实现以 `7a968d9` 建立响应式 Banner 与 theme token，以 `69615dd` 把 Banner 和 finalized transcript 收敛进唯一持久 `Static` feed，再由 `83d9efe` 统一 StatusBar、SectionTitle、角色轨道与 round-border 输入框。`ed7cc4a` 引入 finalized assistant 的 heading/list/bold/inline-code 轻量格式化，后续 `4fb0f57`、`e4ea0d4`、`c9981f0`、`a3d1d22`、`7e391b3`、`1d758f5` 按逐条 RED→GREEN review 把换行、嵌套下划线、delimiter run、含/不含外层 pipe 的 GFM table 与嵌套 label 的 link/image 全部收紧为整条 literal fallback。streaming partial、其他角色和旧 action-draft 文本始终不进入格式化器。
 
 验收由 `88f7b5d` 覆盖默认/100/48/未知列宽、完整 App 重绘和 raw stdout 一次性打印；`d25c80e`、`e9f886f` 进一步把物理输出检查从固定 sleep/任意 write 改为 post-Enter 的 `View: status`、`View: chat`、`Snapshot refreshed.` 语义完成标记，并在 250ms delayed client 下证明不会抢跑。最终本地证据：TUI typecheck、render `30 passed`、scenario `16 passed`、API-only safety `1 passed`、full `84 passed`、build 全绿；Python safety `2 passed`，full `463 passed, 1 warning`；`git diff --check` clean；独立 spec/quality 终审 Critical=0、Important=0、Minor=0。Windows 可见启动把 `$Host.UI.RawUI.WindowTitle` 放在子进程脚本内并使用 `npm.cmd`，避免原截图中的外部 `WindowTitle` 命令错误。
 

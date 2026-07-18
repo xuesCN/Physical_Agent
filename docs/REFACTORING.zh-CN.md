@@ -1,7 +1,7 @@
 # 重构过程
 
 > 本文浓缩自原 33 份 session-handoff 与 22 份 brief（已删除，git 历史可查）。姊妹文档：`SPEC.zh-CN.md`（目标与待办矩阵）。
-> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-17。
+> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-18。
 
 ## 0. 基线与纪律
 
@@ -57,6 +57,7 @@
 | R7 | 退役 action-draft wire/fence 与 proposal convenience payload | `9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功 |
 | R8 | 当前架构、文档、示例、OpenAPI、发布包与全量门禁收口 | implementation closure `c4da4f9`，fork Push run `29476327424`、PR run `29476329954`；evidence closure `33b062b`，fork Push run `29477199756`、PR run `29477202468`；均成功 |
 | R8.1 | review hardening：LOG mirror、Gate owner correlation、nested OpenAPI 与证据纠偏 | `6d53db3`、`4c9c6a4` + `c38e3ec`、`89f84c8`，review follow-up `241fe8d`、`fc282cf`、`b2c93bb`；implementation/local closure `8438cb7`，fork Push run `29553985591`、PR run `29553987358` 均 completed success，headSha 均为 `8438cb7bf5f356021cb602908552a069e8227bc4` |
+| T4 | MOCE TUI 品牌、单一 Static transcript、轻量 finalized text 与宽度/物理 stdout 验收 | `7a968d9`、`69615dd`、`ed7cc4a`、`4fb0f57`、`e4ea0d4`、`c9981f0`、`83d9efe`、`88f7b5d`；review follow-up `a3d1d22`、`d25c80e`、`7e391b3`、`e9f886f`；远端 exact-head CI 待 push 后另行记录 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -407,6 +408,14 @@ rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Dr
 
 本轮已同步修复 spec/plan/evidence matrix/PLAYBOOK 的历史口径，并已更新 draft PR #1 title/body 到 R8.1 范围；PR 保持 OPEN + draft。phase-A closure commit 的 exact-head Push/PR CI 已成功，phase-B 只记录既有远端证据，不预写自身 hash/run。R8.1 不解冻 VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 或自动 replan；只有出现可复现的真实需求并形成显式 SPEC 决策后，才可重启对应条目。
 
+### T4：MOCE TUI 品牌与终端视觉刷新
+
+2026-07-17 用户在真实 Windows Terminal 体验后明确重启 TUI 展示条目，并批准“启动大 Logo + 常驻紧凑标题栏”的 MOCE 暗蓝方案。实现以 `7a968d9` 建立响应式 Banner 与 theme token，以 `69615dd` 把 Banner 和 finalized transcript 收敛进唯一持久 `Static` feed，再由 `83d9efe` 统一 StatusBar、SectionTitle、角色轨道与 round-border 输入框。`ed7cc4a` 引入 finalized assistant 的 heading/list/bold/inline-code 轻量格式化，后续 `4fb0f57`、`e4ea0d4`、`c9981f0`、`a3d1d22`、`7e391b3` 按逐条 RED→GREEN review 把换行、嵌套下划线、delimiter run、含/不含外层 pipe 的 GFM table 全部收紧为整条 literal fallback。streaming partial、其他角色和旧 action-draft 文本始终不进入格式化器。
+
+验收由 `88f7b5d` 覆盖默认/100/48/未知列宽、完整 App 重绘和 raw stdout 一次性打印；`d25c80e`、`e9f886f` 进一步把物理输出检查从固定 sleep/任意 write 改为 post-Enter 的 `View: status`、`View: chat`、`Snapshot refreshed.` 语义完成标记，并在 250ms delayed client 下证明不会抢跑。最终本地证据：TUI typecheck、render `30 passed`、scenario `16 passed`、API-only safety `1 passed`、full `84 passed`、build 全绿；Python safety `2 passed`，full `463 passed, 1 warning`；`git diff --check` clean；独立 spec/quality 终审 Critical=0、Important=0、Minor=0。Windows 可见启动把 `$Host.UI.RawUI.WindowTitle` 放在子进程脚本内并使用 `npm.cmd`，避免原截图中的外部 `WindowTitle` 命令错误。
+
+本轮没有修改 FastAPI、SQLite、watch、driver、SafetyGate、Action Board、审批或命令语义；TUI 仍是纯 HTTP API/SSE 客户端。Phase F 其余功能、VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 与自动 replan 继续冻结；远端 exact-head CI 只在 push 成功后追加真实 run 证据。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -490,6 +499,8 @@ rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Dr
 78. **前端发布证据以 tracked package resource 为准**（R8 review-fix）：Vite 唯一正式 outDir 是 `physical_agent/dashboard/dist`，发布核验只认该 tracked 目录与 wheel members；ignored `frontend/dist` 不进入发布判定。
 79. **R5 browser hard gate 与 R6 的历史顺序发生偏离**（R8.1 review）：R6 `0bb7807` 先于 R5 real-Chromium closure `d1ca53c3`；当时 compatibility fallback 仍保留且 R7 保持 No-Go，所以不存在当前 compatibility defect，R7 最终也在 R5/R6 门禁均关闭后才执行，但 plan 声明的 hard-gate 顺序仍发生偏离。这里如实记录 commit ancestry 与 CI head，不重写历史。
 80. **R6/R7 实际提交没有兑现计划承诺的 rollback units**（R8.1 review）：R6 在 `0bb7807` 合并 consumer migration 与 dead-code removal，R7 在 `9ba44af` 合并 fence 与 response-field removal，均不是 plan 所写的独立回退提交。历史不拆分、不 force rewrite；恢复整阶段时使用父提交/完整提交边界，若只恢复单一 compatibility surface，则必须先列出显式 file/hunk 选择，复跑 wire、consumer、projection 与安全契约后再提交，不能引用不存在的 split commit。
+81. **TUI finalized text 以整条 fail-closed 为边界**（T4）：只支持明确列出的 heading/list/bold/inline-code 子集；同一条消息一旦出现 fence、link、table、嵌套或畸形 token，就整条 literal 呈现，不能只格式化“看得懂”的局部。这样保住模型正文与旧 action-draft 的字符事实，也避免轻量 parser 冒充 CommonMark。
+82. **物理终端回归必须等待语义完成，不等待任意重绘**（T4 review）：Ink 的 input clear、busy 或其他异步状态都可能产生 stdout write；Logo 一次性断言必须在 Enter 后新的命令完成标记出现后再检查。测试 client 刻意延迟响应，防止固定 sleep、call-start count 或首个 write 造成假绿。
 
 ## 4. 经验教训（流程侧）
 

@@ -883,3 +883,25 @@ def test_moce_minimal_workflow_does_not_recommend_world_writable_serial_permissi
     offenders = [line for line in command_lines if world_writable_chmod.search(line)]
 
     assert offenders == []
+
+
+def test_t4_moce_tui_visual_refresh_closure_is_consistent() -> None:
+    spec = _read("docs/SPEC.zh-CN.md")
+    playbook = _read("docs/PLAYBOOK.zh-CN.md")
+    refactoring = _read("docs/REFACTORING.zh-CN.md")
+    design = _read(
+        "docs/superpowers/specs/2026-07-17-tui-moce-visual-refresh-design.md"
+    )
+
+    spec_t4_rows = [
+        line
+        for line in _section(spec, "## 4. 待办矩阵").splitlines()
+        if line.startswith("| T4 |")
+    ]
+    assert len(spec_t4_rows) == 1
+    assert "✅ 2026-07-17" in spec_t4_rows[0]
+    assert "🟡" not in spec_t4_rows[0]
+    assert "**实现口径（2026-07-17 T4）**" in playbook
+    assert "### T4：MOCE TUI 品牌与终端视觉刷新" in refactoring
+    assert "状态：已完成并通过本地验收" in design
+    assert not (ROOT / "docs/brief-t4-tui-moce-visual-refresh.zh-CN.md").exists()

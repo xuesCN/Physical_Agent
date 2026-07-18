@@ -193,6 +193,10 @@
 
 **验收**：先 RED 后 GREEN；覆盖宽/窄/未知列宽 Banner、单一 Static feed 且只打印一次、48 列完整 App 无固定超宽行、紧凑标题栏、角色轨道、轻量 finalized Markdown 正反例、输入框与既有命令不变；完整 `npm run typecheck && npm test && npm run build`、scenario matrix 与 TUI 安全扫描全绿；真实 Windows Terminal 确认暗蓝 Logo 与小字强调色可读、无折行/重复 Logo，并用文档化命令手工确认无外部启动红字。API、watch、driver、SafetyGate、Action Board 与审批语义零改动。
 
+**实现口径（2026-07-17 T4）**：新增集中式 MOCE theme token，启动 Banner 在有限且不少于 58 列时显示暗蓝 `#1D4ED8` 块字，窄屏、未知或非有限宽度统一使用 compact 标识，小字强调使用可读性更高的 `#3B82F6`。Banner 与 finalized transcript 共用唯一持久 `Static` feed；Logo 是首个稳定 item，health/SSE、`/view` 与 `/refresh` 重绘不会再次物理打印。角色轨道统一为 `you ›`、`moce │`、`draft ◇`，StatusBar、SectionTitle 与 round-border CommandInput 共用视觉层级。只有 finalized assistant 文本进入 heading/list/bold/inline-code 轻量格式化；streaming、其他角色、fence/link/table、嵌套或畸形标记整条保真降级，不引入 Markdown runtime dependency。TUI 继续只经 HTTP API/SSE，不新增命令、状态写入或硬件控制路径。
+
+**验证（2026-07-18 最终本地门禁）**：`npm.cmd run typecheck`、render `30 passed`、scenario `16 passed`、API-only safety `1 passed`、`npm.cmd test` `84 passed`、`npm.cmd run build` 全绿；100/48/未知列宽与 `debug: false`、`rows=10000` 的 raw stdout 验证 full/compact Logo 均只物理打印一次，命令验收按 post-Enter 的 `View: status`、`View: chat`、`Snapshot refreshed.` 语义标记有界同步。Python safety `2 passed`，full `463 passed, 1 warning`；`git diff --check` clean；独立 spec/quality 终审 Critical=0、Important=0、Minor=0。Windows 启动使用子进程内 `$Host.UI.RawUI.WindowTitle` 与 `npm.cmd`，不再把成员赋值误当外部 PowerShell 命令。远端 exact-head CI 证据待 push 后另行记录。
+
 ## C4 i18n / E3 视觉打磨
 
 **思路**：C4：antd `ConfigProvider locale` + 文案抽到 `locales/{zh,en}.ts` 键值表（不上 i18next，工程量不值），默认跟浏览器语言，切换存 localStorage。E3：暗色模式用 antd `theme.darkAlgorithm` token 切换 + localStorage；首次引导用 antd Tour 组件串 setup→watch→demo 三步。

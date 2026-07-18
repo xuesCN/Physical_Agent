@@ -22,9 +22,6 @@ const unsupportedMarkdownPatterns = [
   /\*\*\*|__|~~/,
   /\\[!-/:-@[-`{-~]/,
   /<[^>\n]+>/,
-  /!\[[^\]\n]*\]\([^)]*\)/,
-  /\[[^\]\n]*\]\([^)]*\)/,
-  /\[[^\]\n]*\]\[[^\]\n]*\]/,
   /^ {0,3}\[[^\]\n]+\]:/m,
   /^(?: {4}|\t)/m,
   /^\s*>/m,
@@ -39,6 +36,7 @@ const unsupportedUnderscoreEmphasis = /(^|[^A-Za-z0-9])_(?=\S)|\S_(?=$|[^A-Za-z0
 export function parseFinalizedText(value: string): FormattedLine[] | null {
   const normalized = normalizeTerminalText(value);
   if (
+    containsUnsupportedLinkMarkup(normalized) ||
     unsupportedMarkdownPatterns.some((pattern) => pattern.test(normalized)) ||
     unsupportedUnderscoreEmphasis.test(normalized)
   ) {
@@ -54,6 +52,26 @@ export function parseFinalizedText(value: string): FormattedLine[] | null {
     lines.push(formatted);
   }
   return lines;
+}
+
+function containsUnsupportedLinkMarkup(value: string): boolean {
+  let bracketDepth = 0;
+  for (let cursor = 0; cursor < value.length; cursor += 1) {
+    if (value[cursor] === "[") {
+      bracketDepth += 1;
+      continue;
+    }
+    if (value[cursor] !== "]" || bracketDepth === 0) {
+      continue;
+    }
+
+    bracketDepth -= 1;
+    const destinationStart = value[cursor + 1];
+    if (destinationStart === "(" || destinationStart === "[") {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function FinalizedText({ value }: { value: string }): React.JSX.Element {

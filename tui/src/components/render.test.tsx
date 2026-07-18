@@ -104,6 +104,8 @@ test("FinalizedText preserves unsupported malformed or nested Markdown literally
     ">quoted block",
     "## Heading ##",
     "[link](https://example.com)",
+    "[outer [**bold**]](https://example.com)",
+    "![outer [**bold**]](image.png)",
     "<https://example.com>",
     "```action-draft\n{\"actions\":[]}\n```"
   ];

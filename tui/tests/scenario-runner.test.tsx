@@ -333,9 +333,9 @@ async function submitPhysicalCommand(
   input: string,
   completionText: string
 ): Promise<void> {
-  const writeCountBeforeInput = view.physicalWriteCount();
+  const consumedChunksBeforeInput = view.stdin.consumedChunkCount();
   view.stdin.write(input);
-  await waitForPhysicalTextAfter(view, writeCountBeforeInput, input);
+  await waitForStdinConsumption(view.stdin, consumedChunksBeforeInput);
   const writeCountBeforeEnter = view.physicalWriteCount();
   view.stdin.write("\r");
   await waitForPhysicalTextAfter(view, writeCountBeforeEnter, completionText);
@@ -431,6 +431,24 @@ async function waitForPhysicalTextAfter(
   assert.fail(
     `Timed out waiting for physical stdout after write ${previousWriteCount} to include ${expected}; ` +
       `got ${normalizeOutput(view.frames.slice(previousWriteCount).join(""))}`
+  );
+}
+
+async function waitForStdinConsumption(
+  stdin: TestStdin,
+  previousConsumedChunks: number,
+  timeoutMs = 2500
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    await delay(10);
+    if (stdin.consumedChunkCount() > previousConsumedChunks) {
+      return;
+    }
+  }
+  assert.fail(
+    `Timed out waiting for stdin consumption to exceed ${previousConsumedChunks}; ` +
+      `got ${stdin.consumedChunkCount()}`
   );
 }
 
@@ -852,6 +870,7 @@ class TestStdout extends EventEmitter {
 class TestStdin extends EventEmitter {
   isTTY = true;
   private readonly chunks: string[] = [];
+  private consumedChunks = 0;
 
   write = (value: string): boolean => {
     this.chunks.push(value);
@@ -860,7 +879,16 @@ class TestStdin extends EventEmitter {
   };
 
   read(): string | null {
-    return this.chunks.shift() ?? null;
+    const chunk = this.chunks.shift();
+    if (chunk === undefined) {
+      return null;
+    }
+    this.consumedChunks += 1;
+    return chunk;
+  }
+
+  consumedChunkCount(): number {
+    return this.consumedChunks;
   }
 
   setEncoding(): void {

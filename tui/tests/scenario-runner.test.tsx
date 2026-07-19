@@ -211,7 +211,7 @@ test("display-width guard counts emoji and CJK terminal cells", () => {
 test("48-column finalized and streaming chat use display-safe hanging indents", () => {
   const content = "Hello! 👋 I can see the arm is idle on the table, with a red block and a tray visible nearby. Please tell me what to do next.";
   const finalized = renderPhysicalTui(
-    <Transcript columns={48} entries={[{ id: "a1", role: "assistant", content }]} />,
+    <Transcript columns={48} entries={[{ kind: "chat", id: "a1", role: "assistant", content }]} />,
     48
   );
   const streaming = renderPhysicalTui(

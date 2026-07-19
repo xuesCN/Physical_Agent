@@ -63,12 +63,13 @@ export function collectActionActivityEntries(
     }
     const outcome = terminalOutcome(state, action);
     if (!outcome) continue;
+    const actionSnapshot = structuredClone(action);
     tracker.active.delete(action.id);
     tracker.closed.add(action.id);
     additions.push({
       kind: "action",
       id: `action-${tracker.generation}-${action.id}`,
-      action,
+      action: actionSnapshot,
       outcome
     });
   }

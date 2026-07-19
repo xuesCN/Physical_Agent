@@ -6,7 +6,7 @@ import {
   resetActionActivityTracker
 } from "./activity.js";
 import { formatActionInvocation } from "./formatters/action.js";
-import type { AgentState } from "./types.js";
+import type { ActionItem, AgentState } from "./types.js";
 
 const pendingState = stateWith({
   pending: [{ id: "act_1", robot: "arm_1", capability: "move_to", params: { z: 0, x: 120, y: 45 }, metadata: {} }]
@@ -125,6 +125,34 @@ test("an observed active action emits completed exactly once", () => {
   });
   assert.deepEqual(collectActionActivityEntries(completed, tracker).map((item) => item.outcome), ["done"]);
   assert.deepEqual(collectActionActivityEntries(completed, tracker), []);
+});
+
+test("emitted action activity owns an immutable nested action snapshot", () => {
+  const tracker = createActionActivityTracker();
+  collectActionActivityEntries(pendingState, tracker);
+  const sourceAction: ActionItem = {
+    id: "act_1",
+    robot: "arm_1",
+    capability: "move_to",
+    params: { target: { pose: [120, 45, 0] } },
+    metadata: { approval: { required: true, status: "approved" } },
+    depends_on: ["act_parent"]
+  };
+  const entry = collectActionActivityEntries(stateWith({ completed: [sourceAction] }), tracker)[0];
+
+  ((sourceAction.params?.target as { pose: number[] }).pose)[0] = 999;
+  ((sourceAction.metadata?.approval as Record<string, unknown>)).status = "mutated";
+  sourceAction.depends_on?.push("act_late");
+
+  assert.deepEqual(entry.action, {
+    id: "act_1",
+    robot: "arm_1",
+    capability: "move_to",
+    params: { target: { pose: [120, 45, 0] } },
+    metadata: { approval: { required: true, status: "approved" } },
+    depends_on: ["act_parent"],
+    status: "completed"
+  });
 });
 
 test("cancelled ignores Gate and expectation feedback, then waits for action-result", () => {

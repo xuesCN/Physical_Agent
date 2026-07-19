@@ -1,11 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useApp, useStdout } from "ink";
+import {
+  collectActionActivityEntries,
+  createActionActivityTracker,
+  resetActionActivityTracker
+} from "./activity.js";
 import { ApiClient } from "./api/client.js";
 import { COMMAND_HELP, parseCommand } from "./commands/parser.js";
 import { ActionsPanel } from "./components/ActionsPanel.js";
 import { ChatPanel } from "./components/ChatPanel.js";
 import { CommandInput } from "./components/CommandInput.js";
 import { ConfigPanel } from "./components/ConfigPanel.js";
+import { ExecutionApprovalNotice } from "./components/ExecutionApprovalNotice.js";
 import { RobotDetailPanel } from "./components/RobotDetailPanel.js";
 import { RobotsPanel } from "./components/RobotsPanel.js";
 import { StatusBar } from "./components/StatusBar.js";
@@ -90,6 +96,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
     hasApiKey: null
   });
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const actionActivityTrackerRef = useRef(createActionActivityTracker());
   const transcriptCounterRef = useRef(0);
   const seenChatKeysRef = useRef<Set<string>>(new Set());
   const pendingLocalChatRef = useRef<Array<{ role: string; content: string }>>([]);
@@ -182,6 +189,14 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
     }
   }, [messages]);
 
+  useEffect(() => {
+    if (!state) return;
+    const additions = collectActionActivityEntries(state, actionActivityTrackerRef.current);
+    if (additions.length > 0) {
+      setTranscriptEntries((previous) => [...previous, ...additions]);
+    }
+  }, [state]);
+
   const refreshLlmStatus = useCallback(async () => {
     setLlmStatus((previous) => ({ ...previous, state: "checking", message: undefined }));
     try {
@@ -242,6 +257,9 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
         const nextExecutor = executorFromEvent(event);
         if (nextExecutor) {
           setExecutor(nextExecutor);
+        }
+        if (event.type === "workspace_reset") {
+          resetActionActivityTracker(actionActivityTrackerRef.current);
         }
         const applyResult = applyEvent(event, setState);
         if (applyResult === "summary" && shouldRefreshFullStateFromEvent(event)) {
@@ -347,6 +365,9 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
         setNotice(response.message);
       } else if (command.type === "reset") {
         const response = await client.resetWorkspace(command.confirm);
+        if (response.ok) {
+          resetActionActivityTracker(actionActivityTrackerRef.current);
+        }
         setState(response.state);
         setNotice(response.message);
       } else if (command.type === "chat") {
@@ -449,9 +470,9 @@ function renderActiveView(props: ActiveViewProps) {
             hasTranscript={props.transcriptEntries.length > 0}
             streamingText={props.streamingText}
             streaming={props.streaming}
-            error={props.error}
+            error={props.error ? `API unavailable: ${props.error}` : null}
           />
-          <ActionsPanel state={props.state} error={props.error} />
+          <ExecutionApprovalNotice state={props.state} />
         </>
       );
   }

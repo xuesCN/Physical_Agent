@@ -4,11 +4,12 @@ import path from "node:path";
 import test from "node:test";
 import { EventEmitter } from "node:events";
 import React from "react";
-import { render as inkRender } from "ink";
+import { Box, render as inkRender } from "ink";
 import stringWidth from "string-width";
 import { App, type TuiClient } from "../src/App.js";
 import { FULL_MOCE_LOGO } from "../src/components/BrandBanner.js";
 import { ChatPanel } from "../src/components/ChatPanel.js";
+import { ExecutionApprovalNotice } from "../src/components/ExecutionApprovalNotice.js";
 import { Transcript } from "../src/components/Transcript.js";
 import type {
   AgentOutput,
@@ -53,6 +54,7 @@ interface ScenarioStep {
   input: string;
   covers?: string[];
   expectOutput?: string[];
+  expectLatestOutput?: string[];
   rejectOutput?: string[];
   maxLineWidth?: number;
   expectCalls?: Partial<Record<CallName, number>>;
@@ -71,6 +73,7 @@ type ScenarioResponse =
       error: string;
     }
   | {
+      ok?: boolean;
       message?: string;
       state?: string;
       config?: string;
@@ -230,6 +233,130 @@ test("48-column finalized and streaming chat use display-safe hanging indents", 
   }
 });
 
+test("action activity and execution approval stay display-safe at finite widths", () => {
+  const actionEntry = {
+    kind: "action" as const,
+    id: "action-0-act_1",
+    action: {
+      id: "act_1",
+      robot: "arm_1",
+      capability: "move_to",
+      params: { x: 120, y: 45, z: 0 }
+    },
+    outcome: "done" as const
+  };
+  const approvalState: AgentState = {
+    ready: true,
+    actions: {
+      pending: [
+        {
+          id: "act_1",
+          robot: "arm_1",
+          capability: "move_to",
+          params: { x: 120, y: 45, z: 0 },
+          metadata: { approval: { required: true, status: "pending" } }
+        }
+      ]
+    }
+  };
+  const invocation = "arm_1.move_to(x=120, y=45, z=0)";
+
+  for (const columns of [24, 48, 100]) {
+    const action = renderPhysicalTui(
+      <Box width={columns} flexDirection="column">
+        <Transcript columns={columns} entries={[actionEntry]} />
+      </Box>,
+      columns
+    );
+    const approval = renderPhysicalTui(
+      <Box width={columns} flexDirection="column">
+        <ExecutionApprovalNotice state={approvalState} />
+      </Box>,
+      columns
+    );
+
+    try {
+      assertMaxLineWidth(action, columns);
+      assertMaxLineWidth(approval, columns);
+      assertHangingBody(action.physicalOutput(), "⏺", `${invocation} ⎿ done`, true);
+      assertLogicalText(approval.physicalOutput(), [
+        "Safety Gate · Execution approval",
+        "1/1",
+        invocation,
+        "等待人工批准",
+        "批准后仍需 watch SafetyGate 校验",
+        "/approve act_1",
+        "/reject act_1 <reason>"
+      ]);
+    } finally {
+      action.unmount();
+      approval.unmount();
+    }
+  }
+});
+
+test("unknown width keeps compact branding and action approval content", () => {
+  const state: AgentState = {
+    ready: true,
+    actions: {
+      pending: [
+        {
+          id: "act_1",
+          robot: "arm_1",
+          capability: "move_to",
+          params: { x: 120, y: 45, z: 0 },
+          metadata: { approval: { required: true, status: "pending" } }
+        }
+      ]
+    }
+  };
+  const action = renderPhysicalTui(
+    <Box width="100%" flexDirection="column">
+      <Transcript
+        columns={undefined}
+        entries={[
+          {
+            kind: "action",
+            id: "action-0-act_1",
+            action: {
+              id: "act_1",
+              robot: "arm_1",
+              capability: "move_to",
+              params: { x: 120, y: 45, z: 0 }
+            },
+            outcome: "done"
+          }
+        ]}
+      />
+    </Box>,
+    null
+  );
+  const approval = renderPhysicalTui(
+    <Box width="100%" flexDirection="column">
+      <ExecutionApprovalNotice state={state} />
+    </Box>,
+    null
+  );
+
+  try {
+    assertPhysicalOutputIncludes(action, "MOCE · PHYSICAL AGENT", "unknown width banner");
+    assertLogicalText(action.physicalOutput(), ["arm_1.move_to(x=120, y=45, z=0)", "⎿ done"]);
+    assertLogicalText(approval.physicalOutput(), [
+      "Safety Gate · Execution approval",
+      "1/1",
+      "arm_1.move_to(x=120, y=45, z=0)",
+      "act_1",
+      "等待人工批准",
+      "批准后仍需 watch SafetyGate 校验",
+      "/approve act_1",
+      "/reject act_1 <reason>"
+    ]);
+  } finally {
+    action.unmount();
+    approval.unmount();
+  }
+});
+
 test("complete App selects branding at default, 100, 48, and unknown columns", async () => {
   const selections: string[] = [];
 
@@ -317,6 +444,159 @@ for (const { label, columns, marker } of [
   });
 }
 
+test("complete App physically prints terminal action once across mutation and refresh", async () => {
+  const invocation = "arm_1.move_to(x=120, y=45, z=0)";
+  const client = new ScenarioClient({
+    name: "physical terminal action rerender",
+    useSse: false,
+    initialState: "actionsReady",
+    initialConfig: "default",
+    responses: {
+      submitTask: [
+        { message: "Action act_done pending.", state: "beforeCompleted" },
+        { message: "Action act_done completed.", state: "afterCompleted" }
+      ]
+    },
+    steps: []
+  });
+  const view = renderPhysicalTui(
+    <App apiBase="http://mock.local" pollIntervalMs={60_000} useSse={false} client={client} />,
+    100
+  );
+
+  try {
+    await waitForCallCounts(client, {
+      health: 1,
+      state: 1,
+      config: 1,
+      llmSettings: 1,
+      testLlmSettings: 1
+    });
+    await waitForOutput(view, ["/approve act_001"]);
+    await waitForPhysicalSettled(view);
+
+    await submitPhysicalCommand(view, "/task stage completed move", "Action act_done pending.");
+    assertPhysicalMarkerCount(view, invocation, 0, "pending action");
+
+    await submitPhysicalCommand(view, "/task record completed move", "Action act_done completed.");
+    await waitForOutput(view, ["Server recorded completion.", invocation, "⎿ done"]);
+    const beforeRefresh = normalizeOutput(view.physicalOutput());
+    assert.equal(
+      beforeRefresh.indexOf("Server recorded completion.") < beforeRefresh.indexOf(invocation),
+      true,
+      "server chat must physically append before terminal action from the same snapshot"
+    );
+
+    await submitPhysicalCommand(view, "/refresh", "Snapshot refreshed.");
+    await waitForCallCounts(client, {
+      health: 2,
+      state: 2,
+      config: 2,
+      llmSettings: 2,
+      testLlmSettings: 2
+    });
+    await waitForPhysicalSettled(view);
+    assertPhysicalMarkerCount(view, invocation, 1, "terminal action rerender");
+  } finally {
+    view.unmount();
+  }
+});
+
+test("only a successful reset response opens a new action activity generation", async () => {
+  const invocation = "arm_1.move_to(x=120, y=45, z=0)";
+  const client = new ScenarioClient({
+    name: "reset response action generation",
+    useSse: false,
+    initialState: "actionsReady",
+    initialConfig: "default",
+    responses: {
+      submitTask: [
+        { message: "Cycle one pending.", state: "beforeCompleted" },
+        { message: "Cycle one completed.", state: "afterCompleted" },
+        { message: "Refused cycle pending.", state: "beforeCompleted" },
+        { message: "Refused cycle completed.", state: "afterCompleted" },
+        { message: "Cycle two pending.", state: "beforeCompleted" },
+        { message: "Cycle two completed.", state: "afterCompleted" }
+      ],
+      resetWorkspace: [
+        { ok: false, message: "Workspace reset refused.", state: "afterReset" },
+        { ok: true, message: "Workspace reset.", state: "afterReset" }
+      ]
+    },
+    steps: []
+  });
+  const view = renderPhysicalTui(
+    <App apiBase="http://mock.local" pollIntervalMs={60_000} useSse={false} client={client} />,
+    100
+  );
+
+  try {
+    await waitForOutput(view, ["/approve act_001"]);
+    await waitForPhysicalSettled(view);
+    await submitPhysicalCommand(view, "/task cycle-one-pending", "Cycle one pending.");
+    await submitPhysicalCommand(view, "/task cycle-one-completed", "Cycle one completed.");
+    await waitForPhysicalMarkerCount(view, invocation, 1, "first generation");
+
+    await submitPhysicalCommand(view, "/reset false", "Workspace reset refused.");
+    await submitPhysicalCommand(view, "/task refused-cycle-pending", "Refused cycle pending.");
+    await submitPhysicalCommand(view, "/task refused-cycle-completed", "Refused cycle completed.");
+    await waitForPhysicalSettled(view);
+    assertPhysicalMarkerCount(view, invocation, 1, "refused reset");
+
+    await submitPhysicalCommand(view, "/reset true", "Workspace reset.");
+    await submitPhysicalCommand(view, "/task cycle-two-pending", "Cycle two pending.");
+    await submitPhysicalCommand(view, "/task cycle-two-completed", "Cycle two completed.");
+    await waitForPhysicalMarkerCount(view, invocation, 2, "successful reset");
+    assert.equal(client.callCount("resetWorkspace"), 2);
+  } finally {
+    view.unmount();
+  }
+});
+
+test("workspace_reset SSE resets the tracker and duplicate state sources append once", async () => {
+  const invocation = "arm_1.move_to(x=120, y=45, z=0)";
+  const client = new ScenarioClient({
+    name: "SSE reset action generation",
+    useSse: true,
+    initialState: "beforeCompleted",
+    initialConfig: "default",
+    events: { behavior: "idle" },
+    steps: []
+  });
+  const view = renderPhysicalTui(
+    <App apiBase="http://mock.local" pollIntervalMs={60_000} useSse client={client} />,
+    100
+  );
+
+  try {
+    await waitForCallCounts(client, { state: 1, events: 1 });
+    await waitForOutput(view, ["/approve act_001"]);
+    await waitForPhysicalSettled(view);
+
+    client.publishEvent({ type: "state", state: "afterCompleted" });
+    await waitForPhysicalMarkerCount(view, invocation, 1, "first SSE terminal");
+
+    client.publishEvent({ type: "state", state: "afterCompleted" });
+    await waitForPhysicalSettled(view);
+    assertPhysicalMarkerCount(view, invocation, 1, "duplicate full SSE");
+
+    const stateCallsBeforeSummary = client.callCount("state");
+    client.publishEvent({ type: "state", payload: { state: { ready: true, completed_count: 1 } } });
+    await waitForCallCounts(client, { state: stateCallsBeforeSummary + 1 });
+    await waitForPhysicalSettled(view);
+    assertPhysicalMarkerCount(view, invocation, 1, "summary refresh");
+
+    client.publishEvent({ type: "workspace_reset", state: "afterReset" });
+    await waitForPhysicalSettled(view);
+    client.publishEvent({ type: "state", state: "beforeCompleted" });
+    await waitForPhysicalSettled(view);
+    client.publishEvent({ type: "state", state: "afterCompleted" });
+    await waitForPhysicalMarkerCount(view, invocation, 2, "SSE reset reuse");
+  } finally {
+    view.unmount();
+  }
+});
+
 async function loadScenarios(): Promise<ScenarioFile[]> {
   const files = (await readdir(scenarioRoot))
     .filter((file) => file.endsWith(".scenario"))
@@ -384,6 +664,14 @@ async function assertStep(context: ScenarioCaseContext, step: ScenarioStep): Pro
   const output = terminalOutput(context.view);
   for (const expected of step.rejectOutput ?? []) {
     assert.equal(output.includes(expected), false, `${context.scenario.name}/${step.input} unexpectedly rendered ${expected}`);
+  }
+  const latest = latestSnapshot(context.view);
+  for (const expected of step.expectLatestOutput ?? []) {
+    assert.equal(
+      latest.includes(expected),
+      true,
+      `${context.scenario.name}/${step.input} latest snapshot did not render ${expected}`
+    );
   }
   assertMaxLineWidth(context.view, step.maxLineWidth);
 
@@ -467,6 +755,48 @@ async function waitForPhysicalTextAfter(
   );
 }
 
+async function waitForPhysicalMarkerCount(
+  view: PhysicalTestInkInstance,
+  marker: string,
+  expected: number,
+  stage: string,
+  timeoutMs = 2500
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const output = normalizeOutput(view.physicalOutput());
+    const actual = output.split(marker).length - 1;
+    if (actual === expected) {
+      return;
+    }
+    await delay(10);
+  }
+  assertPhysicalMarkerCount(view, marker, expected, stage);
+}
+
+async function waitForPhysicalSettled(
+  view: PhysicalTestInkInstance,
+  stableMs = 50,
+  timeoutMs = 2500
+): Promise<void> {
+  const start = Date.now();
+  let stableSince = start;
+  let previousWriteCount = view.physicalWriteCount();
+  while (Date.now() - start < timeoutMs) {
+    await delay(10);
+    const currentWriteCount = view.physicalWriteCount();
+    if (currentWriteCount !== previousWriteCount) {
+      previousWriteCount = currentWriteCount;
+      stableSince = Date.now();
+      continue;
+    }
+    if (Date.now() - stableSince >= stableMs) {
+      return;
+    }
+  }
+  assert.fail(`Physical output did not settle after ${timeoutMs}ms`);
+}
+
 async function waitForStdinConsumption(
   stdin: TestStdin,
   previousConsumedChunks: number,
@@ -523,7 +853,12 @@ function assertMaxLineWidth(view: TestInkInstance, maximum?: number): void {
   }
 }
 
-function assertHangingBody(output: string, marker: string, expected: string): void {
+function assertHangingBody(
+  output: string,
+  marker: string,
+  expected: string,
+  ignoreWrapWhitespace = false
+): void {
   const lines = normalizeOutput(output).split("\n");
   const start = lines.findIndex((line) => line.trimStart().startsWith(`${marker} `));
   assert.notEqual(start, -1, `missing ${marker} activity row`);
@@ -551,7 +886,19 @@ function assertHangingBody(output: string, marker: string, expected: string): vo
     );
     bodyLines.push(line.slice(continuationSpaces));
   }
-  assert.equal(bodyLines.join(" ").replace(/\s+/g, " ").trim(), expected);
+  const actual = bodyLines.join(" ").replace(/\s+/g, " ").trim();
+  assert.equal(
+    ignoreWrapWhitespace ? actual.replace(/\s/g, "") : actual,
+    ignoreWrapWhitespace ? expected.replace(/\s/g, "") : expected
+  );
+}
+
+function assertLogicalText(output: string, expected: string[]): void {
+  const compact = normalizeOutput(output).replace(/[╭╮╰╯│─\s]/g, "");
+  for (const item of expected) {
+    const expectedCompact = item.replace(/\s/g, "");
+    assert.equal(compact.includes(expectedCompact), true, `missing logical text: ${item}`);
+  }
 }
 
 function assertPhysicalMarkerCount(
@@ -629,6 +976,7 @@ class ScenarioClient implements TuiClient {
   private readonly eventBehavior: EventBehavior;
   private readonly eventError: string;
   private readonly eventItems: ScenarioEvent[];
+  private eventHandler: ((event: ApiEvent) => void) | null = null;
 
   constructor(private readonly scenarioCase: ScenarioCase) {
     this.currentState = clone(stateFixtures[scenarioCase.initialState ?? "ready"]);
@@ -642,6 +990,14 @@ class ScenarioClient implements TuiClient {
 
   callCount(name: CallName): number {
     return this.calls[name].length;
+  }
+
+  publishEvent(event: ScenarioEvent): void {
+    assert.ok(this.eventHandler, "SSE event handler is not active");
+    if (event.state) {
+      this.currentState = clone(stateFixtures[event.state]);
+    }
+    this.eventHandler(expandScenarioEvent(event));
   }
 
   async health(): Promise<HealthState> {
@@ -721,7 +1077,7 @@ class ScenarioClient implements TuiClient {
     this.record("resetWorkspace", confirm);
     const response = this.nextResponse("resetWorkspace");
     const state = this.applyState(response.state ?? "afterReset");
-    return { ok: true, message: response.message ?? "Workspace reset.", state };
+    return { ok: response.ok ?? true, message: response.message ?? "Workspace reset.", state };
   }
 
   async registerRobot(payload: RegisterRobotPayload): Promise<RegisterRobotResponse> {
@@ -776,17 +1132,24 @@ class ScenarioClient implements TuiClient {
 
   async events(onEvent: (event: ApiEvent) => void, signal?: AbortSignal): Promise<void> {
     this.record("events");
-    for (const event of this.eventItems) {
-      onEvent(expandScenarioEvent(event));
-    }
+    this.eventHandler = onEvent;
+    try {
+      for (const event of this.eventItems) {
+        onEvent(expandScenarioEvent(event));
+      }
 
-    if (this.eventBehavior === "error") {
-      throw new Error(this.eventError);
+      if (this.eventBehavior === "error") {
+        throw new Error(this.eventError);
+      }
+      if (this.eventBehavior === "clean-eof") {
+        return;
+      }
+      await waitForAbort(signal);
+    } finally {
+      if (this.eventHandler === onEvent) {
+        this.eventHandler = null;
+      }
     }
-    if (this.eventBehavior === "clean-eof") {
-      return;
-    }
-    await waitForAbort(signal);
   }
 
   private record(name: CallName, ...args: unknown[]): void {
@@ -1133,6 +1496,104 @@ const stateFixtures: Record<string, AgentState> = {
       ],
       completed: [],
       cancelled: []
+    }
+  },
+  beforeCompleted: {
+    ...baseActionState,
+    actions: {
+      pending: [
+        ...(baseActionState.actions?.pending ?? []),
+        {
+          id: "act_task",
+          robot: "arm_1",
+          capability: "pick",
+          reason: "Task-created action.",
+          metadata: {}
+        },
+        {
+          id: "act_done",
+          robot: "arm_1",
+          capability: "move_to",
+          params: { x: 120, y: 45, z: 0 },
+          status: "pending",
+          metadata: {}
+        }
+      ],
+      completed: [],
+      cancelled: []
+    }
+  },
+  afterCompleted: {
+    ...baseActionState,
+    plan: {
+      plan: {
+        agent_output: {
+          schema: "physical-agent/agent-output/v1",
+          status: "failed",
+          decision: "propose",
+          lifecycle: "submitted",
+          tasks: [
+            {
+              id: "task:safety_gate:act_done",
+              kind: "safety_gate",
+              owner: "watch",
+              status: "failed",
+              action_id: "act_done",
+              depends_on: [],
+              mandatory: true,
+              policy_source: "SAFETY.md",
+              checks: [{ code: "safety.robot.known" }]
+            }
+          ]
+        }
+      }
+    },
+    chat: {
+      messages: [
+        {
+          role: "assistant",
+          content: "Server recorded completion.",
+          created_at: "2026-07-19T12:00:00Z"
+        }
+      ]
+    },
+    actions: {
+      pending: [
+        {
+          id: "act_001",
+          robot: "arm_1",
+          capability: "pick",
+          reason: "Pick the red block.",
+          metadata: { approval: { required: true, status: "approved" } }
+        },
+        {
+          id: "act_task",
+          robot: "arm_1",
+          capability: "pick",
+          reason: "Task-created action.",
+          metadata: {}
+        }
+      ],
+      completed: [
+        {
+          id: "act_done",
+          robot: "arm_1",
+          capability: "move_to",
+          params: { x: 120, y: 45, z: 0 },
+          status: "completed",
+          metadata: {}
+        }
+      ],
+      cancelled: [
+        {
+          id: "act_002",
+          robot: "arm_1",
+          capability: "observe",
+          reason: "Observe before moving.",
+          status: "cancelled",
+          metadata: { approval: { required: true, status: "rejected" } }
+        }
+      ]
     }
   },
   afterApprove: {

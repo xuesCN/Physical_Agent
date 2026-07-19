@@ -8,6 +8,7 @@ import { BrandBanner, FULL_MOCE_LOGO, selectBannerVariant } from "./BrandBanner.
 import { ChatPanel } from "./ChatPanel.js";
 import { CommandInput } from "./CommandInput.js";
 import { ConfigPanel } from "./ConfigPanel.js";
+import { ExecutionApprovalNotice } from "./ExecutionApprovalNotice.js";
 import { FinalizedText, parseFinalizedText } from "./FinalizedText.js";
 import { rolePresentation } from "./MessageRow.js";
 import { RobotDetailPanel } from "./RobotDetailPanel.js";
@@ -126,6 +127,71 @@ test("ActionActivityItem renders the canonical invocation and terminal outcome",
   view.unmount();
   assert.match(frame, /⏺\s+arm_1\.grasp\(force=2\)/);
   assert.match(frame, /⎿ failed/);
+});
+
+test("ExecutionApprovalNotice shows existing commands and preserves SafetyGate semantics", () => {
+  const state: AgentState = {
+    ready: true,
+    actions: {
+      pending: [
+        {
+          id: "act_1",
+          robot: "arm_1",
+          capability: "lift",
+          params: { height: 0.2 },
+          metadata: { approval: { required: true, status: "pending" } }
+        },
+        {
+          id: "act_2",
+          robot: "arm_1",
+          capability: "grasp",
+          metadata: { approval: { required: true, status: "pending" } }
+        }
+      ],
+      completed: [],
+      cancelled: []
+    }
+  };
+  const view = render(<ExecutionApprovalNotice state={state} />);
+  const frame = view.lastFrame() ?? "";
+  assert.match(frame, /Safety Gate · Execution approval/);
+  assert.match(frame, /1\/2/);
+  assert.match(frame, /arm_1\.lift\(height=0\.2\)/);
+  assert.match(frame, /等待人工批准/);
+  assert.match(frame, /批准后仍需 watch SafetyGate 校验/);
+  assert.match(frame, /\/approve act_1/);
+  assert.match(frame, /\/reject act_1 <reason>/);
+  assert.doesNotMatch(frame, /\[y\]|\[n\]|\[a\]/);
+  assert.doesNotMatch(frame, /sensor|grant|检测到|传感|本会话|总是允许/i);
+  view.unmount();
+});
+
+test("ExecutionApprovalNotice ignores approved and not-required actions", () => {
+  const view = render(
+    <ExecutionApprovalNotice
+      state={{
+        ready: true,
+        actions: {
+          pending: [
+            {
+              id: "act_1",
+              robot: "arm_1",
+              capability: "lift",
+              metadata: { approval: { required: true, status: "approved" } }
+            },
+            {
+              id: "act_2",
+              robot: "arm_1",
+              capability: "grasp",
+              metadata: { approval: { required: false, status: "pending" } }
+            }
+          ]
+        }
+      }}
+    />
+  );
+  assert.equal(view.lastFrame() ?? "", "");
+  view.unmount();
 });
 
 test("FinalizedText formats the supported heading list bold and inline-code subset", () => {

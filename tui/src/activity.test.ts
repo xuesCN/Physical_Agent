@@ -155,6 +155,78 @@ test("emitted action activity owns an immutable nested action snapshot", () => {
   });
 });
 
+test("an uncloneable terminal action does not discard valid batch entries or close itself", () => {
+  const tracker = createActionActivityTracker();
+  collectActionActivityEntries(stateWith({
+    pending: [
+      { id: "act_good", robot: "arm_1", capability: "move_to", metadata: {} },
+      { id: "act_bad", robot: "arm_1", capability: "inspect", metadata: {} }
+    ]
+  }), tracker);
+  const goodTerminal: ActionItem = {
+    id: "act_good",
+    robot: "arm_1",
+    capability: "move_to",
+    params: { target: { x: 120 } },
+    metadata: {}
+  };
+  const badTerminal: ActionItem = {
+    id: "act_bad",
+    robot: "arm_1",
+    capability: "inspect",
+    params: { injected: () => "not cloneable" },
+    metadata: {}
+  };
+
+  let firstBatch: ReturnType<typeof collectActionActivityEntries> = [];
+  let failure: unknown = null;
+  try {
+    firstBatch = collectActionActivityEntries(
+      stateWith({ completed: [goodTerminal, badTerminal] }),
+      tracker
+    );
+  } catch (error) {
+    failure = error;
+  }
+  const afterFirst = {
+    active: [...tracker.active],
+    closed: [...tracker.closed]
+  };
+
+  const recovered = collectActionActivityEntries(stateWith({
+    completed: [{
+      id: "act_bad",
+      robot: "arm_1",
+      capability: "inspect",
+      params: { injected: "cloneable" },
+      metadata: {}
+    }]
+  }), tracker);
+  const duplicate = collectActionActivityEntries(stateWith({
+    completed: [{
+      id: "act_bad",
+      robot: "arm_1",
+      capability: "inspect",
+      params: { injected: "cloneable" },
+      metadata: {}
+    }]
+  }), tracker);
+
+  assert.deepEqual({
+    failure: failure instanceof Error ? failure.name : failure,
+    first: firstBatch.map((entry) => entry.id),
+    afterFirst,
+    recovered: recovered.map((entry) => entry.id),
+    duplicate: duplicate.map((entry) => entry.id)
+  }, {
+    failure: null,
+    first: ["action-0-act_good"],
+    afterFirst: { active: ["act_bad"], closed: ["act_good"] },
+    recovered: ["action-0-act_bad"],
+    duplicate: []
+  });
+});
+
 test("cancelled ignores Gate and expectation feedback, then waits for action-result", () => {
   const tracker = createActionActivityTracker();
   collectActionActivityEntries(pendingState, tracker);

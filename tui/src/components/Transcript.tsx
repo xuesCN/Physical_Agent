@@ -1,9 +1,9 @@
 import React, { useMemo } from "react";
 import { Box, Static, Text } from "ink";
 import type { TranscriptEntry } from "../types.js";
-import { THEME } from "../theme.js";
 import { BrandBanner } from "./BrandBanner.js";
 import { FinalizedText } from "./FinalizedText.js";
+import { MessageRow, rolePresentation } from "./MessageRow.js";
 import { normalizeTerminalText } from "./textFormat.js";
 
 interface TranscriptProps {
@@ -25,35 +25,25 @@ export function Transcript({ entries, columns }: TranscriptProps) {
   );
 
   return (
-    <Static items={items}>
-      {(item) => item.kind === "brand" ? (
-        <BrandBanner key={item.id} columns={item.columns} />
-      ) : (
-        <Box key={item.id} paddingX={1} flexDirection="row">
-          <Text color={roleColor(item.entry.role)}>{rolePrefix(item.entry.role)} </Text>
-          <Box flexDirection="column" flexGrow={1}>
-            {item.entry.role === "assistant" ? (
-              <FinalizedText value={item.entry.content} />
-            ) : (
-              <Text>{normalizeTerminalText(item.entry.content)}</Text>
-            )}
+    <Static items={items} style={{ width: "100%" }}>
+      {(item) => {
+        if (item.kind === "brand") {
+          return <BrandBanner key={item.id} columns={item.columns} />;
+        }
+
+        const presentation = rolePresentation(item.entry.role);
+        return (
+          <Box key={item.id} width="100%" paddingX={1}>
+            <MessageRow marker={presentation.marker} color={presentation.color}>
+              {item.entry.role === "assistant" ? (
+                <FinalizedText value={item.entry.content} />
+              ) : (
+                <Text>{normalizeTerminalText(item.entry.content)}</Text>
+              )}
+            </MessageRow>
           </Box>
-        </Box>
-      )}
+        );
+      }}
     </Static>
   );
-}
-
-function rolePrefix(role: string): string {
-  if (role === "user") return "you ›";
-  if (role === "assistant") return "moce │";
-  if (role === "draft") return "draft ◇";
-  return `${role} │`;
-}
-
-function roleColor(role: string): string {
-  if (role === "assistant") return THEME.brandAccent;
-  if (role === "user") return THEME.success;
-  if (role === "draft") return THEME.warning;
-  return THEME.muted;
 }

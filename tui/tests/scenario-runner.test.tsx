@@ -5,8 +5,11 @@ import test from "node:test";
 import { EventEmitter } from "node:events";
 import React from "react";
 import { render as inkRender } from "ink";
+import stringWidth from "string-width";
 import { App, type TuiClient } from "../src/App.js";
 import { FULL_MOCE_LOGO } from "../src/components/BrandBanner.js";
+import { ChatPanel } from "../src/components/ChatPanel.js";
+import { Transcript } from "../src/components/Transcript.js";
 import type {
   AgentOutput,
   AgentState,
@@ -194,6 +197,36 @@ test("scenario coverage includes every documented TUI command and failure mode",
 
   for (const command of requiredCoverage) {
     assert.equal(covered.has(command), true, `${command} is not covered by tui/tests/scenarios`);
+  }
+});
+
+test("display-width guard counts emoji and CJK terminal cells", () => {
+  assert.equal([..."👋"].length, 1);
+  assert.equal(stringWidth("👋"), 2);
+  assert.equal(stringWidth("中"), 2);
+  assert.equal(stringWidth("e\u0301"), 1);
+  assert.equal(stringWidth("👨‍👩‍👧‍👦"), 2);
+});
+
+test("48-column finalized and streaming chat use display-safe hanging indents", () => {
+  const content = "Hello! 👋 I can see the arm is idle on the table, with a red block and a tray visible nearby. Please tell me what to do next.";
+  const finalized = renderPhysicalTui(
+    <Transcript columns={48} entries={[{ id: "a1", role: "assistant", content }]} />,
+    48
+  );
+  const streaming = renderPhysicalTui(
+    <ChatPanel hasTranscript streamingText={content} streaming />,
+    48
+  );
+
+  try {
+    assertMaxLineWidth(finalized, 48);
+    assertMaxLineWidth(streaming, 48);
+    assertHangingBody(finalized.physicalOutput(), "⏺", content);
+    assertHangingBody(streaming.physicalOutput(), "⏺", content);
+  } finally {
+    finalized.unmount();
+    streaming.unmount();
   }
 });
 
@@ -480,13 +513,45 @@ function assertMaxLineWidth(view: TestInkInstance, maximum?: number): void {
   }
   for (const [frameIndex, frame] of view.frames.entries()) {
     for (const line of normalizeOutput(frame).split("\n")) {
+      const width = stringWidth(line);
       assert.equal(
-        [...line].length <= maximum,
+        width <= maximum,
         true,
-        `frame ${frameIndex + 1} line exceeds ${maximum} columns: ${line}`
+        `frame ${frameIndex + 1} line is ${width} columns, exceeds ${maximum}: ${line}`
       );
     }
   }
+}
+
+function assertHangingBody(output: string, marker: string, expected: string): void {
+  const lines = normalizeOutput(output).split("\n");
+  const start = lines.findIndex((line) => line.trimStart().startsWith(`${marker} `));
+  assert.notEqual(start, -1, `missing ${marker} activity row`);
+  const firstLine = lines[start];
+  const leadingSpaces = firstLine.length - firstLine.trimStart().length;
+  const bodyIndex = leadingSpaces + marker.length + 1;
+  const bodyColumn = stringWidth(firstLine.slice(0, bodyIndex));
+  assert.notEqual(firstLine[bodyIndex], " ", `${marker} must have exactly one raw marker gap`);
+  const bodyLines: string[] = [];
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (index === start) {
+      bodyLines.push(line.slice(bodyIndex));
+      continue;
+    }
+    const continuationSpaces = line.length - line.trimStart().length;
+    if (!line.trim()) {
+      break;
+    }
+    const continuationColumn = stringWidth(line.slice(0, continuationSpaces));
+    assert.equal(
+      continuationColumn,
+      bodyColumn,
+      `${marker} continuation body starts at ${continuationColumn}, expected ${bodyColumn}`
+    );
+    bodyLines.push(line.slice(continuationSpaces));
+  }
+  assert.equal(bodyLines.join(" ").replace(/\s+/g, " ").trim(), expected);
 }
 
 function assertPhysicalMarkerCount(

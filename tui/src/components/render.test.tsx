@@ -8,6 +8,7 @@ import { ChatPanel } from "./ChatPanel.js";
 import { CommandInput } from "./CommandInput.js";
 import { ConfigPanel } from "./ConfigPanel.js";
 import { FinalizedText, parseFinalizedText } from "./FinalizedText.js";
+import { rolePresentation } from "./MessageRow.js";
 import { RobotDetailPanel } from "./RobotDetailPanel.js";
 import { RobotsPanel } from "./RobotsPanel.js";
 import { SectionTitle } from "./SectionTitle.js";
@@ -22,6 +23,13 @@ import type { AgentState, ConfigResponse } from "../types.js";
 test("MOCE theme keeps the approved logo and small-text colors", () => {
   assert.equal(THEME.brandLogo, "#1D4ED8");
   assert.equal(THEME.brandAccent, "#3B82F6");
+});
+
+test("conversation markers keep user and MOCE colors distinct", () => {
+  assert.deepEqual(rolePresentation("user"), { marker: ">", color: THEME.success });
+  assert.deepEqual(rolePresentation("assistant"), { marker: "⏺", color: THEME.brandAccent });
+  assert.deepEqual(rolePresentation("draft"), { marker: "draft ◇", color: THEME.warning });
+  assert.deepEqual(rolePresentation("system"), { marker: "system │", color: THEME.muted });
 });
 
 test("SectionTitle renders a branded title without a fixed divider string", () => {
@@ -71,8 +79,8 @@ test("Transcript prints the MOCE banner once while finalized entries append", ()
   );
   const output = view.lastFrame() ?? "";
   assert.equal(output.split(FULL_MOCE_LOGO[0]).length - 1, 1);
-  assert.match(output, /you\s+›\s+hello/);
-  assert.match(output, /moce\s+│\s+ready/);
+  assert.match(output, />\s+hello/);
+  assert.match(output, /⏺\s+ready/);
   assert.match(output, /draft\s+◇\s+review only/);
   view.unmount();
 });
@@ -212,9 +220,9 @@ test("Transcript formats only finalized assistant entries", () => {
     />
   );
   const frame = view.lastFrame() ?? "";
-  assert.match(frame, /moce\s+│\s+Assistant heading/);
+  assert.match(frame, /⏺\s+Assistant heading/);
   assert.doesNotMatch(frame, /## Assistant heading/);
-  assert.match(frame, /you\s+›\s+## User literal/);
+  assert.match(frame, />\s+## User literal/);
   assert.match(frame, /draft\s+◇\s+\*\*Draft literal\*\*/);
   view.unmount();
 });
@@ -352,7 +360,7 @@ test("ChatPanel renders only live streaming state", () => {
   const frame = view.lastFrame() ?? "";
   assert.match(frame, /◆ chat/);
   assert.match(frame, /streaming/);
-  assert.match(frame, /moce\s+│\s+partial reply/);
+  assert.match(frame, /⏺\s+partial reply/);
   assert.doesNotMatch(frame, /No chat yet/);
   view.unmount();
 });

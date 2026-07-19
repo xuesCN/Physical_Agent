@@ -1,7 +1,7 @@
 # 重构过程
 
 > 本文浓缩自原 33 份 session-handoff 与 22 份 brief（已删除，git 历史可查）。姊妹文档：`SPEC.zh-CN.md`（目标与待办矩阵）。
-> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-18。
+> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-20。
 
 ## 0. 基线与纪律
 
@@ -58,6 +58,7 @@
 | R8 | 当前架构、文档、示例、OpenAPI、发布包与全量门禁收口 | implementation closure `c4da4f9`，fork Push run `29476327424`、PR run `29476329954`；evidence closure `33b062b`，fork Push run `29477199756`、PR run `29477202468`；均成功 |
 | R8.1 | review hardening：LOG mirror、Gate owner correlation、nested OpenAPI 与证据纠偏 | `6d53db3`、`4c9c6a4` + `c38e3ec`、`89f84c8`，review follow-up `241fe8d`、`fc282cf`、`b2c93bb`；implementation/local closure `8438cb7`，fork Push run `29553985591`、PR run `29553987358` 均 completed success，headSha 均为 `8438cb7bf5f356021cb602908552a069e8227bc4` |
 | T4 | MOCE TUI 品牌、单一 Static transcript、轻量 finalized text 与宽度/物理 stdout 验收 | `7a968d9`、`69615dd`、`ed7cc4a`、`4fb0f57`、`e4ea0d4`、`c9981f0`、`83d9efe`、`88f7b5d`；review follow-up `a3d1d22`、`d25c80e`、`7e391b3`、`e9f886f`、`1d758f5`；test/CI follow-up `a8deeac`、`647ce53`；docs closure `8e30a42`；`038c1c6` runs `29629559330`/`29629560483` 与 `7d380f9` runs `29630023334`/`29630024721` 均仅 Ink TUI 失败，已执行的其余 jobs 成功；Push 条件型 full/Playwright skipped；implementation/docs closure `9c50067` 的 Push run `29630361521`、PR run `29630363135` 均 completed success，headSha 均为 `9c50067964e5ea184803e83526121388078862f9` |
+| T4.1 | 对话式 transcript、canonical terminal action activity 与终端宽度修复 | width/shared row `f81b134`；action activity `216a0b9`；owned action snapshot `8139d24`；clone-failure isolation `c2f8c7c`；App integration/read-only notice `e0215cb`。controller fresh gate：TUI typecheck/build exit 0、full `108/108`、activity/render/scenario `70/70`；Python safety `27/27`、full `463 passed`（仅 1 条已知 Starlette `TestClient` deprecation warning）；diff check 与禁止 import 扫描 clean。逐任务终审和整体 broad review 均 Critical=0、Important=0、Minor=0，broad verdict Ready to merge=Yes；远端 exact-head Push/PR CI 证据待实际观察。 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -419,6 +420,18 @@ rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Dr
 `647ce53` 因此只在 `tui/scripts/run-tests.mjs` 启动的 Node test child 中把 `CI` 规范化为 `false`，让 `isTTY=true`、`debug:false` 的物理 stdout test harness 在本地与 hosted runner 都走 Ink 非 CI 动态渲染分支；harness 仍是模拟流，typecheck、build、安装与产品 runtime 仍保留真实 CI 环境。Enter 后仍按新的 command-specific stdout 区间等待语义完成，不放松 Logo=1、`rows=10000`、delayed client 或 API call-count 断言。`CI=true npm.cmd test` 在修复前稳定 82/84、修复后 84/84，typecheck/build 全绿；独立复核 Critical=0、Important=0，Minor=1（未来 CI 专属行为须放入独立保留 `CI=true` 的子进程）。
 
 本轮没有修改 FastAPI、SQLite、watch、driver、SafetyGate、Action Board、审批或命令语义；TUI 仍是纯 HTTP API/SSE 客户端。Phase F 其余功能、VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 与自动 replan 继续冻结。最终远端 closure：implementation/docs head `9c50067` 的 Push run `29630361521`、PR run `29630363135` 均 completed success，headSha 均为 `9c50067964e5ea184803e83526121388078862f9`；PR 中 Python 3.12 full/safety、Ink TUI、frontend+wheel 与真实 Chromium Playwright 全部成功。phase-B evidence-only 提交只记录既有远端事实，不预写自身 hash/run。
+
+### T4.1：对话式 transcript 与终端宽度修复
+
+根因是 finalized chat 把角色前缀与正文拆成 sibling 后，`Static` auto-width 仍给正文近似整行预算，没有扣除 padding、marker 与 gap；旧测试又用 code point 数低估 emoji/CJK display width。原始 48 列物理输出 RED 实测为 `49 > 48`。`f81b134` 用 `width="100%"` 且正文可收缩的共享 `MessageRow` 统一 finalized/streaming，`>`、`⏺`、`draft ◇` 分别保留 success green、brand blue、warning 的 glyph+颜色双重角色契约；测试改用 `string-width` 后覆盖 24/48/100 列和宽字符，GREEN 时每条物理行都不超过 `stdout.columns`。
+
+动作数据契约只认 canonical Action Board，并且只把本 TUI 会话内已观察到的 non-terminal → terminal transition 单调追加到全局唯一 feed；首次 snapshot 的历史终态、draft、Gate/expectation feedback、feedback-only 与重复 snapshot 都不能产生假的 terminal item，reset 会清本地 generation/seen 状态。`216a0b9` 建立该 tracker 与稳定结果映射；随后 immutable nested alias RED 证明浅层引用会让已打印项随源对象突变，`8139d24` 改为自有 `structuredClone` snapshot。partial clone-batch RED 又证明一个不可 clone 的 action 会截断整批并被错误关闭，`c2f8c7c` 把失败隔离到单项：有效同批项仍追加，失败项保持可重试，恢复为可 clone 后只追加一次。
+
+cancelled/result race 的取舍是宁缺毋滥：approval rejected 可直接确定为 `rejected`；其他 cancelled 必须等同 `action_id`、无 `event` 的 action-result feedback 后才映射为 `failed` 或 `cancelled`。两阶段 RED 先给 cancelled snapshot 时不 append，下一 snapshot 带 failed result 时才 append 一次；safety_gate、expectation_check 或带 event 的 driver feedback 均不能充当结果。notice/App missing-feature RED 则由 `e0215cb` 收口：App 在同一 append-only feed 中按观察顺序加入真实 action，动态区只显示响应式 execution approval notice、精确 action id、既有 `/approve`/`/reject` 和“批准后仍需 watch SafetyGate”，不截获单键，也不生成 y/n/a 或 session grant。
+
+2026-07-20 在 `e0215cb` 的 controller fresh gate：TUI typecheck exit 0、full `108/108`、build exit 0、activity/render/scenario 专项 `70/70`；Python safety `27/27`，full `463 passed` 且仅 1 条已知 Starlette `TestClient` deprecation warning；`git diff --check` 与禁止 TUI driver/watch/sqlite import 扫描均 clean。逐任务终审和 whole-implementation broad review 均 Critical=0、Important=0、Minor=0，broad verdict Ready to merge=Yes。远端 exact-head Push/PR CI 仍待实际 push 后观察，本地闭环没有预写 run ID/head SHA。
+
+本轮未修改 FastAPI、SQLite、action/feedback wire、watch、driver、SafetyGate、SAFETY.md、parser/审批语义、时间戳或 feature-freeze；既有 `/approve`、`/reject` 行为不变，TUI 仍是纯 HTTP API/SSE 客户端，其他冻结条目不因 T4.1 完成而解冻。
 
 ## 3. 关键决策与偏离（跨阶段汇总）
 

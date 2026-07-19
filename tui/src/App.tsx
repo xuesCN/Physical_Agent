@@ -107,6 +107,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
     setTranscriptEntries((previous) => [
       ...previous,
       {
+        kind: "chat",
         id,
         role,
         content: normalized
@@ -169,6 +170,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
       }
 
       additions.push({
+        kind: "chat",
         id: key,
         role: message.role,
         content,

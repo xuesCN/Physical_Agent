@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import React from "react";
 import { render } from "ink-testing-library";
+import { ActionActivityItem } from "./ActionActivityItem.js";
 import { ActionsPanel } from "./ActionsPanel.js";
 import { BrandBanner, FULL_MOCE_LOGO, selectBannerVariant } from "./BrandBanner.js";
 import { ChatPanel } from "./ChatPanel.js";
@@ -71,9 +72,9 @@ test("Transcript prints the MOCE banner once while finalized entries append", ()
     <Transcript
       columns={100}
       entries={[
-        { id: "u1", role: "user", content: "hello" },
-        { id: "a1", role: "assistant", content: "ready" },
-        { id: "d1", role: "draft", content: "review only" }
+        { kind: "chat", id: "u1", role: "user", content: "hello" },
+        { kind: "chat", id: "a1", role: "assistant", content: "ready" },
+        { kind: "chat", id: "d1", role: "draft", content: "review only" }
       ]}
     />
   );
@@ -83,6 +84,48 @@ test("Transcript prints the MOCE banner once while finalized entries append", ()
   assert.match(output, /⏺\s+ready/);
   assert.match(output, /draft\s+◇\s+review only/);
   view.unmount();
+});
+
+test("Transcript renders immutable action activity in append order", () => {
+  const view = render(
+    <Transcript
+      columns={100}
+      entries={[
+        { kind: "chat", id: "u1", role: "user", content: "move it" },
+        {
+          kind: "action",
+          id: "action-0-act_1",
+          action: { id: "act_1", robot: "arm_1", capability: "move_to", params: { x: 120, y: 45, z: 0 } },
+          outcome: "done"
+        },
+        { kind: "chat", id: "a1", role: "assistant", content: "Finished." }
+      ]}
+    />
+  );
+  const frame = view.lastFrame() ?? "";
+  const user = frame.indexOf("> move it");
+  const action = frame.indexOf("⏺ arm_1.move_to(x=120, y=45, z=0)");
+  const result = frame.indexOf("⎿ done");
+  const assistant = frame.indexOf("⏺ Finished.");
+  view.unmount();
+  assert.ok(user >= 0 && user < action && action < result && result < assistant);
+});
+
+test("ActionActivityItem renders the canonical invocation and terminal outcome", () => {
+  const view = render(
+    <ActionActivityItem
+      entry={{
+        kind: "action",
+        id: "action-0-act_2",
+        action: { id: "act_2", robot: "arm_1", capability: "grasp", params: { force: 2 } },
+        outcome: "failed"
+      }}
+    />
+  );
+  const frame = view.lastFrame() ?? "";
+  view.unmount();
+  assert.match(frame, /⏺\s+arm_1\.grasp\(force=2\)/);
+  assert.match(frame, /⎿ failed/);
 });
 
 test("FinalizedText formats the supported heading list bold and inline-code subset", () => {
@@ -213,9 +256,9 @@ test("Transcript formats only finalized assistant entries", () => {
     <Transcript
       columns={48}
       entries={[
-        { id: "a1", role: "assistant", content: "## Assistant heading" },
-        { id: "u1", role: "user", content: "## User literal" },
-        { id: "d1", role: "draft", content: "**Draft literal**" }
+        { kind: "chat", id: "a1", role: "assistant", content: "## Assistant heading" },
+        { kind: "chat", id: "u1", role: "user", content: "## User literal" },
+        { kind: "chat", id: "d1", role: "draft", content: "**Draft literal**" }
       ]}
     />
   );

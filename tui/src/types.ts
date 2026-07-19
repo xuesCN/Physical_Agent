@@ -201,12 +201,24 @@ export interface UploadResponse {
 
 export type TuiView = "status" | "chat" | "actions" | "robots" | "config" | "uploads" | "robot" | "capabilities";
 
-export interface TranscriptEntry {
+export type ActionActivityOutcome = "done" | "failed" | "cancelled" | "rejected";
+
+export interface ChatTranscriptEntry {
+  kind: "chat";
   id: string;
   role: string;
   content: string;
   created_at?: string;
 }
+
+export interface ActionTranscriptEntry {
+  kind: "action";
+  id: string;
+  action: ActionItem;
+  outcome: ActionActivityOutcome;
+}
+
+export type TranscriptEntry = ChatTranscriptEntry | ActionTranscriptEntry;
 
 export interface ApiEvent {
   id?: number;

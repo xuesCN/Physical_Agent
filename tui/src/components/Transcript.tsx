@@ -1,6 +1,7 @@
 import React, { useMemo } from "react";
 import { Box, Static, Text } from "ink";
 import type { TranscriptEntry } from "../types.js";
+import { ActionActivityItem } from "./ActionActivityItem.js";
 import { BrandBanner } from "./BrandBanner.js";
 import { FinalizedText } from "./FinalizedText.js";
 import { MessageRow, rolePresentation } from "./MessageRow.js";
@@ -31,19 +32,29 @@ export function Transcript({ entries, columns }: TranscriptProps) {
           return <BrandBanner key={item.id} columns={item.columns} />;
         }
 
-        const presentation = rolePresentation(item.entry.role);
         return (
           <Box key={item.id} width="100%" paddingX={1}>
-            <MessageRow marker={presentation.marker} color={presentation.color}>
-              {item.entry.role === "assistant" ? (
-                <FinalizedText value={item.entry.content} />
-              ) : (
-                <Text>{normalizeTerminalText(item.entry.content)}</Text>
-              )}
-            </MessageRow>
+            {item.entry.kind === "action" ? (
+              <ActionActivityItem entry={item.entry} />
+            ) : (
+              <ChatTranscriptItem entry={item.entry} />
+            )}
           </Box>
         );
       }}
     </Static>
+  );
+}
+
+function ChatTranscriptItem({ entry }: { entry: Extract<TranscriptEntry, { kind: "chat" }> }) {
+  const presentation = rolePresentation(entry.role);
+  return (
+    <MessageRow marker={presentation.marker} color={presentation.color}>
+      {entry.role === "assistant" ? (
+        <FinalizedText value={entry.content} />
+      ) : (
+        <Text>{normalizeTerminalText(entry.content)}</Text>
+      )}
+    </MessageRow>
   );
 }

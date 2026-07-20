@@ -1,6 +1,6 @@
 # T4.2：TUI finalized assistant 块级 Markdown 渲染器
 
-状态：final-review repair 已实现并通过本地验收，待新 exact-head CI
+状态：final-review repair 已实现并通过本地验收
 
 日期：2026-07-20
 

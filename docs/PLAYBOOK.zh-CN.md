@@ -207,6 +207,10 @@
 
 **T4.2 验收**：截图等价回复不再显示合法 `##`/`**`/inline-code 标记；24/48/100 列下 nested list/code 物理行不超宽且续行对齐正文；unsupported block 不拖累相邻合法 block；streaming、user、draft、`action-draft` 与畸形输入仍逐字；TUI typecheck/定向/full/build、禁止 import 扫描、Python safety/full、diff check 与独立 review 全绿，随后记录 exact-head Push/PR CI。API、SQLite、watch、driver、SafetyGate、SAFETY.md、审批与其他冻结项零改动。
 
+**T4.2 实现与本地验收（2026-07-20）**：`3b17ec6` 增加无依赖 block scanner，`7c0a239` 接入 finalized assistant renderer，`25f20c4` 完成 `HangingRow`、App/scenario 与 24/48/100 列物理输出；broad review 后以 `499487c` 修复最小表格 delimiter、空 fence、竖向 code rail、Unicode/两位有序项覆盖，以 `8d578be` 收紧 literal table 邻接，以 `fe0b477` 保留 active table 中的 pipe-bearing list-like row。两轮最终 spec/quality re-review 各自均为 Critical=0、Important=0、Minor=0。controller fresh gate：TUI typecheck/build exit 0，parser+renderer `53/53`、scenario `24/24`、full `127/127`；Python safety `27/27`、full `463 passed, 1 warning`，唯一警告为已知 Starlette `TestClient`/`httpx` deprecation；禁止 TUI driver/watch/sqlite import 扫描无匹配，package dependency diff、`git diff --check` 均 clean。live smoke 前只读确认唯一 driver 为 `mock_arm`、SQLite `pending/in_progress=0`、API `ready=True` 且 unsafe action=0；Windows 应用自动化安全规则禁止控制 Terminal，故未冒充已观察到 LLM 长回复，权威验收仍由 deterministic scenario 与 physical-width tests 提供。
+
+**T4.2 历史门禁偏离（不作 closure 证据）**：Task 3 执行者在独立 review 前提前 push 了 `25f20c48eb8bd9ac4d40aa9bcce120ae42acf7a0`；其 Push run `29723405783` 与 draft-PR run `29723407703` 虽均为 attempt 1 completed success，但该 head 随后被三笔 review repair supersede，因此不得复用或概括为 T4.2 完成证据。SPEC 保持 🟡，直到 reviewed implementation/docs exact head 的 Push 与 draft-PR workflows 都成功。
+
 ## C4 i18n / E3 视觉打磨
 
 **思路**：C4：antd `ConfigProvider locale` + 文案抽到 `locales/{zh,en}.ts` 键值表（不上 i18next，工程量不值），默认跟浏览器语言，切换存 localStorage。E3：暗色模式用 antd `theme.darkAlgorithm` token 切换 + localStorage；首次引导用 antd Tour 组件串 setup→watch→demo 三步。

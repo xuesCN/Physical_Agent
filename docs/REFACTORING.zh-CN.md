@@ -59,6 +59,7 @@
 | R8.1 | review hardening：LOG mirror、Gate owner correlation、nested OpenAPI 与证据纠偏 | `6d53db3`、`4c9c6a4` + `c38e3ec`、`89f84c8`，review follow-up `241fe8d`、`fc282cf`、`b2c93bb`；implementation/local closure `8438cb7`，fork Push run `29553985591`、PR run `29553987358` 均 completed success，headSha 均为 `8438cb7bf5f356021cb602908552a069e8227bc4` |
 | T4 | MOCE TUI 品牌、单一 Static transcript、轻量 finalized text 与宽度/物理 stdout 验收 | `7a968d9`、`69615dd`、`ed7cc4a`、`4fb0f57`、`e4ea0d4`、`c9981f0`、`83d9efe`、`88f7b5d`；review follow-up `a3d1d22`、`d25c80e`、`7e391b3`、`e9f886f`、`1d758f5`；test/CI follow-up `a8deeac`、`647ce53`；docs closure `8e30a42`；`038c1c6` runs `29629559330`/`29629560483` 与 `7d380f9` runs `29630023334`/`29630024721` 均仅 Ink TUI 失败，已执行的其余 jobs 成功；Push 条件型 full/Playwright skipped；implementation/docs closure `9c50067` 的 Push run `29630361521`、PR run `29630363135` 均 completed success，headSha 均为 `9c50067964e5ea184803e83526121388078862f9` |
 | T4.1 | 对话式 transcript、canonical terminal action activity 与终端宽度修复 | width/shared row `f81b134`；action activity `216a0b9`；owned action snapshot `8139d24`；clone-failure isolation `c2f8c7c`；App integration/read-only notice `e0215cb`。controller fresh gate：TUI typecheck/build exit 0、full `108/108`、activity/render/scenario `70/70`；Python safety `27/27`、full `463 passed`（仅 1 条已知 Starlette `TestClient` deprecation warning）；diff check 与禁止 import 扫描 clean。逐任务终审和整体 broad review 均 Critical=0、Important=0、Minor=0，broad verdict Ready to merge=Yes。implementation/docs exact head `357a4898fc19704179e15c1614f49e49f794263f`：Push run `29695566978`、draft-PR run `29695568726` 均 attempt 1 completed success。 |
+| T4.2 | finalized assistant 块级 Markdown、嵌套列表/code 悬挂缩进与 block-local fallback | parser `3b17ec6`；renderer `7c0a239`；physical width/App `25f20c4`；review repairs `499487c`、`8d578be`、`fe0b477`。controller fresh gate：TUI typecheck/build exit 0、parser+renderer `53/53`、scenario `24/24`、full `127/127`；Python safety `27/27`、full `463 passed, 1 warning`；boundary/dependency/diff clean；最终 spec/quality re-review 均 Critical=0、Important=0、Minor=0。reviewed exact-head CI 待执行；提前 push 的 `25f20c4` runs `29723405783`/`29723407703` 已 superseded，不作 closure 证据。 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -433,6 +434,18 @@ cancelled/result race 的取舍是宁缺毋滥：approval rejected 可直接确�
 
 本轮未修改 FastAPI、SQLite、action/feedback wire、watch、driver、SafetyGate、SAFETY.md、parser/审批语义、时间戳或 feature-freeze；既有 `/approve`、`/reject` 行为不变，TUI 仍是纯 HTTP API/SSE 客户端，其他冻结条目不因 T4.1 完成而解冻。
 
+### T4.2：finalized assistant 块级 Markdown
+
+T4 的 whole-message fail-closed 能保住全文字符事实，但真实 LLM 回复里一个嵌套列表会让相邻合法 heading、bold、inline code 一起退化。T4.2 选择无新依赖的 scanner + controlled inline parser，把 fallback domain 收窄到 block：只格式化 finalized assistant；streaming/user/draft/system/unknown role 仍 literal；table、link、HTML、quote、task list、畸形 inline/list 等 unsupported block 原样保留，reserved `action-draft` fence 从 opener 到 closer/EOF 逐字呈现且绝不升级为 Draft/action。
+
+`3b17ec6` 以纯 TypeScript block model 实现 heading、paragraph、最多三层 mixed list 与顶层普通闭合 triple-backtick fence。list candidate 允许空格/tab 收集连续 marker 行，但 item grammar 只认 ASCII-space separator；indentation stack 的任意正增量只推进一级，第四个 distinct depth 或 unknown dedent 整块 literal。fence language 只认设计内 ASCII token，普通 fence 仅控制 presentation，不读取 metadata/Action Board，也不调用 proposal/parser。`7c0a239` 把 block/inline model 接到 Ink，`25f20c4` 以独立 prefix/body `HangingRow` 证明 24/48/100 display width，并保留 paragraph 每个源换行。
+
+broad review 在提前 push 的 `25f20c4` 后发现表格边界、空 fence、code rail 与物理内容生存缺口；`499487c`、`8d578be`、`fe0b477` 均先以 focused RED 锁住再作最小修复，最终独立 spec 与 quality re-review 各自 Critical=0、Important=0、Minor=0。2026-07-20 controller fresh gate 得到 TUI typecheck/build exit 0、parser+renderer `53/53`、scenario `24/24`、full `127/127`；Python safety `27/27`、full `463 passed, 1 warning`，唯一警告是已知 Starlette `TestClient`/`httpx` deprecation；禁止 TUI driver/watch/sqlite import 扫描 exit 1（无匹配），`tui/package*.json` 零变化，implementation diff 仅 7 个 TUI 文件，working/index `git diff --check` clean。pytest 首次 full 因旧 `.superpowers/sdd/pytest-tmp/pytest-of-17003` 属于另一安全主体而产生 `PermissionError`；切到同一指定根目录下本轮独立子目录后，最小 `tmp_path` `1/1` 与 full 均通过，未改产品代码、未删除旧目录。
+
+live smoke 前只读确认 `physical-agent.yaml` 唯一 driver 为 `mock_arm`、SQLite Action Board 只有 completed 且 `pending/in_progress=0`、既存 API 返回 `ready=True` 且 unsafe action=0。已有两个用户启动的 API/watch 进程保持原样；Windows 应用自动化安全规则禁止控制 Terminal，故没有启动无法可靠交互/归属清理的额外窗口，也没有声称观察到 nondeterministic LLM 长回复。deterministic scenario 与 24/48/100 physical stdout tests 是本轮权威视觉证据。
+
+历史门禁偏离：Task 3 在 independent review 前提前 push `25f20c48eb8bd9ac4d40aa9bcce120ae42acf7a0`；该 head 的 Push run `29723405783` 与 draft-PR run `29723407703` 虽均 attempt 1 completed success，但 review 后已有三笔 repair，因此这两次 run 明确作废为 closure 证据，不以事后成功重写门禁顺序。当前 SPEC 仍为 🟡，等待 reviewed implementation/docs exact-head Push 与 draft-PR CI。全程未修改 FastAPI、API contract、SQLite、watch、driver、SafetyGate、SAFETY.md、审批/freeze 状态或 package dependency，其他冻结项不因 T4.2 解冻。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -520,6 +533,7 @@ cancelled/result race 的取舍是宁缺毋滥：approval rejected 可直接确�
 82. **物理终端回归必须等待语义完成，不等待任意重绘**（T4 review）：Ink 的 input clear、busy 或其他异步状态都可能产生 stdout write；Logo 一次性断言必须在 Enter 后新的命令完成标记出现后再检查。测试 client 刻意延迟响应，防止固定 sleep、call-start count 或首个 write 造成假绿。
 83. **测试 stdin 消费与 stdout 写入必须解耦**（T4 exact-head CI）：custom stdin 的 `read()` 消费是可控的输入边界，stdout 写入还受 Ink render mode 与 CI 策略影响，不能作为发送 Enter 的前置条件。输入同步等待真实消费；结果同步仍等待 Enter 后命令专属语义标记，两者不能合并成任意 write 或固定 sleep。
 84. **物理 stdout 契约必须显式选择 Ink 非 CI 动态渲染分支**（T4 exact-head CI）：Ink v5 的 `isInCi && debug:false` 分支刻意抑制动态 frame，只在 unmount 写末帧；它不等价于 `isTTY=true` test harness 的目标路径。该测试可只对子测试进程设 `CI=false`，但 typecheck/build/runtime 继续保留真实 CI；未来若要测 CI 专属输出，必须另开保留 `CI=true` 的独立子进程，不能复用非 CI 契约冒充覆盖。
+85. **TUI finalized fallback 从 whole-message 收窄为 block-local，但协议例外更强**（T4.2）：选择无依赖 block scanner，是为让一个 unsupported block 不拖累相邻合法内容；放弃 CommonMark dependency 与删除标记式后处理，以控制依赖/AST 映射面并避免内容损失。`action-draft`、非 finalized assistant 与畸形 block 继续逐字，presentation 解析不得解释 proposal/action/Gate。
 
 ## 4. 经验教训（流程侧）
 
@@ -557,5 +571,6 @@ cancelled/result race 的取舍是宁缺毋滥：approval rejected 可直接确�
 - **门禁顺序必须核对 commit ancestry 与 CI headSha**（R8.1 的教训）：文档表格顺序或后来成功的 run 不能证明前置门槛当时已经关闭；每个 hard gate 都要记录依赖 commit、实际祖先关系与对应 run 的 headSha，发现偏离就保留事实并说明安全影响。
 - **承诺的 rollback unit 必须落实为实际提交边界**（R8.1 的教训）：计划写“可单独回退”时，实现就应拆成对应 commits；若已合并提交，则不得事后把它描述成可独立 revert，必须记录父提交/完整提交或显式 file/hunk selective recovery，并在恢复后重跑相关契约。
 - **TUI 测试先区分模拟 TTY 与 Ink CI 输出策略**（T4 CI 的教训）：`CI=true + debug:false` 会让 Ink 抑制动态 frame，这不是 Windows/Linux 产品差异。测试 harness 应分别暴露 stdin consumption 与 post-Enter semantic completion；物理 stdout 契约只在显式非 CI test child 中运行，CI 专属输出另设独立用例。
+- **push 必须在独立 review 修复完成后发生**（T4.2 的教训）：`25f20c4` 在 review 前提前 push，后续 CI 即使成功也只能算被 supersede 的历史运行；closure 文档只允许引用 reviewed exact head，并必须逐 run 核对 `headSha`、attempt 与全部 applicable job conclusion。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

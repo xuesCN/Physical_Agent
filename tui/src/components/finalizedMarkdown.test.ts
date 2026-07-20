@@ -39,6 +39,26 @@ test("minimal table delimiters remain one literal table block", () => {
   assert.deepEqual(blocks, [{ kind: "literal", lines: source.split("\n") }]);
 });
 
+test("literal table stops before an adjacent list without a blank line", () => {
+  const blocks = parseFinalizedBlocks("Name | State\n- | -\narm | idle\n- next");
+
+  assert.deepEqual(blocks.map((block) => block.kind), ["literal", "list"]);
+  assert.deepEqual(blocks[0]?.kind === "literal" ? blocks[0].lines : null, [
+    "Name | State", "- | -", "arm | idle"
+  ]);
+  assert.equal(
+    blocks[1]?.kind === "list" ? blocks[1].items[0]?.segments.map((segment) => segment.text).join("") : null,
+    "next"
+  );
+});
+
+test("pipe-bearing heading keeps precedence over delimiter lookahead", () => {
+  const blocks = parseFinalizedBlocks("## Name | State\n- | -\narm | idle");
+
+  assert.deepEqual(blocks.map((block) => block.kind), ["heading", "literal", "paragraph"]);
+  assert.deepEqual(blocks[1]?.kind === "literal" ? blocks[1].lines : null, ["- | -"]);
+});
+
 test("list indentation stack accepts common deltas and rejects invalid runs", () => {
   for (const spaces of [2, 3, 4, 8]) {
     const parsed = parseFinalizedBlocks(`1. root\n${" ".repeat(spaces)}- child`);

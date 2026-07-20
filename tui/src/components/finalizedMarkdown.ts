@@ -66,14 +66,6 @@ export function parseFinalizedBlocks(value: string): FinalizedBlock[] {
       continue;
     }
 
-    if (line.includes("|") && TABLE_DELIMITER.test(lines[index + 1] ?? "")) {
-      let end = index + 2;
-      while (end < lines.length && !startsNewNonListBlock(lines[end] ?? "")) end += 1;
-      blocks.push({ kind: "literal", lines: lines.slice(index, end) });
-      index = end;
-      continue;
-    }
-
     if (HEADING_CANDIDATE.test(line)) {
       blocks.push(parseHeading(line));
       index += 1;
@@ -81,9 +73,22 @@ export function parseFinalizedBlocks(value: string): FinalizedBlock[] {
     }
 
     if (LIST_CANDIDATE.test(line)) {
+      if (TABLE_DELIMITER.test(line)) {
+        blocks.push({ kind: "literal", lines: [line] });
+        index += 1;
+        continue;
+      }
       let end = index + 1;
       while (end < lines.length && LIST_CANDIDATE.test(lines[end] ?? "")) end += 1;
       blocks.push(parseListRun(lines.slice(index, end)));
+      index = end;
+      continue;
+    }
+
+    if (line.includes("|") && TABLE_DELIMITER.test(lines[index + 1] ?? "")) {
+      let end = index + 2;
+      while (end < lines.length && isTableContinuation(lines[end] ?? "")) end += 1;
+      blocks.push({ kind: "literal", lines: lines.slice(index, end) });
       index = end;
       continue;
     }
@@ -101,8 +106,8 @@ function startsNewBlock(line: string): boolean {
   return line === "" || line.startsWith("```") || HEADING_CANDIDATE.test(line) || LIST_CANDIDATE.test(line);
 }
 
-function startsNewNonListBlock(line: string): boolean {
-  return line === "" || line.startsWith("```") || HEADING_CANDIDATE.test(line);
+function isTableContinuation(line: string): boolean {
+  return line.includes("|") && !startsNewBlock(line);
 }
 
 function parseFence(lines: string[], start: number): { block: FinalizedBlock; next: number } {

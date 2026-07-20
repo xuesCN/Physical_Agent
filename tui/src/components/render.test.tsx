@@ -350,6 +350,16 @@ test("FinalizedText preserves GFM tables with optional outer pipes literally", (
   }
 });
 
+test("FinalizedText keeps table adjacency and pipe-bearing heading precedence", () => {
+  const adjacent = render(<FinalizedText value={"Name | State\n- | -\narm | idle\n- next"} />);
+  assert.equal(adjacent.lastFrame() ?? "", "Name | State\n- | -\narm | idle\n• next");
+  adjacent.unmount();
+
+  const heading = render(<FinalizedText value={"## Name | State\n- | -\narm | idle"} />);
+  assert.equal(heading.lastFrame() ?? "", "Name | State\n- | -\narm | idle");
+  heading.unmount();
+});
+
 test("FinalizedText keeps an ordinary prose pipe in the supported subset", () => {
   const value = "Name | **idle**";
   const view = render(<FinalizedText value={value} />);

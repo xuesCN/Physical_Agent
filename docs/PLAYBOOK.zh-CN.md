@@ -211,6 +211,8 @@
 
 **T4.2 历史门禁偏离（不作 closure 证据）**：Task 3 执行者在独立 review 前提前 push 了 `25f20c48eb8bd9ac4d40aa9bcce120ae42acf7a0`；其 Push run `29723405783` 与 draft-PR run `29723407703` 虽均为 attempt 1 completed success，但该 head 随后被三笔 review repair supersede，因此不得复用或概括为 T4.2 完成证据。SPEC 保持 🟡，直到 reviewed implementation/docs exact head 的 Push 与 draft-PR workflows 都成功。
 
+**T4.2 exact-head CI（2026-07-20）**：implementation/docs head `d72e187d340a2517d0dd005830977dd1b2babb0c` 的 Push run `29725427128` 与 draft-PR run `29725429981` 均为 attempt 1 completed success，且 `headSha` 精确匹配。Push 中 Ink TUI contract、frontend build + packaged wheel smoke、Python safety smoke 成功，generic Python matrix、Playwright 与 PR-only Python 3.12 full skipped；draft-PR 中 Ink TUI、frontend+wheel、Python 3.12 full、Python safety 与 Playwright 全部成功，generic Python matrix skipped。该 reviewed head 才是 T4.2 closure 证据；早推 `25f20c4` 的两次 run 保持历史偏离身份。
+
 ## C4 i18n / E3 视觉打磨
 
 **思路**：C4：antd `ConfigProvider locale` + 文案抽到 `locales/{zh,en}.ts` 键值表（不上 i18next，工程量不值），默认跟浏览器语言，切换存 localStorage。E3：暗色模式用 antd `theme.darkAlgorithm` token 切换 + localStorage；首次引导用 antd Tour 组件串 setup→watch→demo 三步。

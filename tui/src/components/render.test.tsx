@@ -248,6 +248,51 @@ test("FinalizedText limits literal fallback to the unsupported block", () => {
   view.unmount();
 });
 
+test("FinalizedText preserves matching shortcut reference source block-locally", () => {
+  const value = [
+    "## Before",
+    "",
+    "[**label**]",
+    "",
+    "[**label**]: https://example.com",
+    "",
+    "**After**"
+  ].join("\n");
+  const view = render(<FinalizedText value={value} />);
+
+  assert.equal(
+    view.lastFrame() ?? "",
+    ["Before", "", "[**label**]", "", "[**label**]: https://example.com", "", "After"].join("\n")
+  );
+  view.unmount();
+});
+
+test("FinalizedText preserves matching image shortcut source block-locally", () => {
+  const value = [
+    "## Before",
+    "",
+    "![**alt**]",
+    "",
+    "[**alt**]: https://example.com/image.png",
+    "",
+    "**After**"
+  ].join("\n");
+  const view = render(<FinalizedText value={value} />);
+
+  assert.equal(
+    view.lastFrame() ?? "",
+    ["Before", "", "![**alt**]", "", "[**alt**]: https://example.com/image.png", "", "After"].join("\n")
+  );
+  view.unmount();
+});
+
+test("FinalizedText keeps unmatched plain bracket prose in the supported subset", () => {
+  const view = render(<FinalizedText value="[plain bracketed prose] and **ready**" />);
+
+  assert.equal(view.lastFrame() ?? "", "[plain bracketed prose] and ready");
+  view.unmount();
+});
+
 test("FinalizedText renders generic code and preserves reserved action-draft fences", () => {
   const generic = render(<FinalizedText value={"```ts\nconst x = 1;\n```"} />);
   assert.match(generic.lastFrame() ?? "", /^│ ts$/m);

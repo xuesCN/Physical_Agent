@@ -27,6 +27,7 @@ const HEADING = /^(#{1,6})\s+(.+)$/;
 const FENCE_OPENER = /^```([A-Za-z0-9][A-Za-z0-9_+-]{0,31})? *$/;
 const FENCE_CLOSER = /^``` *$/;
 const TABLE_DELIMITER = /^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)+\|?[ \t]*$/;
+const REFERENCE_DEFINITION = /^ {0,3}\[([^\]\n]+)\]:/;
 
 const INLINE_UNSUPPORTED = [
   /``|~~~/,
@@ -48,6 +49,7 @@ const UNSUPPORTED_UNDERSCORE = /(^|[^A-Za-z0-9])_(?=\S)|\S_(?=$|[^A-Za-z0-9])/m;
 
 export function parseFinalizedBlocks(value: string): FinalizedBlock[] {
   const lines = normalizeTerminalText(value).split("\n");
+  const referenceLabels = collectReferenceLabels(lines);
   const blocks: FinalizedBlock[] = [];
   let index = 0;
 
@@ -67,7 +69,7 @@ export function parseFinalizedBlocks(value: string): FinalizedBlock[] {
     }
 
     if (HEADING_CANDIDATE.test(line)) {
-      blocks.push(parseHeading(line));
+      blocks.push(parseHeading(line, referenceLabels));
       index += 1;
       continue;
     }
@@ -80,7 +82,7 @@ export function parseFinalizedBlocks(value: string): FinalizedBlock[] {
       }
       let end = index + 1;
       while (end < lines.length && LIST_CANDIDATE.test(lines[end] ?? "")) end += 1;
-      blocks.push(parseListRun(lines.slice(index, end)));
+      blocks.push(parseListRun(lines.slice(index, end), referenceLabels));
       index = end;
       continue;
     }
@@ -95,11 +97,31 @@ export function parseFinalizedBlocks(value: string): FinalizedBlock[] {
 
     let end = index + 1;
     while (end < lines.length && !startsNewBlock(lines[end] ?? "")) end += 1;
-    blocks.push(parseParagraph(lines.slice(index, end)));
+    blocks.push(parseParagraph(lines.slice(index, end), referenceLabels));
     index = end;
   }
 
   return blocks;
+}
+
+function collectReferenceLabels(lines: string[]): Set<string> {
+  const labels = new Set<string>();
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index] ?? "";
+    if (line.startsWith("```")) {
+      index = parseFence(lines, index).next;
+      continue;
+    }
+    const match = REFERENCE_DEFINITION.exec(line);
+    if (match?.[1]) labels.add(normalizeReferenceLabel(match[1]));
+    index += 1;
+  }
+  return labels;
+}
+
+function normalizeReferenceLabel(value: string): string {
+  return value.trim().replace(/[ \t]+/g, " ").toLowerCase();
 }
 
 function startsNewBlock(line: string): boolean {
@@ -136,18 +158,18 @@ function parseFence(lines: string[], start: number): { block: FinalizedBlock; ne
   };
 }
 
-function parseHeading(line: string): FinalizedBlock {
+function parseHeading(line: string, referenceLabels: ReadonlySet<string>): FinalizedBlock {
   const match = HEADING.exec(line);
   if (!match || /\s+#{1,6}\s*$/.test(match[2] ?? "")) {
     return { kind: "literal", lines: [line] };
   }
-  const segments = parseSupportedInline(match[2] ?? "");
+  const segments = parseSupportedInline(match[2] ?? "", referenceLabels);
   return segments
     ? { kind: "heading", level: (match[1] ?? "").length, segments }
     : { kind: "literal", lines: [line] };
 }
 
-function parseListRun(lines: string[]): FinalizedBlock {
+function parseListRun(lines: string[], referenceLabels: ReadonlySet<string>): FinalizedBlock {
   const columns: number[] = [];
   const items: ListItem[] = [];
 
@@ -174,7 +196,7 @@ function parseListRun(lines: string[]): FinalizedBlock {
       }
     }
 
-    const segments = parseSupportedInline(body);
+    const segments = parseSupportedInline(body, referenceLabels);
     if (!segments) return { kind: "literal", lines };
     items.push({
       depth: (columns.length - 1) as 0 | 1 | 2,
@@ -187,12 +209,12 @@ function parseListRun(lines: string[]): FinalizedBlock {
   return { kind: "list", items };
 }
 
-function parseParagraph(lines: string[]): FinalizedBlock {
+function parseParagraph(lines: string[], referenceLabels: ReadonlySet<string>): FinalizedBlock {
   const source = lines.join("\n");
   if (BLOCK_UNSUPPORTED.some((pattern) => pattern.test(source))) {
     return { kind: "literal", lines };
   }
-  const parsed = lines.map(parseSupportedInline);
+  const parsed = lines.map((line) => parseSupportedInline(line, referenceLabels));
   if (parsed.some((line) => line === null)) return { kind: "literal", lines };
   return { kind: "paragraph", lines: parsed as InlineSegment[][] };
 }
@@ -201,9 +223,9 @@ function hasNestedBlockMarkup(value: string): boolean {
   return /^(?:#{1,6}\s|>|[-*+]\s|\d+[.)]\s|\[[ xX]\]\s)/.test(value);
 }
 
-function parseSupportedInline(value: string): InlineSegment[] | null {
+function parseSupportedInline(value: string, referenceLabels: ReadonlySet<string>): InlineSegment[] | null {
   if (
-    containsUnsupportedLinkMarkup(value) ||
+    containsUnsupportedLinkMarkup(value, referenceLabels) ||
     INLINE_UNSUPPORTED.some((pattern) => pattern.test(value)) ||
     UNSUPPORTED_UNDERSCORE.test(value)
   ) {
@@ -212,7 +234,7 @@ function parseSupportedInline(value: string): InlineSegment[] | null {
   return parseInline(value);
 }
 
-function containsUnsupportedLinkMarkup(value: string): boolean {
+function containsUnsupportedLinkMarkup(value: string, referenceLabels: ReadonlySet<string>): boolean {
   let depth = 0;
   for (let cursor = 0; cursor < value.length; cursor += 1) {
     if (value[cursor] === "[") depth += 1;
@@ -220,6 +242,9 @@ function containsUnsupportedLinkMarkup(value: string): boolean {
       depth -= 1;
       if (value[cursor + 1] === "(" || value[cursor + 1] === "[") return true;
     }
+  }
+  for (const match of value.matchAll(/!?\[([^\[\]\n]+)\]/g)) {
+    if (referenceLabels.has(normalizeReferenceLabel(match[1] ?? ""))) return true;
   }
   return false;
 }

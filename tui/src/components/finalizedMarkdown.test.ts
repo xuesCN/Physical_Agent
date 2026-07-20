@@ -32,6 +32,73 @@ test("unsupported paragraph is local while adjacent supported blocks survive", (
   assert.deepEqual(literal.lines, ["| Name | State |", "| --- | --- |", "| arm | **idle** |"]);
 });
 
+test("matching shortcut reference stays literal between supported blocks", () => {
+  const source = [
+    "## Before",
+    "",
+    "[**label**]",
+    "",
+    "[**label**]: https://example.com",
+    "",
+    "**After**"
+  ].join("\n");
+  const blocks = parseFinalizedBlocks(source);
+
+  assert.deepEqual(blocks.map((block) => block.kind), [
+    "heading", "blank", "literal", "blank", "literal", "blank", "paragraph"
+  ]);
+  assert.deepEqual(blocks[2]?.kind === "literal" ? blocks[2].lines : null, ["[**label**]"]);
+  assert.deepEqual(blocks[4]?.kind === "literal" ? blocks[4].lines : null, [
+    "[**label**]: https://example.com"
+  ]);
+});
+
+test("matching image shortcut reference stays literal between supported blocks", () => {
+  const source = [
+    "## Before",
+    "",
+    "![**alt**]",
+    "",
+    "[**alt**]: https://example.com/image.png",
+    "",
+    "**After**"
+  ].join("\n");
+  const blocks = parseFinalizedBlocks(source);
+
+  assert.deepEqual(blocks.map((block) => block.kind), [
+    "heading", "blank", "literal", "blank", "literal", "blank", "paragraph"
+  ]);
+  assert.deepEqual(blocks[2]?.kind === "literal" ? blocks[2].lines : null, ["![**alt**]"]);
+  assert.deepEqual(blocks[4]?.kind === "literal" ? blocks[4].lines : null, [
+    "[**alt**]: https://example.com/image.png"
+  ]);
+});
+
+test("shortcut reference labels match after case and ASCII whitespace normalization", () => {
+  const blocks = parseFinalizedBlocks([
+    "[**Mixed   Label**]",
+    "",
+    "[**mixed label**]: https://example.com"
+  ].join("\n"));
+
+  assert.equal(blocks[0]?.kind, "literal");
+  assert.deepEqual(blocks[0]?.kind === "literal" ? blocks[0].lines : null, [
+    "[**Mixed   Label**]"
+  ]);
+});
+
+test("reference-like lines inside fenced code do not define shortcuts", () => {
+  const blocks = parseFinalizedBlocks([
+    "[**label**]",
+    "",
+    "```md",
+    "[**label**]: https://example.com",
+    "```"
+  ].join("\n"));
+
+  assert.deepEqual(blocks.map((block) => block.kind), ["paragraph", "blank", "code"]);
+});
+
 test("minimal table delimiters remain one literal table block", () => {
   const source = "Name | State\n- | -\narm | **idle**";
   const blocks = parseFinalizedBlocks(source);

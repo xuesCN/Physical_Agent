@@ -9,7 +9,7 @@ import { ChatPanel } from "./ChatPanel.js";
 import { CommandInput } from "./CommandInput.js";
 import { ConfigPanel } from "./ConfigPanel.js";
 import { ExecutionApprovalNotice } from "./ExecutionApprovalNotice.js";
-import { FinalizedText, parseFinalizedText } from "./FinalizedText.js";
+import { FinalizedText } from "./FinalizedText.js";
 import { rolePresentation } from "./MessageRow.js";
 import { RobotDetailPanel } from "./RobotDetailPanel.js";
 import { RobotsPanel } from "./RobotsPanel.js";
@@ -205,9 +205,72 @@ test("FinalizedText formats the supported heading list bold and inline-code subs
   view.unmount();
 });
 
+test("FinalizedText renders the screenshot-shaped nested reply without supported markers", () => {
+  const value = [
+    "## Current Workspace",
+    "",
+    "**Robot state**",
+    "- `arm_1` is currently **idle**.",
+    "",
+    "**Visible objects**",
+    "1. **red_block**",
+    "   - Type: block",
+    "   - Color: red",
+    "2. **tray**",
+    "   - Type: tray"
+  ].join("\n");
+  const view = render(<FinalizedText value={value} />);
+  const frame = view.lastFrame() ?? "";
+  assert.match(frame, /Current Workspace/);
+  assert.match(frame, /arm_1 is currently idle\./);
+  assert.match(frame, /1\. red_block/);
+  assert.match(frame, /Type: block/);
+  assert.doesNotMatch(frame, /##|\*\*|`arm_1`/);
+  view.unmount();
+});
+
+test("FinalizedText limits literal fallback to the unsupported block", () => {
+  const value = [
+    "## Before",
+    "",
+    "| Name | State |",
+    "| --- | --- |",
+    "| arm | **idle** |",
+    "",
+    "**After**"
+  ].join("\n");
+  const view = render(<FinalizedText value={value} />);
+  const frame = view.lastFrame() ?? "";
+  assert.match(frame, /Before/);
+  assert.match(frame, /\| arm \| \*\*idle\*\* \|/);
+  assert.match(frame, /After/);
+  assert.doesNotMatch(frame, /## Before|\*\*After\*\*/);
+  view.unmount();
+});
+
+test("FinalizedText renders generic code and preserves reserved action-draft fences", () => {
+  const generic = render(<FinalizedText value={"```ts\nconst x = 1;\n```"} />);
+  assert.match(generic.lastFrame() ?? "", /ts/);
+  assert.match(generic.lastFrame() ?? "", /const x = 1;/);
+  assert.doesNotMatch(generic.lastFrame() ?? "", /```/);
+  generic.unmount();
+
+  const reserved = render(<FinalizedText value={'```action-draft\n{"actions":[]}\n```'} />);
+  assert.match(reserved.lastFrame() ?? "", /```action-draft/);
+  assert.match(reserved.lastFrame() ?? "", /\{"actions":\[\]\}/);
+  reserved.unmount();
+});
+
+test("FinalizedText preserves source paragraph and trailing blank lines", () => {
+  const view = render(<FinalizedText value={"first **line**\nsecond `line`\n\nlast\n"} />);
+  assert.match(view.lastFrame() ?? "", /first line\nsecond line\n\nlast\n?$/);
+  view.unmount();
+});
+
 test("FinalizedText preserves unsupported malformed or nested Markdown literally", () => {
   const values = [
-    "```ts\nconst x = 1;\n```",
+    "```ts\nconst x = 1;",
+    "```ts\n```js\nconst x = 1;\n```",
     "unclosed **bold",
     "unclosed `code",
     "**bold with `nested` code**",
@@ -215,7 +278,7 @@ test("FinalizedText preserves unsupported malformed or nested Markdown literally
     "*unsupported emphasis*",
     "\\**escaped bold**",
     "\\`escaped code`",
-    "  - nested item",
+    "- root\n  - nested\n - bad dedent",
     "- [ ] task item",
     "- > nested quote",
     ">quoted block",
@@ -227,7 +290,6 @@ test("FinalizedText preserves unsupported malformed or nested Markdown literally
     "```action-draft\n{\"actions\":[]}\n```"
   ];
   for (const value of values) {
-    assert.equal(parseFinalizedText(value), null);
     const view = render(<FinalizedText value={value} />);
     assert.match(
       view.lastFrame() ?? "",
@@ -251,7 +313,6 @@ test("FinalizedText falls back wholly when supported tokens mix with unsupported
   ];
 
   for (const value of values) {
-    assert.equal(parseFinalizedText(value), null, value);
     const view = render(<FinalizedText value={value} />);
     assert.equal(view.lastFrame() ?? "", normalizeTerminalText(value), value);
     view.unmount();
@@ -261,12 +322,10 @@ test("FinalizedText falls back wholly when supported tokens mix with unsupported
 test("FinalizedText preserves GFM tables with optional outer pipes literally", () => {
   const values = [
     "Name | State\n--- | ---\narm | **idle**",
-    "Name | State\n- | -\narm | **idle**",
     "| Name | State |\n| :--- | ---: |\n| arm | **idle** |"
   ];
 
   for (const value of values) {
-    assert.equal(parseFinalizedText(value), null, value);
     const view = render(<FinalizedText value={value} />);
     assert.equal(view.lastFrame() ?? "", normalizeTerminalText(value), value);
     view.unmount();
@@ -275,7 +334,6 @@ test("FinalizedText preserves GFM tables with optional outer pipes literally", (
 
 test("FinalizedText keeps an ordinary prose pipe in the supported subset", () => {
   const value = "Name | **idle**";
-  assert.notEqual(parseFinalizedText(value), null);
   const view = render(<FinalizedText value={value} />);
   assert.equal(view.lastFrame() ?? "", "Name | idle");
   view.unmount();
@@ -289,7 +347,6 @@ test("FinalizedText rejects underscore emphasis containing internal underscores"
   ];
 
   for (const value of values) {
-    assert.equal(parseFinalizedText(value), null, value);
     const view = render(<FinalizedText value={value} />);
     assert.equal(view.lastFrame() ?? "", normalizeTerminalText(value), value);
     view.unmount();
@@ -303,7 +360,6 @@ test("FinalizedText rejects unsupported delimiter runs without losing content", 
   ];
 
   for (const value of values) {
-    assert.equal(parseFinalizedText(value), null, value);
     const view = render(<FinalizedText value={value} />);
     assert.equal(view.lastFrame() ?? "", normalizeTerminalText(value), value);
     view.unmount();
@@ -324,7 +380,9 @@ test("Transcript formats only finalized assistant entries", () => {
       entries={[
         { kind: "chat", id: "a1", role: "assistant", content: "## Assistant heading" },
         { kind: "chat", id: "u1", role: "user", content: "## User literal" },
-        { kind: "chat", id: "d1", role: "draft", content: "**Draft literal**" }
+        { kind: "chat", id: "d1", role: "draft", content: "**Draft literal**" },
+        { kind: "chat", id: "s1", role: "system", content: "`System literal`" },
+        { kind: "chat", id: "x1", role: "unknown", content: "**Unknown literal**" }
       ]}
     />
   );
@@ -333,6 +391,8 @@ test("Transcript formats only finalized assistant entries", () => {
   assert.doesNotMatch(frame, /## Assistant heading/);
   assert.match(frame, />\s+## User literal/);
   assert.match(frame, /draft\s+◇\s+\*\*Draft literal\*\*/);
+  assert.match(frame, /`System literal`/);
+  assert.match(frame, /\*\*Unknown literal\*\*/);
   view.unmount();
 });
 

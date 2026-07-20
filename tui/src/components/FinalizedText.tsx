@@ -1,215 +1,95 @@
 import React from "react";
-import { Text } from "ink";
+import { Box, Text } from "ink";
 import { THEME } from "../theme.js";
-import { normalizeTerminalText } from "./textFormat.js";
+import {
+  parseFinalizedBlocks,
+  type FinalizedBlock,
+  type InlineSegment
+} from "./finalizedMarkdown.js";
 
-type SegmentKind = "text" | "bold" | "code";
-type LineKind = "plain" | "heading" | "unordered" | "ordered";
-
-interface FormattedSegment {
-  kind: SegmentKind;
-  text: string;
-}
-
-export interface FormattedLine {
-  kind: LineKind;
-  prefix: string;
-  segments: FormattedSegment[];
-}
-
-const unsupportedMarkdownPatterns = [
-  /``|~~~/,
-  /\*\*\*|__|~~/,
-  /\\[!-/:-@[-`{-~]/,
-  /<[^>\n]+>/,
-  /^ {0,3}\[[^\]\n]+\]:/m,
-  /^(?: {4}|\t)/m,
-  /^\s*>/m,
-  /^\s*\|.*\|\s*$/m,
-  /^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)+\|?[ \t]*$/m,
-  /^\s*(?:-{3,}|={3,})\s*$/m,
-  /^\s*(?:\+|\d+\))\s+/m,
-  /^[ \t]+(?:#{1,6}|[-*]|\d+\.)\s+/m
-];
-const unsupportedUnderscoreEmphasis = /(^|[^A-Za-z0-9])_(?=\S)|\S_(?=$|[^A-Za-z0-9])/m;
-
-export function parseFinalizedText(value: string): FormattedLine[] | null {
-  const normalized = normalizeTerminalText(value);
-  if (
-    containsUnsupportedLinkMarkup(normalized) ||
-    unsupportedMarkdownPatterns.some((pattern) => pattern.test(normalized)) ||
-    unsupportedUnderscoreEmphasis.test(normalized)
-  ) {
-    return null;
-  }
-
-  const lines: FormattedLine[] = [];
-  for (const line of normalized.split("\n")) {
-    const formatted = parseLine(line);
-    if (!formatted) {
-      return null;
-    }
-    lines.push(formatted);
-  }
-  return lines;
-}
-
-function containsUnsupportedLinkMarkup(value: string): boolean {
-  let bracketDepth = 0;
-  for (let cursor = 0; cursor < value.length; cursor += 1) {
-    if (value[cursor] === "[") {
-      bracketDepth += 1;
-      continue;
-    }
-    if (value[cursor] !== "]" || bracketDepth === 0) {
-      continue;
-    }
-
-    bracketDepth -= 1;
-    const destinationStart = value[cursor + 1];
-    if (destinationStart === "(" || destinationStart === "[") {
-      return true;
-    }
-  }
-  return false;
-}
+const BULLETS = ["•", "◦", "▪"] as const;
 
 export function FinalizedText({ value }: { value: string }): React.JSX.Element {
-  const normalized = normalizeTerminalText(value);
-  const lines = parseFinalizedText(normalized);
-  if (!lines) {
-    return <Text>{normalized}</Text>;
-  }
-
+  const blocks = parseFinalizedBlocks(value);
   return (
-    <Text>
-      {lines.map((line, lineIndex) => (
-        <React.Fragment
-          key={`${lineIndex}:${line.prefix}:${line.segments.map((segment) => segment.text).join("")}`}
-        >
-          {lineIndex > 0 ? "\n" : null}
-          <Text
-            bold={line.kind === "heading"}
-            color={line.kind === "heading" ? THEME.brandAccent : undefined}
-          >
-            {line.prefix ? <Text color={THEME.muted}>{line.prefix}</Text> : null}
-            {line.segments.map((segment, segmentIndex) => (
-              <Text
-                key={`${segmentIndex}:${segment.kind}:${segment.text}`}
-                bold={segment.kind === "bold"}
-                color={segment.kind === "code" ? "cyan" : undefined}
-              >
-                {segment.text}
-              </Text>
-            ))}
-          </Text>
-        </React.Fragment>
+    <Box flexDirection="column" width="100%">
+      {blocks.map((block, index) => (
+        <Block key={`${index}:${block.kind}`} block={block} />
       ))}
+    </Box>
+  );
+}
+
+function Block({ block }: { block: FinalizedBlock }): React.JSX.Element {
+  switch (block.kind) {
+    case "blank":
+      return <Box height={1}><Text>{" "}</Text></Box>;
+    case "heading":
+      return <InlineText segments={block.segments} bold color={THEME.brandAccent} />;
+    case "paragraph":
+      return (
+        <Box flexDirection="column">
+          {block.lines.map((line, index) => <InlineText key={index} segments={line} />)}
+        </Box>
+      );
+    case "list":
+      return (
+        <Box flexDirection="column">
+          {block.items.map((item, index) => (
+            <Text key={index}>
+              {"  ".repeat(item.depth)}
+              <Text color={THEME.muted}>{item.ordered ? item.marker : BULLETS[item.depth]} </Text>
+              <InlineFragments segments={item.segments} />
+            </Text>
+          ))}
+        </Box>
+      );
+    case "code":
+      return (
+        <Box flexDirection="column">
+          {block.language ? <Text><Text color={THEME.muted}>─ {block.language}</Text></Text> : null}
+          {block.lines.map((line, index) => (
+            <Text key={index}><Text color={THEME.muted}>─ </Text>{line || " "}</Text>
+          ))}
+        </Box>
+      );
+    case "literal":
+      return (
+        <Box flexDirection="column">
+          {block.lines.map((line, index) => <Text key={index}>{line || " "}</Text>)}
+        </Box>
+      );
+  }
+}
+
+function InlineText({
+  segments,
+  bold = false,
+  color
+}: {
+  segments: InlineSegment[];
+  bold?: boolean;
+  color?: string;
+}): React.JSX.Element {
+  return (
+    <Text bold={bold} color={color}>
+      <InlineFragments segments={segments} />
     </Text>
   );
 }
 
-function parseLine(line: string): FormattedLine | null {
-  const heading = /^(#{1,6})\s+(.+)$/.exec(line);
-  if (heading) {
-    if (/\s+#{1,6}\s*$/.test(heading[2])) {
-      return null;
-    }
-    return lineWithSegments("heading", "", heading[2]);
-  }
-  if (/^#{1,6}(?:\s|$)/.test(line)) {
-    return null;
-  }
-
-  const unordered = /^[-*]\s+(.+)$/.exec(line);
-  if (unordered) {
-    if (hasNestedBlockMarkup(unordered[1])) {
-      return null;
-    }
-    return lineWithSegments("unordered", "• ", unordered[1]);
-  }
-  if (/^[-*]\s*$/.test(line)) {
-    return null;
-  }
-
-  const ordered = /^(\d+)\.\s+(.+)$/.exec(line);
-  if (ordered) {
-    if (hasNestedBlockMarkup(ordered[2])) {
-      return null;
-    }
-    return lineWithSegments("ordered", `${ordered[1]}. `, ordered[2]);
-  }
-  if (/^\d+\.\s*$/.test(line)) {
-    return null;
-  }
-
-  return lineWithSegments("plain", "", line);
-}
-
-function hasNestedBlockMarkup(value: string): boolean {
-  return /^(?:#{1,6}\s|>|[-*+]\s|\d+[.)]\s|\[[ xX]\]\s)/.test(value);
-}
-
-function lineWithSegments(kind: LineKind, prefix: string, value: string): FormattedLine | null {
-  const segments = parseInline(value);
-  return segments ? { kind, prefix, segments } : null;
-}
-
-function parseInline(value: string): FormattedSegment[] | null {
-  const segments: FormattedSegment[] = [];
-  let cursor = 0;
-  let plainStart = 0;
-
-  while (cursor < value.length) {
-    if (value.startsWith("**", cursor)) {
-      pushPlainSegment(segments, value, plainStart, cursor);
-      const close = value.indexOf("**", cursor + 2);
-      if (close < 0) {
-        return null;
-      }
-      const content = value.slice(cursor + 2, close);
-      if (!content || /^\s|\s$/.test(content) || /[*`]/.test(content)) {
-        return null;
-      }
-      segments.push({ kind: "bold", text: content });
-      cursor = close + 2;
-      plainStart = cursor;
-      continue;
-    }
-
-    if (value[cursor] === "`") {
-      pushPlainSegment(segments, value, plainStart, cursor);
-      const close = value.indexOf("`", cursor + 1);
-      if (close < 0) {
-        return null;
-      }
-      const content = value.slice(cursor + 1, close);
-      if (!content || content.includes("**")) {
-        return null;
-      }
-      segments.push({ kind: "code", text: content });
-      cursor = close + 1;
-      plainStart = cursor;
-      continue;
-    }
-
-    if (value[cursor] === "*") {
-      return null;
-    }
-    cursor += 1;
-  }
-
-  pushPlainSegment(segments, value, plainStart, value.length);
-  return segments;
-}
-
-function pushPlainSegment(
-  segments: FormattedSegment[],
-  value: string,
-  start: number,
-  end: number
-): void {
-  if (end > start) {
-    segments.push({ kind: "text", text: value.slice(start, end) });
-  }
+function InlineFragments({ segments }: { segments: InlineSegment[] }): React.JSX.Element {
+  return (
+    <>
+      {segments.map((segment, index) => (
+        <Text
+          key={`${index}:${segment.kind}:${segment.text}`}
+          bold={segment.kind === "bold"}
+          color={segment.kind === "code" ? "cyan" : undefined}
+        >
+          {segment.text}
+        </Text>
+      ))}
+    </>
+  );
 }

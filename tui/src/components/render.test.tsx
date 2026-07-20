@@ -350,6 +350,14 @@ test("FinalizedText preserves GFM tables with optional outer pipes literally", (
   }
 });
 
+test("FinalizedText preserves a pipe-bearing list-like table row literally", () => {
+  const source = "Name | State\n- | -\n- | idle";
+  const view = render(<FinalizedText value={source} />);
+
+  assert.equal(view.lastFrame() ?? "", source);
+  view.unmount();
+});
+
 test("FinalizedText keeps table adjacency and pipe-bearing heading precedence", () => {
   const adjacent = render(<FinalizedText value={"Name | State\n- | -\narm | idle\n- next"} />);
   assert.equal(adjacent.lastFrame() ?? "", "Name | State\n- | -\narm | idle\n• next");

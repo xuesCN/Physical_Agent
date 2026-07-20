@@ -107,7 +107,7 @@ function startsNewBlock(line: string): boolean {
 }
 
 function isTableContinuation(line: string): boolean {
-  return line.includes("|") && !startsNewBlock(line);
+  return line.includes("|") && !line.startsWith("```") && !HEADING_CANDIDATE.test(line);
 }
 
 function parseFence(lines: string[], start: number): { block: FinalizedBlock; next: number } {

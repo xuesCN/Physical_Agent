@@ -39,6 +39,14 @@ test("minimal table delimiters remain one literal table block", () => {
   assert.deepEqual(blocks, [{ kind: "literal", lines: source.split("\n") }]);
 });
 
+test("active table retains a pipe-bearing list-like row", () => {
+  const source = "Name | State\n- | -\n- | idle";
+
+  assert.deepEqual(parseFinalizedBlocks(source), [
+    { kind: "literal", lines: source.split("\n") }
+  ]);
+});
+
 test("literal table stops before an adjacent list without a blank line", () => {
   const blocks = parseFinalizedBlocks("Name | State\n- | -\narm | idle\n- next");
 

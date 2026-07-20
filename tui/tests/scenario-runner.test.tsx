@@ -236,7 +236,7 @@ test("48-column finalized and streaming chat use display-safe hanging indents", 
 test("nested Markdown list and code rows stay display-safe at finite widths", () => {
   const content = [
     "## Current Workspace",
-    "1. **red_block**",
+    "10. **red_block** has a deliberately long two-digit ordered body whose continuation-check stays aligned",
     "   - Description: 👋 中 e\u0301 👨‍👩‍👧‍👦 remains visible near the collaborative workspace boundary",
     "      * Detail: third-level bullet needs a stable physical rail for alignment-check",
     "2. **tray**",
@@ -264,12 +264,22 @@ test("nested Markdown list and code rows stay display-safe at finite widths", ()
         "Current Workspace", "red_block", "Description:", "collaborative workspace boundary",
         "Detail:", "alignment-check", "tray", "Type: tray", "const description", "code rail"
       ]);
+      for (const token of ["👋", "中", "e\u0301", "👨‍👩‍👧‍👦"]) {
+        const normalized = normalizeOutput(output).normalize("NFD");
+        assert.equal(normalized.split(token.normalize("NFD")).length - 1, 1, `${columns}: ${token}`);
+      }
       assert.equal(normalizeOutput(output).includes("## Current Workspace"), false);
       assert.equal(normalizeOutput(output).includes("**red_block**"), false);
       if (columns < 100) {
+        assertInnerHangingBody(
+          output,
+          "10.",
+          "red_block",
+          columns === 24 ? "two-digit" : "continuation-check"
+        );
         assertInnerHangingBody(output, "◦", "Description:", "boundary");
         assertInnerHangingBody(output, "▪", "Detail:", columns === 24 ? "third-level" : "alignment-check");
-        assertInnerHangingBody(output, "─", "const description", "rail");
+        assertInnerHangingBody(output, "│", "const description", "rail");
       }
     } finally {
       view.unmount();

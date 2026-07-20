@@ -250,8 +250,8 @@ test("FinalizedText limits literal fallback to the unsupported block", () => {
 
 test("FinalizedText renders generic code and preserves reserved action-draft fences", () => {
   const generic = render(<FinalizedText value={"```ts\nconst x = 1;\n```"} />);
-  assert.match(generic.lastFrame() ?? "", /ts/);
-  assert.match(generic.lastFrame() ?? "", /const x = 1;/);
+  assert.match(generic.lastFrame() ?? "", /^│ ts$/m);
+  assert.match(generic.lastFrame() ?? "", /^│ const x = 1;$/m);
   assert.doesNotMatch(generic.lastFrame() ?? "", /```/);
   generic.unmount();
 
@@ -259,6 +259,23 @@ test("FinalizedText renders generic code and preserves reserved action-draft fen
   assert.match(reserved.lastFrame() ?? "", /```action-draft/);
   assert.match(reserved.lastFrame() ?? "", /\{"actions":\[\]\}/);
   reserved.unmount();
+});
+
+test("FinalizedText gives empty valid fences a visible vertical-rail body row", () => {
+  const cases = [
+    { value: "```\n```", railRows: 1, adjacent: false },
+    { value: "```\n\n```", railRows: 1, adjacent: false },
+    { value: "```ts\n```", railRows: 2, adjacent: false },
+    { value: "```\n```\n## After", railRows: 1, adjacent: true }
+  ];
+
+  for (const { value, railRows, adjacent } of cases) {
+    const view = render(<FinalizedText value={value} />);
+    const lines = (view.lastFrame() ?? "").split("\n");
+    assert.equal(lines.filter((line) => line.startsWith("│")).length, railRows, value);
+    assert.equal(lines.some((line) => line.includes("After")), adjacent, value);
+    view.unmount();
+  }
 });
 
 test("FinalizedText preserves source paragraph and trailing blank lines", () => {
@@ -322,6 +339,7 @@ test("FinalizedText falls back wholly when supported tokens mix with unsupported
 test("FinalizedText preserves GFM tables with optional outer pipes literally", () => {
   const values = [
     "Name | State\n--- | ---\narm | **idle**",
+    "Name | State\n- | -\narm | **idle**",
     "| Name | State |\n| :--- | ---: |\n| arm | **idle** |"
   ];
 

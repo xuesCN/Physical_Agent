@@ -26,6 +26,7 @@ const HEADING_CANDIDATE = /^#{1,6}(?:\s|$)/;
 const HEADING = /^(#{1,6})\s+(.+)$/;
 const FENCE_OPENER = /^```([A-Za-z0-9][A-Za-z0-9_+-]{0,31})? *$/;
 const FENCE_CLOSER = /^``` *$/;
+const TABLE_DELIMITER = /^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)+\|?[ \t]*$/;
 
 const INLINE_UNSUPPORTED = [
   /``|~~~/,
@@ -38,7 +39,7 @@ const BLOCK_UNSUPPORTED = [
   /^(?: {4}|\t)/m,
   /^\s*>/m,
   /^\s*\|.*\|\s*$/m,
-  /^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)+\|?[ \t]*$/m,
+  new RegExp(TABLE_DELIMITER.source, "m"),
   /^\s*(?:-{3,}|={3,})\s*$/m,
   /^\s*(?:\+|\d+\))\s+/m,
   /^[ \t]+(?:#{1,6}|[-*]|\d+\.)\s+/m
@@ -62,6 +63,14 @@ export function parseFinalizedBlocks(value: string): FinalizedBlock[] {
       const parsed = parseFence(lines, index);
       blocks.push(parsed.block);
       index = parsed.next;
+      continue;
+    }
+
+    if (line.includes("|") && TABLE_DELIMITER.test(lines[index + 1] ?? "")) {
+      let end = index + 2;
+      while (end < lines.length && !startsNewNonListBlock(lines[end] ?? "")) end += 1;
+      blocks.push({ kind: "literal", lines: lines.slice(index, end) });
+      index = end;
       continue;
     }
 
@@ -90,6 +99,10 @@ export function parseFinalizedBlocks(value: string): FinalizedBlock[] {
 
 function startsNewBlock(line: string): boolean {
   return line === "" || line.startsWith("```") || HEADING_CANDIDATE.test(line) || LIST_CANDIDATE.test(line);
+}
+
+function startsNewNonListBlock(line: string): boolean {
+  return line === "" || line.startsWith("```") || HEADING_CANDIDATE.test(line);
 }
 
 function parseFence(lines: string[], start: number): { block: FinalizedBlock; next: number } {

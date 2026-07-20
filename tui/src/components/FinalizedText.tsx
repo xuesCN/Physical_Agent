@@ -52,12 +52,12 @@ function Block({ block }: { block: FinalizedBlock }): React.JSX.Element {
       return (
         <Box flexDirection="column">
           {block.language ? (
-            <HangingRow prefix="─" prefixColor={THEME.muted}>
+            <HangingRow prefix="│" prefixColor={THEME.muted}>
               <Text color={THEME.muted}>{block.language}</Text>
             </HangingRow>
           ) : null}
-          {block.lines.map((line, index) => (
-            <HangingRow key={index} prefix="─" prefixColor={THEME.muted}>
+          {(block.lines.length > 0 ? block.lines : [""]).map((line, index) => (
+            <HangingRow key={index} prefix="│" prefixColor={THEME.muted}>
               <Text>{line || " "}</Text>
             </HangingRow>
           ))}

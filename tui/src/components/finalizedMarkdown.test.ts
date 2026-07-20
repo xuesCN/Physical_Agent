@@ -32,6 +32,13 @@ test("unsupported paragraph is local while adjacent supported blocks survive", (
   assert.deepEqual(literal.lines, ["| Name | State |", "| --- | --- |", "| arm | **idle** |"]);
 });
 
+test("minimal table delimiters remain one literal table block", () => {
+  const source = "Name | State\n- | -\narm | **idle**";
+  const blocks = parseFinalizedBlocks(source);
+
+  assert.deepEqual(blocks, [{ kind: "literal", lines: source.split("\n") }]);
+});
+
 test("list indentation stack accepts common deltas and rejects invalid runs", () => {
   for (const spaces of [2, 3, 4, 8]) {
     const parsed = parseFinalizedBlocks(`1. root\n${" ".repeat(spaces)}- child`);

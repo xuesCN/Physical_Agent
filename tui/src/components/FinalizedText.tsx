@@ -1,6 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { THEME } from "../theme.js";
+import { HangingRow } from "./HangingRow.js";
 import {
   parseFinalizedBlocks,
   type FinalizedBlock,
@@ -36,20 +37,29 @@ function Block({ block }: { block: FinalizedBlock }): React.JSX.Element {
       return (
         <Box flexDirection="column">
           {block.items.map((item, index) => (
-            <Text key={index}>
-              {"  ".repeat(item.depth)}
-              <Text color={THEME.muted}>{item.ordered ? item.marker : BULLETS[item.depth]} </Text>
-              <InlineFragments segments={item.segments} />
-            </Text>
+            <HangingRow
+              key={index}
+              indent={item.depth}
+              prefix={item.ordered ? item.marker : BULLETS[item.depth]}
+              prefixColor={THEME.muted}
+            >
+              <InlineText segments={item.segments} />
+            </HangingRow>
           ))}
         </Box>
       );
     case "code":
       return (
         <Box flexDirection="column">
-          {block.language ? <Text><Text color={THEME.muted}>─ {block.language}</Text></Text> : null}
+          {block.language ? (
+            <HangingRow prefix="─" prefixColor={THEME.muted}>
+              <Text color={THEME.muted}>{block.language}</Text>
+            </HangingRow>
+          ) : null}
           {block.lines.map((line, index) => (
-            <Text key={index}><Text color={THEME.muted}>─ </Text>{line || " "}</Text>
+            <HangingRow key={index} prefix="─" prefixColor={THEME.muted}>
+              <Text>{line || " "}</Text>
+            </HangingRow>
           ))}
         </Box>
       );

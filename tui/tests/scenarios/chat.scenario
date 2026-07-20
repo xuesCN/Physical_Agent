@@ -19,7 +19,7 @@
             "events": [
               { "type": "delta", "payload": { "delta": "Hello" } },
               { "type": "delta", "payload": { "delta": " from agent" } },
-              { "type": "done", "payload": { "reply": "Hello from agent", "state": { "ready": true, "chat_messages": 3 } } }
+              { "type": "done", "payload": { "reply": "## Current Workspace\n\n**Robot state**\n- `arm_1` is currently **idle**.\n\n**Visible objects**\n1. **red_block**\n   - Type: block\n   - Color: red", "state": { "ready": true, "chat_messages": 3 } } }
             ],
             "state": "chatAfterReply"
           }
@@ -30,9 +30,10 @@
         {
           "input": "hello robot",
           "covers": ["<text chat>"],
-          "expectOutput": ["> hello robot", "⏺ Hello from agent"],
+          "expectOutput": ["> hello robot", "⏺ Current Workspace", "Robot state", "• arm_1 is currently idle.", "1. red_block", "◦ Type: block"],
+          "rejectOutput": ["## Current Workspace", "**Robot state**", "`arm_1`", "**red_block**"],
           "expectCalls": { "sendChatStream": 1 },
-          "expectState": { "chat.messages.2.content": "Hello from agent" }
+          "expectState": { "chat.messages.2.content": "## Current Workspace\n\n**Robot state**\n- `arm_1` is currently **idle**.\n\n**Visible objects**\n1. **red_block**\n   - Type: block\n   - Color: red" }
         },
         {
           "input": "/view actions",

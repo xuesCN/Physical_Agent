@@ -233,6 +233,50 @@ test("48-column finalized and streaming chat use display-safe hanging indents", 
   }
 });
 
+test("nested Markdown list and code rows stay display-safe at finite widths", () => {
+  const content = [
+    "## Current Workspace",
+    "1. **red_block**",
+    "   - Description: 👋 中 e\u0301 👨‍👩‍👧‍👦 remains visible near the collaborative workspace boundary",
+    "      * Detail: third-level bullet needs a stable physical rail for alignment-check",
+    "2. **tray**",
+    "   - Type: tray",
+    "",
+    "```ts",
+    "const description = 'a deliberately long code line that must wrap under the code rail';",
+    "```"
+  ].join("\n");
+
+  for (const columns of [24, 48, 100]) {
+    const view = renderPhysicalTui(
+      <Box width={columns} flexDirection="column">
+        <Transcript
+          columns={columns}
+          entries={[{ kind: "chat", id: `markdown-${columns}`, role: "assistant", content }]}
+        />
+      </Box>,
+      columns
+    );
+    try {
+      assertMaxLineWidth(view, columns);
+      const output = view.physicalOutput();
+      assertLogicalText(output, [
+        "Current Workspace", "red_block", "Description:", "collaborative workspace boundary",
+        "Detail:", "alignment-check", "tray", "Type: tray", "const description", "code rail"
+      ]);
+      assert.equal(normalizeOutput(output).includes("## Current Workspace"), false);
+      assert.equal(normalizeOutput(output).includes("**red_block**"), false);
+      if (columns < 100) {
+        assertInnerHangingBody(output, "◦", "Description:", "boundary");
+        assertInnerHangingBody(output, "▪", "Detail:", columns === 24 ? "third-level" : "alignment-check");
+        assertInnerHangingBody(output, "─", "const description", "rail");
+      }
+    } finally {
+      view.unmount();
+    }
+  }
+});
+
 test("action activity and execution approval stay display-safe at finite widths", () => {
   const actionEntry = {
     kind: "action" as const,
@@ -893,6 +937,25 @@ function assertHangingBody(
   );
 }
 
+function assertInnerHangingBody(
+  output: string,
+  prefix: string,
+  firstToken: string,
+  continuationToken: string
+): void {
+  const lines = normalizeOutput(output).split("\n");
+  const start = lines.findIndex((line) => line.includes(`${prefix} ${firstToken}`));
+  assert.notEqual(start, -1, `missing ${prefix} ${firstToken}`);
+  const first = lines[start] ?? "";
+  const bodyIndex = first.indexOf(firstToken);
+  assert.notEqual(bodyIndex, -1);
+  const bodyColumn = stringWidth(first.slice(0, bodyIndex));
+  const continuation = lines.slice(start + 1).find((line) => line.includes(continuationToken));
+  assert.ok(continuation, `missing wrapped token ${continuationToken}`);
+  const leading = (continuation ?? "").length - (continuation ?? "").trimStart().length;
+  assert.equal(stringWidth((continuation ?? "").slice(0, leading)), bodyColumn);
+}
+
 function assertLogicalText(output: string, expected: string[]): void {
   const compact = normalizeOutput(output).replace(/[╭╮╰╯│─\s]/g, "");
   for (const item of expected) {
@@ -1464,6 +1527,18 @@ const baseActionState: AgentState = {
   uploads: { uploads: [] }
 };
 
+const formattedChatReply = [
+  "## Current Workspace",
+  "",
+  "**Robot state**",
+  "- `arm_1` is currently **idle**.",
+  "",
+  "**Visible objects**",
+  "1. **red_block**",
+  "   - Type: block",
+  "   - Color: red"
+].join("\n");
+
 const stateFixtures: Record<string, AgentState> = {
   ready: {
     ...baseActionState,
@@ -1476,7 +1551,7 @@ const stateFixtures: Record<string, AgentState> = {
       messages: [
         { role: "assistant", content: "Previous context", created_at: "2026-07-08T00:00:00Z" },
         { role: "user", content: "hello robot", created_at: "2026-07-08T00:01:00Z" },
-        { role: "assistant", content: "Hello from agent", created_at: "2026-07-08T00:01:01Z" }
+        { role: "assistant", content: formattedChatReply, created_at: "2026-07-08T00:01:01Z" }
       ]
     }
   },

@@ -748,7 +748,86 @@ test("chat panel streams text incrementally and can stop", async ({ page }) => {
     ).__releaseChatStream?.();
   });
   await expect(page.getByTestId("chat-panel")).toContainText("Hello stream");
+  await expect(page.getByTestId("reasoning-summary")).toHaveCount(0);
   await expect(page.getByTestId("stop-chat-stream")).toBeDisabled();
+  await expect(page.locator("vite-error-overlay")).toHaveCount(0);
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("chat reasoning summary is a collapsed non-decision disclosure", async ({ page }) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await page.addInitScript(() => {
+    localStorage.setItem("physical-agent-language", "zh");
+    localStorage.setItem("physical-agent-theme", "light");
+    localStorage.setItem("physical-agent-tour-dismissed", "1");
+  });
+  const snapshot = await mockReadyApiWithRobot(page);
+  const reasoningSummary = "Checked the constraints. No action was executed.";
+  const finalState = {
+    ...snapshot,
+    chat: {
+      messages: [
+        {
+          role: "user",
+          content: "解释你的结论",
+          created_at: "2026-07-21T00:00:00Z",
+        },
+        {
+          role: "assistant",
+          content: "这是最终答复。",
+          created_at: "2026-07-21T00:00:01Z",
+          metadata: { reasoning_summary: reasoningSummary },
+        },
+      ],
+    },
+  };
+  await installControlledChatStream(
+    page,
+    [
+      sseEvent(14, "start", { stream_id: "thought-e2e", request_id: "thought-e2e" }),
+      sseEvent(15, "thought", {
+        stream_id: "thought-e2e",
+        request_id: "thought-e2e",
+        delta: "Checked the constraints. ",
+      }),
+      sseEvent(16, "thought", {
+        stream_id: "thought-e2e",
+        request_id: "thought-e2e",
+        delta: "No action was executed.",
+      }),
+      sseEvent(17, "delta", {
+        stream_id: "thought-e2e",
+        request_id: "thought-e2e",
+        delta: "这是最终答复。",
+      }),
+      sseEvent(18, "done", {
+        stream_id: "thought-e2e",
+        request_id: "thought-e2e",
+        reply: "这是最终答复。",
+        mode: "llm",
+        state: finalState,
+      }),
+    ],
+    4,
+  );
+
+  await page.goto("/");
+  await page.getByPlaceholder("给 agent 发消息").fill("解释你的结论");
+  await page.getByPlaceholder("给 agent 发消息").press("Enter");
+  const liveDisclosure = page.getByTestId("reasoning-summary");
+  await expect(liveDisclosure).toContainText("模型推理摘要");
+  await expect(liveDisclosure).toContainText("仅供参考，不是决策依据");
+  await expect(page.getByTestId("reasoning-summary-body")).not.toBeVisible();
+  await liveDisclosure.locator("summary").click();
+  await expect(page.getByTestId("reasoning-summary-body")).toHaveText(reasoningSummary);
+
+  await page.evaluate(() => {
+    (
+      window as typeof window & { __releaseChatStream?: () => void }
+    ).__releaseChatStream?.();
+  });
+  await expect(page.getByTestId("stop-chat-stream")).toBeDisabled();
+  await expect(page.getByTestId("reasoning-summary-body")).not.toBeVisible();
   await expect(page.locator("vite-error-overlay")).toHaveCount(0);
   expectNoConsoleErrors(consoleErrors);
 });

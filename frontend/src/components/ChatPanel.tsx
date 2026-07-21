@@ -182,12 +182,32 @@ function MessageContent({
   onEditDraft
 }: MessageContentProps) {
   const labels = useMessages();
+  const reasoningSummary =
+    message.role === "assistant"
+      ? reasoningSummaryFromMetadata(message.metadata)
+      : null;
   const drafts =
     message.role === "assistant"
       ? (structuredDraftActions(message.metadata?.agent_output) ?? [])
       : [];
   return (
     <div className="chat-message-content">
+      {reasoningSummary && (
+        <details className="reasoning-summary" data-testid="reasoning-summary">
+          <summary>
+            <Typography.Text strong>{labels.chat.reasoningSummary}</Typography.Text>
+            <Typography.Text type="secondary">
+              {labels.chat.reasoningDisclaimer}
+            </Typography.Text>
+          </summary>
+          <Typography.Paragraph
+            className="reasoning-summary-body"
+            data-testid="reasoning-summary-body"
+          >
+            {reasoningSummary}
+          </Typography.Paragraph>
+        </details>
+      )}
       <div className="markdown-body">
         <ReactMarkdown>{message.content}</ReactMarkdown>
       </div>
@@ -212,6 +232,17 @@ function MessageContent({
       })}
     </div>
   );
+}
+
+function reasoningSummaryFromMetadata(
+  metadata: Record<string, unknown> | undefined
+): string | null {
+  const value = metadata?.reasoning_summary;
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized || null;
 }
 
 interface DraftActionCardProps {

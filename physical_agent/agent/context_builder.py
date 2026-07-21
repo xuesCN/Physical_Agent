@@ -175,7 +175,7 @@ def _workspace_context_payload(
         "latest_user_message": message,
         "running_summary": str(chat.get("running_summary") or ""),
         "chat_history": [
-            item.model_dump(mode="json")
+            _chat_message_context_payload(item)
             for item in recent_chat_messages(
                 chat_messages,
                 max_recent=budget.recent_messages,
@@ -208,6 +208,16 @@ def _chat_messages(messages: list[Any]) -> list[ChatMessage]:
         item if isinstance(item, ChatMessage) else ChatMessage.model_validate(item)
         for item in messages
     ]
+
+
+def _chat_message_context_payload(message: ChatMessage) -> dict[str, Any]:
+    payload = message.model_dump(mode="json")
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict) and "reasoning_summary" in metadata:
+        metadata = dict(metadata)
+        metadata.pop("reasoning_summary", None)
+        payload["metadata"] = metadata
+    return payload
 
 
 def _top_memory_notes(notes: list[Any], *, budget: ContextBudget) -> list[dict[str, Any]]:

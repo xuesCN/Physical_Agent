@@ -526,6 +526,27 @@ body {
   gap: 8px;
 }
 
+.reasoning-summary {
+  max-width: 560px;
+  padding: 8px 10px;
+  border: 1px solid var(--pa-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--pa-panel-bg) 88%, transparent);
+}
+
+.reasoning-summary summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+  cursor: pointer;
+}
+
+.reasoning-summary-body.ant-typography {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}
+
 .draft-action-card {
   max-width: 560px;
   border-color: var(--pa-border);

@@ -82,6 +82,27 @@ def test_context_builder_is_read_only(tmp_path):
     assert _state_snapshot(store) == before
 
 
+def test_context_builder_never_replays_reasoning_summary_metadata(tmp_path):
+    store = _seed_store(tmp_path)
+    marker = "UNTRUSTED_PROVIDER_REASONING_MARKER"
+    store.append_chat_message(
+        "assistant",
+        "A user-visible answer.",
+        metadata={
+            "intent": "chat",
+            "reasoning_summary": marker,
+        },
+    )
+
+    payload = build_context(store, "continue", purpose="proposal").payload
+
+    history = payload["chat_history"]
+    assistant = next(item for item in history if item["content"] == "A user-visible answer.")
+    assert assistant["metadata"]["intent"] == "chat"
+    assert "reasoning_summary" not in assistant["metadata"]
+    assert marker not in json.dumps(payload, ensure_ascii=False)
+
+
 def test_context_builder_includes_expectation_check_feedback(tmp_path):
     store = _seed_store(tmp_path)
     expectation_event = {

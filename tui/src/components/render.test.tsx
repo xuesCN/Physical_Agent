@@ -31,6 +31,7 @@ test("conversation markers keep user and MOCE colors distinct", () => {
   assert.deepEqual(rolePresentation("user"), { marker: ">", color: THEME.success });
   assert.deepEqual(rolePresentation("assistant"), { marker: "⏺", color: THEME.brandAccent });
   assert.deepEqual(rolePresentation("draft"), { marker: "draft ◇", color: THEME.warning });
+  assert.deepEqual(rolePresentation("thought"), { marker: "thought ▸", color: THEME.muted });
   assert.deepEqual(rolePresentation("system"), { marker: "system │", color: THEME.muted });
 });
 
@@ -612,6 +613,23 @@ test("ChatPanel renders only live streaming state", () => {
   assert.match(frame, /streaming/);
   assert.match(frame, /⏺\s+partial reply/);
   assert.doesNotMatch(frame, /No chat yet/);
+  view.unmount();
+});
+
+test("ChatPanel renders live reasoning as a separate collapsed non-decision row", () => {
+  const view = render(
+    <ChatPanel
+      hasTranscript
+      streamingThought="Checked constraints."
+      streamingText="Safe answer."
+      streaming
+    />
+  );
+  const frame = view.lastFrame() ?? "";
+  assert.match(frame, /thought ▸/);
+  assert.match(frame, /模型推理摘要/);
+  assert.match(frame, /不是决策依据；默认折叠/);
+  assert.ok(frame.indexOf("thought ▸") < frame.indexOf("Safe answer."));
   view.unmount();
 });
 

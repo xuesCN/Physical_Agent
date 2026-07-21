@@ -18,6 +18,10 @@ import { StatusBar } from "./components/StatusBar.js";
 import { StatusPanel } from "./components/StatusPanel.js";
 import { Transcript } from "./components/Transcript.js";
 import { UploadsPanel } from "./components/UploadsPanel.js";
+import {
+  collapsedReasoningSummary,
+  reasoningSummaryFromMessage
+} from "./reasoning.js";
 import type {
   AgentState,
   AgentOutput,
@@ -80,6 +84,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
   const [busy, setBusy] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
+  const [streamingThought, setStreamingThought] = useState("");
   const [transcriptEntries, setTranscriptEntries] = useState<TranscriptEntry[]>([]);
   const [activeView, setActiveView] = useState<TuiView>("chat");
   const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null);
@@ -176,6 +181,16 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
         return;
       }
 
+      const reasoningSummary = reasoningSummaryFromMessage(message);
+      if (reasoningSummary) {
+        additions.push({
+          kind: "chat",
+          id: `${key}:thought`,
+          role: "thought",
+          content: collapsedReasoningSummary(reasoningSummary),
+          created_at: message.created_at
+        });
+      }
       additions.push({
         kind: "chat",
         id: key,
@@ -385,6 +400,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
     await runTuiChatStream(client, text, {
       setStreaming,
       setStreamingText,
+      setStreamingThought,
       setState,
       setNotice,
       appendTranscript: (role, content) => appendLocalChat(role, content)
@@ -407,6 +423,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
           lastUpload,
           transcriptEntries,
           streamingText,
+          streamingThought,
           streaming,
           error
         })}
@@ -428,6 +445,7 @@ interface ActiveViewProps {
   lastUpload: UploadResponse | null;
   transcriptEntries: TranscriptEntry[];
   streamingText: string;
+  streamingThought: string;
   streaming: boolean;
   error: string | null;
 }
@@ -469,6 +487,7 @@ function renderActiveView(props: ActiveViewProps) {
           <ChatPanel
             hasTranscript={props.transcriptEntries.length > 0}
             streamingText={props.streamingText}
+            streamingThought={props.streamingThought}
             streaming={props.streaming}
             error={props.error ? `API unavailable: ${props.error}` : null}
           />
@@ -571,6 +590,7 @@ export function sseErrorFallbackMessage(error: unknown): string {
 interface ChatStreamHandlers {
   setStreaming: (value: boolean) => void;
   setStreamingText: (value: string) => void;
+  setStreamingThought: (value: string) => void;
   setState: (state: AgentState) => void;
   setNotice: (message: string) => void;
   appendTranscript?: (role: string, content: string) => void;
@@ -583,7 +603,9 @@ export async function runTuiChatStream(
 ): Promise<void> {
   handlers.setStreaming(true);
   handlers.setStreamingText("");
+  handlers.setStreamingThought("");
   let content = "";
+  let reasoningSummary = "";
   try {
     await client.sendChatStream(text, (event) => {
       const payload = event.payload ?? {};
@@ -591,9 +613,16 @@ export async function runTuiChatStream(
         content += String(payload.delta ?? "");
         handlers.setStreamingText(content);
       }
+      if (event.type === "thought") {
+        reasoningSummary += String(payload.delta ?? "");
+        handlers.setStreamingThought(reasoningSummary);
+      }
       if (event.type === "done") {
         const reply = String(payload.reply ?? content);
         if (handlers.appendTranscript) {
+          if (reasoningSummary) {
+            handlers.appendTranscript("thought", collapsedReasoningSummary(reasoningSummary));
+          }
           handlers.appendTranscript("assistant", reply);
           const draft = draftOutputSummary(payload.agent_output);
           if (draft) {
@@ -619,6 +648,7 @@ export async function runTuiChatStream(
       handlers.setNotice(`Streaming chat failed. ${readError(err)}`);
     }
   } finally {
+    handlers.setStreamingThought("");
     handlers.setStreaming(false);
   }
 }

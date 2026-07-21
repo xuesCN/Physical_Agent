@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Literal
 
 from jsonschema import SchemaError, ValidationError, validate as validate_json_schema
 
@@ -42,6 +42,12 @@ class OpenAICompatibleError(RuntimeError):
     @property
     def is_bad_request(self) -> bool:
         return self.kind == "bad_request" or self.status_code == 400
+
+
+@dataclass(frozen=True)
+class StreamChunk:
+    kind: Literal["message", "thought"]
+    text: str
 
 
 @dataclass(frozen=True)
@@ -207,8 +213,8 @@ class OpenAICompatibleClient:
         transport_observer: (
             Callable[[Callable[[], None] | None], None] | None
         ) = None,
-    ) -> Iterator[str]:
-        """Yield assistant text deltas from the configured compatible API mode."""
+    ) -> Iterator[StreamChunk]:
+        """Yield typed assistant deltas from the configured compatible API mode."""
 
         if self.settings.api_mode == "responses":
             yield from self._stream_responses_text(
@@ -242,8 +248,8 @@ class OpenAICompatibleClient:
         transport_observer: (
             Callable[[Callable[[], None] | None], None] | None
         ) = None,
-    ) -> Iterator[str]:
-        """Yield one authoritative JSON object from a real provider stream.
+    ) -> Iterator[StreamChunk]:
+        """Yield thoughts plus one authoritative JSON message from a provider stream.
 
         Format fallbacks are allowed only before the provider has yielded any
         bytes, so callers never splice together two competing decisions.
@@ -255,7 +261,7 @@ class OpenAICompatibleClient:
             schema_name=schema_name,
         )
         yielded = False
-        json_stream: Iterator[str] | None = None
+        json_stream: Iterator[StreamChunk] | None = None
         try:
             json_stream = iter(
                 self.stream_chat_text(
@@ -267,9 +273,9 @@ class OpenAICompatibleClient:
                     transport_observer=transport_observer,
                 )
             )
-            for delta in json_stream:
+            for chunk in json_stream:
                 yielded = True
-                yield delta
+                yield chunk
             return
         except OpenAICompatibleError as exc:
             if yielded or not _is_response_format_unsupported_error(exc):
@@ -460,7 +466,7 @@ class OpenAICompatibleClient:
         transport_observer: (
             Callable[[Callable[[], None] | None], None] | None
         ),
-    ) -> Iterator[str]:
+    ) -> Iterator[StreamChunk]:
         payload: dict[str, Any] = {
             "model": self.settings.model,
             "messages": messages,
@@ -489,7 +495,7 @@ class OpenAICompatibleClient:
                     if content:
                         yielded = True
                         chunks.append(content)
-                        yield content
+                        yield StreamChunk(kind="message", text=content)
         except Exception as exc:  # noqa: BLE001 - normalize SDK and iterator errors.
             error = self._to_compatible_error(exc)
             if reasoning_applied and not yielded and _is_reasoning_unsupported_error(error):
@@ -502,7 +508,7 @@ class OpenAICompatibleClient:
                         for content in _chat_delta_contents(chunk):
                             if content:
                                 chunks.append(content)
-                                yield content
+                                yield StreamChunk(kind="message", text=content)
                     return
                 except Exception as retry_exc:  # noqa: BLE001
                     retry_error = self._to_compatible_error(retry_exc)
@@ -608,7 +614,7 @@ class OpenAICompatibleClient:
         transport_observer: (
             Callable[[Callable[[], None] | None], None] | None
         ),
-    ) -> Iterator[str]:
+    ) -> Iterator[StreamChunk]:
         instructions, input_items = _messages_to_responses_parts(messages)
         payload: dict[str, Any] = {
             "model": self.settings.model,
@@ -637,12 +643,12 @@ class OpenAICompatibleClient:
             for event in stream:
                 usage = _extract_usage(event) or usage
                 event_type = _event_type(event)
-                if event_type == "response.output_text.delta":
-                    delta = _event_field(event, "delta")
-                    if isinstance(delta, str) and delta:
-                        yielded = True
-                        chunks.append(delta)
-                        yield delta
+                chunk = _responses_stream_chunk(event)
+                if chunk is not None:
+                    yielded = True
+                    if chunk.kind == "message":
+                        chunks.append(chunk.text)
+                    yield chunk
                 elif event_type in {"response.completed", "response.output_text.done"}:
                     return
                 elif event_type in {"error", "response.failed"}:
@@ -656,11 +662,11 @@ class OpenAICompatibleClient:
                     for event in stream:
                         usage = _extract_usage(event) or usage
                         event_type = _event_type(event)
-                        if event_type == "response.output_text.delta":
-                            delta = _event_field(event, "delta")
-                            if isinstance(delta, str) and delta:
-                                chunks.append(delta)
-                                yield delta
+                        chunk = _responses_stream_chunk(event)
+                        if chunk is not None:
+                            if chunk.kind == "message":
+                                chunks.append(chunk.text)
+                            yield chunk
                         elif event_type in {"response.completed", "response.output_text.done"}:
                             return
                         elif event_type in {"error", "response.failed"}:
@@ -685,11 +691,11 @@ class OpenAICompatibleClient:
                     for event in stream:
                         usage = _extract_usage(event) or usage
                         event_type = _event_type(event)
-                        if event_type == "response.output_text.delta":
-                            delta = _event_field(event, "delta")
-                            if isinstance(delta, str) and delta:
-                                chunks.append(delta)
-                                yield delta
+                        chunk = _responses_stream_chunk(event)
+                        if chunk is not None:
+                            if chunk.kind == "message":
+                                chunks.append(chunk.text)
+                            yield chunk
                         elif event_type in {"response.completed", "response.output_text.done"}:
                             return
                         elif event_type in {"error", "response.failed"}:
@@ -1075,6 +1081,26 @@ def _extract_responses_text(parsed: dict[str, Any]) -> str:
     )
 
 
+def _extract_responses_reasoning(parsed: dict[str, Any]) -> str:
+    fragments: list[str] = []
+    output = parsed.get("output", [])
+    if not isinstance(output, list):
+        return ""
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") != "reasoning":
+            continue
+        summary = item.get("summary", [])
+        if not isinstance(summary, list):
+            continue
+        for part in summary:
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text")
+            if isinstance(text, str):
+                fragments.append(text)
+    return "".join(fragments)
+
+
 def _messages_with_json_mode_instruction(
     messages: list[dict[str, Any]],
     *,
@@ -1164,6 +1190,18 @@ def _text_part_contents(parts: list[Any]) -> list[str]:
 def _event_type(event: Any) -> str:
     value = _event_field(event, "type")
     return value if isinstance(value, str) else ""
+
+
+def _responses_stream_chunk(event: Any) -> StreamChunk | None:
+    kind_by_event = {
+        "response.output_text.delta": "message",
+        "response.reasoning_summary_text.delta": "thought",
+    }
+    kind = kind_by_event.get(_event_type(event))
+    delta = _event_field(event, "delta")
+    if kind is None or not isinstance(delta, str) or not delta:
+        return None
+    return StreamChunk(kind=kind, text=delta)
 
 
 def _event_field(event: Any, name: str, default: Any = None) -> Any:

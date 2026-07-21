@@ -1189,7 +1189,7 @@ def test_api_chat_constructs_api_safe_chat_runtime(tmp_path, monkeypatch):
     assert calls["respond"] == {"message": "hello"}
 
 
-def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
+def test_api_chat_stream_sends_start_thought_delta_done_events(tmp_path, monkeypatch):
     TestClient = _client_or_skip()
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     _prepare_store(config_path)
@@ -1202,6 +1202,7 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
                 "has_cancel_check": "cancel_check" in kwargs,
                 "has_transport_observer": "transport_observer" in kwargs,
             }
+            yield {"type": "thought", "delta": "Checked the constraints."}
             yield {"type": "delta", "delta": "hel"}
             yield {"type": "delta", "delta": "lo"}
             yield {
@@ -1242,21 +1243,29 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
         assert response.status_code == 200
         events = _sse_events("".join(response.iter_text()))
 
-    assert [event["type"] for event in events] == ["start", "delta", "delta", "done"]
+    assert [event["type"] for event in events] == [
+        "start",
+        "thought",
+        "delta",
+        "delta",
+        "done",
+    ]
     assert events[0]["payload"]["stream_id"] == "stream-test"
     assert events[0]["payload"]["request_id"] == "req-test"
-    assert events[1]["payload"]["delta"] == "hel"
-    assert events[3]["payload"]["reply"] == "hello"
-    assert events[3]["payload"]["agent_output"]["schema"] == (
+    assert events[1]["payload"]["delta"] == "Checked the constraints."
+    assert "type" not in events[1]["payload"]
+    assert events[2]["payload"]["delta"] == "hel"
+    assert events[4]["payload"]["reply"] == "hello"
+    assert events[4]["payload"]["agent_output"]["schema"] == (
         "physical-agent/agent-output/v1"
     )
-    assert events[3]["payload"]["plan"] == {"status": "answered"}
-    assert "executed" not in events[3]["payload"]
-    assert "actions" not in events[3]["payload"]
-    assert "draft_actions" not in events[3]["payload"]
-    assert "chat_contract" not in events[3]["payload"]
-    assert "has_structured_draft" not in events[3]["payload"]
-    assert events[3]["payload"]["state"]["chat"]["messages"] == []
+    assert events[4]["payload"]["plan"] == {"status": "answered"}
+    assert "executed" not in events[4]["payload"]
+    assert "actions" not in events[4]["payload"]
+    assert "draft_actions" not in events[4]["payload"]
+    assert "chat_contract" not in events[4]["payload"]
+    assert "has_structured_draft" not in events[4]["payload"]
+    assert events[4]["payload"]["state"]["chat"]["messages"] == []
     assert calls["runtime"] == {
         "config": config_path.resolve(),
         "planner_name": "auto",

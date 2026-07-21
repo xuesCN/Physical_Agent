@@ -50,6 +50,27 @@ test("chat stream abort clears streaming state without noisy failure", async () 
   assert.deepEqual(calls.notices, []);
 });
 
+test("chat stream abort clears live reasoning without appending a transcript row", async () => {
+  const calls = createChatCalls({ includeTranscript: true });
+  const abortError = new Error("The operation was aborted");
+  abortError.name = "AbortError";
+
+  await runTuiChatStream(
+    {
+      sendChatStream: async (_message, onEvent) => {
+        onEvent({ type: "thought", payload: { delta: "partial reasoning" } });
+        throw abortError;
+      }
+    },
+    "hello",
+    calls.handlers
+  );
+
+  assert.deepEqual(calls.streamingThought, ["", "partial reasoning", ""]);
+  assert.deepEqual(calls.transcript, []);
+  assert.deepEqual(calls.notices, []);
+});
+
 test("chat stream done updates state and clears streaming", async () => {
   const calls = createChatCalls();
   const readyState = createReadyState();
@@ -128,6 +149,37 @@ test("chat stream done with summary state can append reply to transcript", async
   assert.deepEqual(calls.streamingText, ["", "hello", ""]);
   assert.deepEqual(calls.transcript, [{ role: "assistant", content: "hello" }]);
   assert.deepEqual(calls.states, []);
+});
+
+test("chat stream appends a collapsed non-decision reasoning row before the reply", async () => {
+  const calls = createChatCalls({ includeTranscript: true });
+
+  await runTuiChatStream(
+    {
+      sendChatStream: async (_message, onEvent) => {
+        onEvent({ type: "thought", payload: { delta: "Checked constraints. " } });
+        onEvent({ type: "thought", payload: { delta: "No action executed." } });
+        onEvent({ type: "delta", payload: { delta: "Safe answer." } });
+        onEvent({ type: "done", payload: { reply: "Safe answer." } });
+      }
+    },
+    "hello",
+    calls.handlers
+  );
+
+  assert.deepEqual(calls.streamingThought, [
+    "",
+    "Checked constraints. ",
+    "Checked constraints. No action executed.",
+    ""
+  ]);
+  assert.deepEqual(calls.transcript, [
+    {
+      role: "thought",
+      content: "模型推理摘要（仅供参考，不是决策依据；默认折叠） · Checked constraints. No action executed."
+    },
+    { role: "assistant", content: "Safe answer." }
+  ]);
 });
 
 test("chat stream renders structured draft separately from Action Board", async () => {
@@ -338,12 +390,14 @@ test("executor projection is authoritative and legacy watch flag stays unknown",
 function createChatCalls(options: { includeTranscript?: boolean } = {}) {
   const streaming: boolean[] = [];
   const streamingText: string[] = [];
+  const streamingThought: string[] = [];
   const states: AgentState[] = [];
   const notices: string[] = [];
   const transcript: Array<{ role: string; content: string }> = [];
   const result = {
     streaming,
     streamingText,
+    streamingThought,
     states,
     notices,
     transcript,
@@ -354,6 +408,9 @@ function createChatCalls(options: { includeTranscript?: boolean } = {}) {
       setStreamingText(value: string) {
         streamingText.push(value);
       },
+      setStreamingThought(value: string) {
+        streamingThought.push(value);
+      },
       setState(state: AgentState) {
         states.push(state);
       },
@@ -363,6 +420,7 @@ function createChatCalls(options: { includeTranscript?: boolean } = {}) {
     } as {
       setStreaming(value: boolean): void;
       setStreamingText(value: string): void;
+      setStreamingThought(value: string): void;
       setState(state: AgentState): void;
       setNotice(message: string): void;
       appendTranscript?: (role: string, content: string) => void;

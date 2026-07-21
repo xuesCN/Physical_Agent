@@ -118,6 +118,8 @@ export const en = {
     addToActions: "Add to Actions",
     edit: "Edit",
     noParams: "No params",
+    reasoningSummary: "Model reasoning summary",
+    reasoningDisclaimer: "For reference only; not a decision basis.",
     sseDisconnected: "SSE disconnected while chat was in progress.",
     stopped: "Chat stream stopped.",
     endedEarly: "Chat stream ended before completion.",

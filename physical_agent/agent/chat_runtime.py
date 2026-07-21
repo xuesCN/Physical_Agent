@@ -19,7 +19,7 @@ from physical_agent.agent.tool_loop import OpenAIToolLoop
 from physical_agent.application.plan_compiler import compile_agent_output, task_graph_steps
 from physical_agent.application.output_projection import materialize_agent_output
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config, write_default_config
-from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
+from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings, StreamChunk
 from physical_agent.protocol.expectations import EXPECTED_JSON_SCHEMA
 from physical_agent.protocol.agent_output import AgentOutput
 from physical_agent.protocol.actions import (
@@ -374,6 +374,7 @@ class ChatRuntime:
 
         mode = self._mode()
         reply_parts: list[str] = []
+        reasoning_parts: list[str] = []
         turn: ChatTurn | None = None
         intent = "chat"
         steps: list[Any] = []
@@ -410,6 +411,10 @@ class ChatRuntime:
                             continue
                         if _stream_cancelled(cancel_check):
                             raise _ChatStreamAborted()
+                        if event["type"] == "thought":
+                            reasoning_parts.append(delta)
+                            yield {"type": "thought", "delta": delta}
+                            continue
                         reply_parts.append(delta)
                         yield {"type": "delta", "delta": delta}
 
@@ -507,6 +512,7 @@ class ChatRuntime:
                 intent=turn.intent,
                 steps=turn.steps,
                 turn=turn,
+                reasoning_summary="".join(reasoning_parts),
             )
             terminal_persisted = True
             yield {"type": "done", **result}
@@ -588,14 +594,19 @@ class ChatRuntime:
                 if _stream_cancelled(cancel_check):
                     raise _ChatStreamAborted()
                 try:
-                    raw_delta = next(stream)
+                    chunk = next(stream)
                 except StopIteration:
                     break
-                if not raw_delta:
+                if not isinstance(chunk, StreamChunk):
+                    raise TypeError("Structured chat stream must yield StreamChunk values.")
+                if not chunk.text:
                     continue
-                raw_parts.append(raw_delta)
                 yield {"type": "provider_progress"}
-                for reply_delta in parser.feed(raw_delta):
+                if chunk.kind == "thought":
+                    yield {"type": "thought", "delta": chunk.text}
+                    continue
+                raw_parts.append(chunk.text)
+                for reply_delta in parser.feed(chunk.text):
                     if _stream_cancelled(cancel_check):
                         raise _ChatStreamAborted()
                     yield {"type": "reply_delta", "delta": reply_delta}
@@ -624,6 +635,7 @@ class ChatRuntime:
         intent: str,
         steps: list[Any],
         turn: ChatTurn | None = None,
+        reasoning_summary: str = "",
         error: str | None = None,
     ) -> dict[str, Any]:
         workspace = self._workspace()
@@ -679,6 +691,8 @@ class ChatRuntime:
         }
         if error:
             metadata["error"] = _truncate(error, 500)
+        if status == "completed" and reasoning_summary:
+            metadata["reasoning_summary"] = reasoning_summary
         assistant = workspace.append_chat_message(
             "assistant",
             content,

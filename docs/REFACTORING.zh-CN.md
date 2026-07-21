@@ -1,7 +1,7 @@
 # 重构过程
 
 > 本文浓缩自原 33 份 session-handoff 与 22 份 brief（已删除，git 历史可查）。姊妹文档：`SPEC.zh-CN.md`（目标与待办矩阵）。
-> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-20。
+> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-21。
 
 ## 0. 基线与纪律
 
@@ -21,6 +21,7 @@
 | D1-D2 | Transport 抽象 + WS → Serial/Loopback | `55addad` `7b1706a` |
 | D3-D4 | 心跳/halt 挂入循环 → watchdog 策略 → 实机回归与清单 | `14c9dcb` `bc12329` `9cb1978` `25c41e1` |
 | A1 | 官方 SDK → 设置/chat 桥 → 流式/abort → B5 收口 → 深思考 | `9c25e90` `affbda7` `605015c` `b5b6071` `3a807e7` |
+| A1.3b | typed chat chunk + provider reasoning summary 的只读 UI 可观测性 | 本轮提交；Python `469 passed`、TUI `138 passed`、Chromium `28 passed`、clean-wheel smoke 通过 |
 | E0 | GUI 功能对齐（重置/硬件面板/配置注册） | E0 提交 + `29fb512` |
 | W1 | 驱动调用超时保护 | `2f00615` |
 | F0 | LLM planner 启用实验 + 本地 JSONL trace + 坏任务报告 | `d39e8f6` `caa4fa0` |
@@ -111,6 +112,14 @@
 ### A1 系列：官方 SDK 与聊天体验（重构后期补做）
 
 A1 最初被跳过（工具循环建在自研 urllib 客户端上"够用"），后按计划补齐五轮：**A1.0/A1.1** 官方 openai SDK 替换（`[llm]` extra；base_url 按 API root 原样传递修掉拼接坑；strict json_schema 失败自动降级 JSON mode + 本地 jsonschema 校验；错误归一 + key 脱敏）；**A1.6a** `workspace/.llm.json` 本地设置（CLI/GUI/watch 共用一份，gitignore）+ Settings 表单 + 测试连接 + API chat 改走 ChatRuntime（API-safe flags 关闭 code skills/硬件接入）；**A1.2/A1.4** 流式：SDK stream 封装 `stream_chat_text()`、`/api/chat/stream` SSE + `/api/chat/abort/{id}`、前端乐观气泡 + Stop 按钮、会话重置（A1.7a）；**B5** 收口后端口径（state-check 加 backend 语义字段）；**A1.3a** 默认开 reasoning 请求参数（不展示 raw CoT）。
+
+### A1.3b：typed chat stream 与 provider reasoning summary
+
+本轮把 `stream_chat_text()`/structured chat 内部流从裸字符串收敛为 `StreamChunk(kind="message"|"thought", text=...)`。Responses API 的 `response.output_text.delta` 继续产生 message，新增的 `response.reasoning_summary_text.delta` 产生 thought；Chat Completions 仍只产生 message，正文拼接保持原样。非流式 provider output 另设 `_extract_responses_reasoning()` 读取 reasoning item 的 `summary[*].text`，不把不同 wire shape 塞进既有正文 extractor。typed chunk 的生产与消费只触及 LLM adapter、ChatRuntime 和既有 chat SSE，没有扩到 tool loop、MCP 或新的入口。
+
+ChatRuntime 只把 completed turn 的摘要写入 assistant chat metadata；中途 abort 会关闭同一个 provider iterator，并在 persistence 前丢弃 partial summary。SSE 新增 `thought`，`start/delta/done/aborted/error` 与 `done.agent_output`/ChatPlan 保持不变。React 用默认关闭的 `<details>` 展示完整摘要，Ink TUI 用带折叠标记的单行摘要行展示，两端都标注“模型推理摘要，仅供参考，不是决策依据”。context builder 在回放 chat history 前移除 `reasoning_summary`，负用例同时锁定摘要不进入 PlanCompiler 输入、AgentOutput/Action Board 或 feedback；未新增数据库表，metadata 仍沿用既有 chat persistence。
+
+边界保持：没有修改 watch、driver、SafetyGate、SAFETY.md、审批或执行主链；没有实现 raw CoT、ACP 协议、Run/Turn/Event ledger、registry/read model 或第六入口，VNext-4 其余部分继续冻结。验证：Python full `469 passed, 1 warning`；Safety smoke `32 passed`；TUI typecheck/test/build 通过（`138 passed`）；frontend `tsc -b && vite build` 通过（3309 modules）；真实 Chromium Playwright `28 passed`；clean-wheel base/server-extra smoke 通过；`git diff --check` clean。
 
 ### E0：GUI 功能对齐（还 C3 的账）
 
@@ -539,6 +548,8 @@ final whole-branch review 在 evidence-only head `a89be0658a05f03ae20a9e2b707f69
 84. **物理 stdout 契约必须显式选择 Ink 非 CI 动态渲染分支**（T4 exact-head CI）：Ink v5 的 `isInCi && debug:false` 分支刻意抑制动态 frame，只在 unmount 写末帧；它不等价于 `isTTY=true` test harness 的目标路径。该测试可只对子测试进程设 `CI=false`，但 typecheck/build/runtime 继续保留真实 CI；未来若要测 CI 专属输出，必须另开保留 `CI=true` 的独立子进程，不能复用非 CI 契约冒充覆盖。
 85. **TUI finalized fallback 从 whole-message 收窄为 block-local，但协议例外更强**（T4.2）：选择无依赖 block scanner，是为让一个 unsupported block 不拖累相邻合法内容；放弃 CommonMark dependency 与删除标记式后处理，以控制依赖/AST 映射面并避免内容损失。`action-draft`、非 finalized assistant 与畸形 block 继续逐字，presentation 解析不得解释 proposal/action/Gate。
 86. **shortcut reference 判定需要 document-wide label context，但 fence 仍是 presentation island**（T4.2 final review）：采用归一化的单行 definition label 集合，让 matching shortcut/image shortcut 整块 literal；收集阶段复用 scanner 自身 fence consumption，避免第二套 grammar 和 code 内容泄漏到文档结构。放弃 destination 解析与完整 CommonMark label 语义，只修 content-preservation 边界。
+87. **typed `thought` 是 chat UI 可观测性，不是 VNext-4 账本重启**（A1.3b）：只在既有 provider stream→ChatRuntime→chat SSE 链路增加 message/thought 区分，放弃 Run/Turn/Event、registry/read model 与新持久化 schema；VNext-4 其余范围继续冻结，仍须满足可复现需求 + 显式 SPEC 决策才可重启。
+88. **provider reasoning summary 永远是不可信、只读的展示 metadata**（A1.3b）：只保存 completed turn 的摘要并从后续 LLM context 过滤；不得进入 PlanCompiler、Action Board、feedback、Gate 或审批依据，abort 的 partial summary 不落盘。模型是否给出摘要不影响 canonical reply/AgentOutput。
 
 ## 4. 经验教训（流程侧）
 
@@ -577,5 +588,6 @@ final whole-branch review 在 evidence-only head `a89be0658a05f03ae20a9e2b707f69
 - **承诺的 rollback unit 必须落实为实际提交边界**（R8.1 的教训）：计划写“可单独回退”时，实现就应拆成对应 commits；若已合并提交，则不得事后把它描述成可独立 revert，必须记录父提交/完整提交或显式 file/hunk selective recovery，并在恢复后重跑相关契约。
 - **TUI 测试先区分模拟 TTY 与 Ink CI 输出策略**（T4 CI 的教训）：`CI=true + debug:false` 会让 Ink 抑制动态 frame，这不是 Windows/Linux 产品差异。测试 harness 应分别暴露 stdin consumption 与 post-Enter semantic completion；物理 stdout 契约只在显式非 CI test child 中运行，CI 专属输出另设独立用例。
 - **push 必须在独立 review 修复完成后发生**（T4.2 的教训）：`25f20c4` 在 review 前提前 push，后续 CI 即使成功也只能算被 supersede 的历史运行；closure 文档只允许引用 reviewed exact head，并必须逐 run 核对 `headSha`、attempt 与全部 applicable job conclusion。
+- **provider 正文与 reasoning summary 必须按各自 wire shape 独立提取**（A1.3b 的教训）：Responses output text 位于 `content[*].text`，reasoning summary 位于 reasoning item 的 `summary[*].text`；共用 extractor 会把显示语义和正文语义混在一起。streaming 也要保留同一分类直到 UI，terminal persistence 只在 completed 后写 summary，才能同时锁住非 reasoning 字节兼容与 abort 零残留。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

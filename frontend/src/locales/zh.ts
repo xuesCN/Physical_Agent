@@ -124,6 +124,8 @@ export const zh = {
     addToActions: "加入动作板",
     edit: "编辑",
     noParams: "无参数",
+    reasoningSummary: "模型推理摘要",
+    reasoningDisclaimer: "仅供参考，不是决策依据",
     sseDisconnected: "聊天进行时 SSE 断开。",
     stopped: "聊天流已停止。",
     endedEarly: "聊天流在完成前结束。",

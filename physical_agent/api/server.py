@@ -1112,7 +1112,7 @@ class ApiController:
                     "stream_id": stream_state.stream_id,
                     "request_id": stream_state.request_id,
                 }
-                if event_type == "delta":
+                if event_type in {"delta", "thought"}:
                     payload_data["delta"] = str(item.get("delta") or "")
                 elif event_type == "done":
                     config, store = self._store(require_exists=True)

@@ -11,6 +11,7 @@ export function rolePresentation(role: string): RolePresentation {
   if (role === "user") return { marker: ">", color: THEME.success };
   if (role === "assistant") return { marker: "⏺", color: THEME.brandAccent };
   if (role === "draft") return { marker: "draft ◇", color: THEME.warning };
+  if (role === "thought") return { marker: "thought ▸", color: THEME.muted };
   return { marker: `${role} │`, color: THEME.muted };
 }
 

@@ -289,6 +289,7 @@ function Dashboard({
     let streamStarted = false;
     let streamFinished = false;
     let assistantContent = "";
+    let reasoningSummary = "";
 
     try {
       await sendChatStream(text, {
@@ -306,6 +307,17 @@ function Dashboard({
             assistantContent += String(payload.delta ?? "");
             setStreamMessages((current) =>
               updateStreamingAssistant(current, assistantKey, assistantContent)
+            );
+            return;
+          }
+          if (event.type === "thought") {
+            streamStarted = true;
+            reasoningSummary += String(payload.delta ?? "");
+            setStreamMessages((current) =>
+              updateStreamingAssistant(current, assistantKey, assistantContent, {
+                stream_status: "streaming",
+                reasoning_summary: reasoningSummary
+              })
             );
             return;
           }

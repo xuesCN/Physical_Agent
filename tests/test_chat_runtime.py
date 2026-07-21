@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 from physical_agent.agent.chat_runtime import ChatRuntime
 from physical_agent.application.proposals import ProposalService
 from physical_agent.drivers.mock_arm import MockArmDriver
-from physical_agent.llm import llm_settings_path, write_llm_settings_file
+from physical_agent.llm import StreamChunk, llm_settings_path, write_llm_settings_file
 from physical_agent.quickstart import setup_project
 from physical_agent.protocol.schemas import Action, Observation
 from physical_agent.state import open_state_store
@@ -287,8 +287,11 @@ def test_chat_runtime_stream_writes_completed_assistant_message(tmp_path, monkey
 
     class FakeClient:
         def stream_structured_json(self, messages, **kwargs):
-            yield '{"reply":"hel'
-            yield 'lo","intent":"chat","steps":[],"actions":[],"memory":[]}'
+            yield StreamChunk(kind="message", text='{"reply":"hel')
+            yield StreamChunk(
+                kind="message",
+                text='lo","intent":"chat","steps":[],"actions":[],"memory":[]}',
+            )
 
         def parse_structured_json_text(self, content, **kwargs):
             return json.loads(content)
@@ -309,6 +312,108 @@ def test_chat_runtime_stream_writes_completed_assistant_message(tmp_path, monkey
     assert "chat_contract" not in messages[-1].metadata
     assert "has_structured_draft" not in messages[-1].metadata
     assert store.read_actions()["pending"] == []
+
+
+def test_chat_runtime_stream_exposes_reasoning_only_as_chat_metadata(tmp_path, monkeypatch):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="llm",
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+    marker = "REASONING_ONLY_MARKER"
+    compiled_inputs = []
+    real_compile = chat_runtime_module.compile_agent_output
+
+    class FakeClient:
+        def stream_structured_json(self, messages, **kwargs):
+            yield StreamChunk(kind="thought", text=marker)
+            yield StreamChunk(
+                kind="message",
+                text=(
+                    '{"reply":"Review this draft.","intent":"act","steps":[],'
+                    '"actions":[{"robot":"arm_1","capability":"observe","params":{},'
+                    '"reason":"inspect","depends_on":[]}],"memory":[]}'
+                ),
+            )
+
+        def parse_structured_json_text(self, content, **kwargs):
+            return json.loads(content)
+
+    def capture_compile(actions, **kwargs):
+        action_list = list(actions)
+        compiled_inputs.append(
+            {
+                "actions": [action.model_dump(mode="json") for action in action_list],
+                "kwargs": kwargs,
+            }
+        )
+        return real_compile(action_list, **kwargs)
+
+    monkeypatch.setattr(runtime, "_llm_client", lambda: FakeClient())
+    monkeypatch.setattr(chat_runtime_module, "compile_agent_output", capture_compile)
+
+    events = list(runtime.respond_stream("look around"))
+
+    assert [event["type"] for event in events] == ["thought", "delta", "done"]
+    assert events[0]["delta"] == marker
+    assert events[-1]["reply"] == "Review this draft."
+    assert marker not in json.dumps(compiled_inputs, ensure_ascii=False)
+    assert marker not in json.dumps(events[-1]["agent_output"], ensure_ascii=False)
+    store = open_state_store(config_path=config_path)
+    assistant = store.read_chat()["messages"][-1]
+    assert assistant.metadata["reasoning_summary"] == marker
+    assert marker not in json.dumps(store.read_actions(), ensure_ascii=False)
+    assert marker not in json.dumps(store.read_feedback(), ensure_ascii=False)
+
+
+def test_chat_runtime_abort_drops_partial_reasoning_metadata(tmp_path, monkeypatch):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="llm",
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+    aborted = {"value": False}
+    transport = {"closed": False}
+
+    class FakeClient:
+        def stream_structured_json(self, messages, **kwargs):
+            try:
+                yield StreamChunk(kind="thought", text="partial private summary")
+                yield StreamChunk(kind="message", text='{"reply":"partial')
+                yield StreamChunk(
+                    kind="message",
+                    text=' ignored","intent":"chat","steps":[],"actions":[],"memory":[]}',
+                )
+            finally:
+                transport["closed"] = True
+
+        def parse_structured_json_text(self, content, **kwargs):
+            return json.loads(content)
+
+    monkeypatch.setattr(runtime, "_llm_client", lambda: FakeClient())
+    stream = runtime.respond_stream(
+        "hello",
+        cancel_check=lambda: aborted["value"],
+    )
+
+    assert next(stream) == {"type": "thought", "delta": "partial private summary"}
+    assert next(stream) == {"type": "delta", "delta": "partial"}
+    aborted["value"] = True
+    assert [event["type"] for event in stream] == ["aborted"]
+
+    store = open_state_store(config_path=config_path)
+    assistant = store.read_chat()["messages"][-1]
+    assert assistant.content == "partial"
+    assert "reasoning_summary" not in assistant.metadata
+    assert store.read_actions()["pending"] == []
+    assert "partial private summary" not in json.dumps(store.read_feedback())
+    assert transport["closed"] is True
 
 
 def test_chat_runtime_stream_close_after_done_does_not_persist_cancelled(tmp_path):
@@ -351,11 +456,17 @@ def test_chat_runtime_stream_abort_writes_partial_without_actions(tmp_path, monk
     class FakeClient:
         def stream_structured_json(self, messages, **kwargs):
             try:
-                yield '{"reply":"partial'
-                yield ' ignored","intent":"act","steps":[],"actions":['
-                yield (
-                    '{"robot":"arm_1","capability":"observe","params":{},'
-                    '"reason":"inspect","depends_on":[]}],"memory":[]}'
+                yield StreamChunk(kind="message", text='{"reply":"partial')
+                yield StreamChunk(
+                    kind="message",
+                    text=' ignored","intent":"act","steps":[],"actions":[',
+                )
+                yield StreamChunk(
+                    kind="message",
+                    text=(
+                        '{"robot":"arm_1","capability":"observe","params":{},'
+                        '"reason":"inspect","depends_on":[]}],"memory":[]}'
+                    ),
                 )
             finally:
                 transport["closed"] = True
@@ -429,9 +540,12 @@ def test_chat_runtime_stream_prompt_uses_structured_actions_without_fence(tmp_pa
         def stream_structured_json(self, messages, **kwargs):
             captured["system"] = messages[0]["content"]
             captured["payload"] = json.loads(messages[1]["content"])
-            yield (
-                '{"reply":"draft","intent":"chat","steps":[],"actions":[],'
-                '"memory":[]}'
+            yield StreamChunk(
+                kind="message",
+                text=(
+                    '{"reply":"draft","intent":"chat","steps":[],"actions":[],'
+                    '"memory":[]}'
+                ),
             )
 
         def parse_structured_json_text(self, content, **kwargs):
@@ -469,12 +583,15 @@ def test_chat_runtime_structured_stream_is_early_and_has_one_draft_truth(
     class FakeClient:
         def stream_structured_json(self, messages, **kwargs):
             try:
-                yield '{"reply":" I drafted two actions.'
-                yield (' ","intent":"act","steps":["Draft"],"actions":['
-                    '{"robot":"arm_1","capability":"pick","params":{"object":"red_block"},'
-                    '"reason":"pick","depends_on":[]},'
-                    '{"robot":"arm_1","capability":"place","params":{"object":"red_block"},'
-                    '"reason":"place","depends_on":[0]}],"memory":[]}'
+                yield StreamChunk(kind="message", text='{"reply":" I drafted two actions.')
+                yield StreamChunk(
+                    kind="message",
+                    text=(' ","intent":"act","steps":["Draft"],"actions":['
+                        '{"robot":"arm_1","capability":"pick","params":{"object":"red_block"},'
+                        '"reason":"pick","depends_on":[]},'
+                        '{"robot":"arm_1","capability":"place","params":{"object":"red_block"},'
+                        '"reason":"place","depends_on":[0]}],"memory":[]}'
+                    ),
                 )
                 transport["finished"] = True
             finally:

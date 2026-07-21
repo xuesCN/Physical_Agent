@@ -13,6 +13,7 @@ from physical_agent.llm import (
     OpenAICompatibleClient,
     OpenAICompatibleError,
     OpenAICompatibleSettings,
+    StreamChunk,
     llm_settings_path,
     public_llm_settings_summary,
     read_llm_settings_file,
@@ -116,6 +117,34 @@ def _responses_text(text: str) -> dict:
 
 def _responses_delta(text: str) -> dict:
     return {"type": "response.output_text.delta", "delta": text}
+
+
+def _responses_reasoning_delta(text: str) -> dict:
+    return {"type": "response.reasoning_summary_text.delta", "delta": text}
+
+
+def _chunk_pairs(chunks: list[StreamChunk]) -> list[tuple[str, str]]:
+    return [(chunk.kind, chunk.text) for chunk in chunks]
+
+
+def test_responses_reasoning_summary_is_extracted_separately_from_message_text():
+    parsed = _responses_text("final answer")
+    parsed["output"].insert(
+        0,
+        {
+            "type": "reasoning",
+            "summary": [
+                {"type": "summary_text", "text": "Checked the constraints. "},
+                {"type": "summary_text", "text": "Selected the safe option."},
+            ],
+        },
+    )
+
+    assert openai_compatible._extract_responses_text(parsed) == "final answer"
+    assert openai_compatible._extract_responses_reasoning(parsed) == (
+        "Checked the constraints. Selected the safe option."
+    )
+    assert openai_compatible._extract_responses_reasoning(_responses_text("plain")) == ""
 
 
 def test_load_dotenv_sets_gpt_env_names(tmp_path, monkeypatch):
@@ -414,12 +443,14 @@ def test_llm_trace_records_structured_json_and_stream(fake_openai, tmp_path, mon
         schema_name="ping_response",
         metadata={"physical_agent_surface": "structured_trace"},
     ) == {"answer": "pong"}
-    assert list(
-        client.stream_chat_text(
-            [{"role": "user", "content": "hello"}],
-            metadata={"physical_agent_surface": "stream_trace"},
+    assert _chunk_pairs(
+        list(
+            client.stream_chat_text(
+                [{"role": "user", "content": "hello"}],
+                metadata={"physical_agent_surface": "stream_trace"},
+            )
         )
-    ) == ["hel", "lo"]
+    ) == [("message", "hel"), ("message", "lo")]
 
     records = []
     for path in (tmp_path / "workspace" / "llm-trace").glob("*.jsonl"):
@@ -490,7 +521,8 @@ def test_stream_chat_text_aggregates_chat_completion_deltas(fake_openai):
         )
     )
 
-    assert chunks == ["hel", "lo"]
+    assert _chunk_pairs(chunks) == [("message", "hel"), ("message", "lo")]
+    assert "".join(chunk.text for chunk in chunks) == "hello"
     call = fake_openai.instances[0].calls[0]
     assert call["method"] == "chat.completions.create"
     assert call["payload"]["stream"] is True
@@ -519,7 +551,7 @@ def test_stream_structured_json_uses_chat_completion_json_mode(fake_openai):
         )
     )
 
-    assert chunks == ['{"reply":"hello"}']
+    assert _chunk_pairs(chunks) == [("message", '{"reply":"hello"}')]
     payload = fake_openai.instances[0].calls[0]["payload"]
     assert payload["response_format"] == {"type": "json_object"}
     assert payload["messages"][0]["role"] == "system"
@@ -551,7 +583,7 @@ def test_stream_structured_json_falls_back_only_before_provider_bytes(fake_opena
         )
     )
 
-    assert chunks == ['{"reply":"fallback"}']
+    assert _chunk_pairs(chunks) == [("message", '{"reply":"fallback"}')]
     calls = fake_openai.instances[0].calls
     assert len(calls) == 2
     assert calls[0]["payload"]["response_format"] == {"type": "json_object"}
@@ -576,7 +608,7 @@ def test_stream_structured_json_never_retries_after_provider_bytes(fake_openai):
         schema_name="chat_turn",
     )
 
-    assert next(stream) == '{"reply":"partial'
+    assert next(stream) == StreamChunk(kind="message", text='{"reply":"partial')
     with pytest.raises(OpenAICompatibleError):
         next(stream)
     assert len(fake_openai.instances[0].calls) == 1
@@ -597,7 +629,7 @@ def test_stream_chat_text_passes_chat_reasoning_extra_body_when_configured(fake_
         )
     )
 
-    assert chunks == ["pong"]
+    assert _chunk_pairs(chunks) == [("message", "pong")]
     payload = fake_openai.instances[0].calls[0]["payload"]
     assert payload["stream"] is True
     assert payload["extra_body"] == {"thinking": {"type": "enabled"}}
@@ -629,13 +661,77 @@ def test_stream_chat_text_aggregates_responses_deltas(fake_openai):
         )
     )
 
-    assert chunks == ["hel", "lo"]
+    assert _chunk_pairs(chunks) == [("message", "hel"), ("message", "lo")]
     call = fake_openai.instances[0].calls[0]
     assert call["method"] == "responses.create"
     assert call["payload"]["stream"] is True
     assert call["payload"]["instructions"] == "Return text."
     assert call["payload"]["metadata"]["physical_agent_surface"] == "test_stream"
     assert call["payload"]["reasoning"] == {"effort": "medium", "summary": "auto"}
+
+
+def test_stream_chat_text_types_responses_message_and_reasoning_summary_deltas(fake_openai):
+    fake_openai.responses_outputs = [
+        [
+            _responses_reasoning_delta("Checked constraints. "),
+            _responses_delta("safe "),
+            _responses_reasoning_delta("No action executed."),
+            _responses_delta("answer"),
+            {"type": "response.completed"},
+        ]
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+
+    chunks = list(
+        OpenAICompatibleClient(settings).stream_chat_text(
+            [{"role": "user", "content": "ping"}]
+        )
+    )
+
+    assert [(chunk.kind, chunk.text) for chunk in chunks] == [
+        ("thought", "Checked constraints. "),
+        ("message", "safe "),
+        ("thought", "No action executed."),
+        ("message", "answer"),
+    ]
+
+
+def test_stream_structured_json_preserves_thought_chunks_without_parsing_them(fake_openai):
+    fake_openai.responses_outputs = [
+        [
+            _responses_reasoning_delta("Checked JSON constraints."),
+            _responses_delta('{"reply":"hello"}'),
+            {"type": "response.completed"},
+        ]
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+
+    chunks = list(
+        OpenAICompatibleClient(settings).stream_structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={
+                "type": "object",
+                "required": ["reply"],
+                "properties": {"reply": {"type": "string"}},
+            },
+            schema_name="chat_turn",
+        )
+    )
+
+    assert _chunk_pairs(chunks) == [
+        ("thought", "Checked JSON constraints."),
+        ("message", '{"reply":"hello"}'),
+    ]
 
 
 def test_stream_structured_json_uses_responses_json_mode(fake_openai):
@@ -662,7 +758,7 @@ def test_stream_structured_json_uses_responses_json_mode(fake_openai):
         )
     )
 
-    assert chunks == ['{"reply":"hello"}']
+    assert _chunk_pairs(chunks) == [("message", '{"reply":"hello"}')]
     payload = fake_openai.instances[0].calls[0]["payload"]
     assert payload["text"]["format"] == {"type": "json_object"}
     assert "JSON Schema named `chat_turn`" in payload["instructions"]
@@ -692,7 +788,7 @@ def test_stream_chat_text_exposes_and_clears_transport_closer(fake_openai):
         transport_observer=observed.append,
     )
 
-    assert next(stream) == "hello"
+    assert next(stream) == StreamChunk(kind="message", text="hello")
     assert callable(observed[0])
     observed[0]()
     assert closed["count"] == 1
@@ -721,7 +817,7 @@ def test_stream_chat_text_error_redacts_api_key(fake_openai):
         [{"role": "user", "content": "ping"}]
     )
 
-    assert next(stream) == "partial"
+    assert next(stream) == StreamChunk(kind="message", text="partial")
     with pytest.raises(OpenAICompatibleError) as info:
         next(stream)
 
@@ -860,7 +956,7 @@ def test_stream_chat_reasoning_400_falls_back_without_extra_body(fake_openai):
         )
     )
 
-    assert chunks == ["pong"]
+    assert _chunk_pairs(chunks) == [("message", "pong")]
     calls = fake_openai.instances[0].calls
     assert calls[0]["payload"]["extra_body"] == {"thinking": {"type": "enabled"}}
     assert "extra_body" not in calls[1]["payload"]
@@ -885,7 +981,7 @@ def test_stream_responses_reasoning_400_falls_back_without_reasoning(fake_openai
         )
     )
 
-    assert chunks == ["pong"]
+    assert _chunk_pairs(chunks) == [("message", "pong")]
     calls = fake_openai.instances[0].calls
     assert calls[0]["payload"]["reasoning"] == {"effort": "medium", "summary": "auto"}
     assert "reasoning" not in calls[1]["payload"]

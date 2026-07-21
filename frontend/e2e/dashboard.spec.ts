@@ -280,6 +280,61 @@ test("C6 navigation and page composition retire duplicate page keys without losi
   expectNoConsoleErrors(consoleErrors);
 });
 
+test("C6.1 page query opens and reloads the requested dashboard page", async ({ page }) => {
+  const consoleErrors = collectConsoleErrors(page);
+
+  await page.goto("/?page=actions");
+  await expect(page.getByTestId("page-actions")).toBeVisible();
+  await expect(page.getByTestId("nav-actions").locator("xpath=ancestor::li")).toHaveClass(
+    /ant-menu-item-selected/,
+  );
+
+  await page.reload();
+  await expect(page.getByTestId("page-actions")).toBeVisible();
+  await expect.poll(() => new URL(page.url()).searchParams.get("page")).toBe("actions");
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("C6.1 navigation preserves other query parameters and follows browser history", async ({
+  page,
+}) => {
+  const consoleErrors = collectConsoleErrors(page);
+
+  await page.goto("/?source=operator");
+  await page.getByTestId("nav-chat").click();
+  await expect(page.getByTestId("page-chat")).toBeVisible();
+  await expect.poll(() => new URL(page.url()).searchParams.get("page")).toBe("chat");
+  await expect.poll(() => new URL(page.url()).searchParams.get("source")).toBe("operator");
+
+  await page.getByTestId("nav-state").click();
+  await expect(page.getByTestId("page-state")).toBeVisible();
+  await expect.poll(() => new URL(page.url()).searchParams.get("page")).toBe("state");
+
+  await page.goBack();
+  await expect(page.getByTestId("page-chat")).toBeVisible();
+  await expect(page.getByTestId("nav-chat").locator("xpath=ancestor::li")).toHaveClass(
+    /ant-menu-item-selected/,
+  );
+
+  await page.goForward();
+  await expect(page.getByTestId("page-state")).toBeVisible();
+  await expect(page.getByTestId("nav-state").locator("xpath=ancestor::li")).toHaveClass(
+    /ant-menu-item-selected/,
+  );
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("C6.1 invalid and retired page keys normalize to overview", async ({ page }) => {
+  const consoleErrors = collectConsoleErrors(page);
+
+  for (const pageKey of ["world", "not-a-dashboard-page"]) {
+    await page.goto(`/?page=${pageKey}`);
+    await expect(page.getByTestId("page-overview")).toBeVisible();
+    await expect.poll(() => new URL(page.url()).searchParams.get("page")).toBe("overview");
+  }
+  expectNoConsoleErrors(consoleErrors);
+});
+
 test("C6 proposal panel mounts on demand and remembers each page", async ({ page }) => {
   const consoleErrors = collectConsoleErrors(page);
   await mockReadyApiWithRobot(page);

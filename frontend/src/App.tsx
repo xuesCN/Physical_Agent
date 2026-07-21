@@ -30,8 +30,7 @@ import { ContextTabs } from "./components/ContextTabs";
 import { ProposalPanel } from "./components/ProposalPanel";
 import { RawDebug } from "./components/RawDebug";
 import { RobotsPanel } from "./components/RobotsPanel";
-import { PAGE_KEYS, SidebarNav } from "./components/SidebarNav";
-import type { PageKey } from "./components/SidebarNav";
+import { SidebarNav } from "./components/SidebarNav";
 import { StateOverviewPanel } from "./components/StateOverviewPanel";
 import { StatusBar } from "./components/StatusBar";
 import {
@@ -45,6 +44,8 @@ import {
 } from "./locales";
 import { MessagesProvider } from "./locales/context";
 import type { Language, Messages, ThemeMode } from "./locales";
+import { PAGE_KEYS, usePageNavigation } from "./navigation";
+import type { PageKey } from "./navigation";
 import type {
   ActionItem,
   AgentState,
@@ -167,7 +168,7 @@ function Dashboard({
   const [streamMessages, setStreamMessages] = useState<ChatMessage[] | null>(null);
   const [chatStreamError, setChatStreamError] = useState<string | null>(null);
   const [busy, setBusy] = useState<BusyKey>("refresh");
-  const [activePage, setActivePage] = useState<PageKey>("overview");
+  const [activePage, navigatePage] = usePageNavigation();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [proposalPages, setProposalPages] = useState<ProposalPagePreferences>(
     readProposalPagePreferences
@@ -548,7 +549,7 @@ function Dashboard({
   }
 
   function handleOpenAction(actionId: string) {
-    setActivePage("actions");
+    navigatePage("actions");
     if (actionId) {
       message.info(`Opened Actions for ${actionId}`);
     }
@@ -560,7 +561,7 @@ function Dashboard({
         activePage={activePage}
         collapsed={sidebarCollapsed}
         labels={labels.nav}
-        onChange={setActivePage}
+        onChange={navigatePage}
         onCollapse={setSidebarCollapsed}
       />
       <Layout className="workspace-layout">

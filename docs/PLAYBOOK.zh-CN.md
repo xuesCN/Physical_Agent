@@ -229,6 +229,18 @@
 
 **验收**：八项导航顺序与 A.1 一致；页面组成逐行符合 A.2；actions 无 tab bar 且只见 feedback，state 默认 world 并可切四项；提案按页默认/记忆/按需挂载；ActionBoard 三态及待审批不可折叠均由真实 Chromium 覆盖；推理摘要用例经 `nav-chat` 仍通过；frontend build、全量 Playwright、Python full、Safety smoke、TUI、clean-wheel 与 `git diff --check` 全绿。
 
+## C6.1 Dashboard 纯前端 URL 页面状态
+
+**依据**：C6 已把导航收敛为稳定的 8 个 `PageKey`，但 `activePage` 仍是默认 `overview` 的纯 React state；刷新丢页、链接不可复用且浏览器后退离开应用。当前 Dashboard 是根路径托管的本机工具，因此选择 `?page=<page-key>`，不为 clean path 扩大 FastAPI surface。
+
+**思路**：把 `PAGE_KEYS`/`PageKey` 与 URL 解析、写入、`popstate` 同步收拢到一个轻量前端 navigation 模块。缺省 `/` 继续显示 overview；有效 query 直接选页；非法或已退役 key 以 `replaceState` 归一到 overview。Sidebar 与 action 内跳转统一调用同一导航函数，`activePage` 不再拥有独立且可能与 URL 分叉的 state。Dashboard 外壳、SSE、snapshot、chat stream 与每页 Proposal 偏好保持常驻和原语义。
+
+**关键文件**：`frontend/src/navigation.ts`、`frontend/src/App.tsx`、`frontend/src/components/SidebarNav.tsx`、`frontend/e2e/dashboard.spec.ts`。不改 `physical_agent/api/server.py`，不新增 npm dependency，不重构 `renderPageContent()` 或 ContextTabs 子页签。
+
+**坑**：`history.pushState()` 不会触发 `popstate`，前端导航必须同时更新 React 视图；浏览器 Back/Forward 则只由 `popstate` 回读 URL。不得在切页时 remount Dashboard 或重建 EventSource；同页点击不得制造重复 history entry。query 写入应保留其他参数。退役的 `world/safety/robots` 不能恢复为页面别名。
+
+**验收（2026-07-21）**：直接打开 `/?page=actions` 可见 Actions；刷新后仍在原页；连续导航后 Back/Forward 同步 URL、侧栏高亮与内容；其他 query 参数保留；非法/退役 key 回退并归一为 overview。frontend `tsc -b && vite build` 通过（3310 modules）；隔离 `.tmp/e2e` 后端的真实 Chromium full `37/37`；Python full `469 passed, 1 warning`；Safety smoke `32 passed, 1 warning`；TUI typecheck/build 与 full `138/138`；clean-wheel smoke、in-app Browser 交互复核与 `git diff --check` 通过。
+
 ## C4 i18n / E3 视觉打磨
 
 **思路**：C4：antd `ConfigProvider locale` + 文案抽到 `locales/{zh,en}.ts` 键值表（不上 i18next，工程量不值），默认跟浏览器语言，切换存 localStorage。E3：暗色模式用 antd `theme.darkAlgorithm` token 切换 + localStorage；首次引导用 antd Tour 组件串 setup→watch→demo 三步。

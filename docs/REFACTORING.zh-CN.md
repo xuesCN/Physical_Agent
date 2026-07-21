@@ -63,6 +63,7 @@
 | T4.2 | finalized assistant 块级 Markdown、嵌套列表/code 悬挂缩进与 block-local fallback | parser `3b17ec6`；renderer `7c0a239`；physical width/App `25f20c4`；review repairs `499487c`、`8d578be`、`fe0b477`；final-review shortcut/image-reference repair `f1ed6c7`。`f1ed6c7` exact-commit：TUI parser+renderer `60/60`、full `134/134`、typecheck/build exit 0；Python full `463 passed, 1 warning`；controller fresh docs+safety `24/24`、safety `27/27`；boundary/package/diff clean。最终 re-review Critical=0、Important=0、Minor=1（接受非阻塞 Terminal smoke omission）。implementation/docs exact head `6631f35b22eba6c6e57394c07fec3a26254aa686`：Push `29728361574`、draft-PR `29728365131` 均 attempt 1 completed success。旧 `d72e187`/`a89be06` CI 当时有效但已被本修复 supersede。 |
 | C6 | Dashboard 信息架构重排：8 项导航、ContextTabs 唯一归属、按页 Proposal 与审批感知 ActionBoard | 本轮提交；frontend build 通过；真实 Chromium `33/33`；Python `469 passed`；Safety `32 passed`；TUI `138/138` + typecheck/build；clean-wheel 通过；最终复审 Critical/Important/Minor=0 |
 | C6-layout | 对话页撑满可用高度，收起态提案栏居中纵排 | 本轮提交；frontend build 通过；隔离后端的真实 Chromium `34/34`；Python `469 passed`；实机 1600×900 截图复核通过 |
+| C6.1 | Dashboard 纯前端 `?page=` URL 状态、直达/刷新/history 同步 | frontend build 通过（3310 modules）；隔离后端真实 Chromium `37/37`；Python `469 passed`；Safety `32 passed`；TUI `138/138` + typecheck/build；clean-wheel 与 in-app Browser 复核通过；无 FastAPI/依赖改动 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -471,6 +472,12 @@ ProposalPanel 沿用既有桌面侧栏/窄屏 Drawer 两种容器，以版本化
 
 后续布局收口把桌面对话页主区、Chat Card body 与消息区串成一条有界 flex 高度链：卡片占满 header 以下的可用视口，长消息仍只在 `.bubble-stage` 内滚动，输入区保持可见；该规则只在 `min-width: 821px` 生效，避免覆盖既有移动端高度策略。提案栏不再让 icon 与文字共同继承 `writing-mode`，而是把箭头、编辑图标和独立的纵排文字按 column 居中。新增 Chromium 几何用例在 1600×900 下锁定卡片底部 12px 间距、文字纵向/居中/不越界及点击展开行为；隔离 `.tmp/e2e` 后端后 full `34/34`，frontend build 与 Python `469 passed` 通过。
 
+### C6.1：Dashboard 纯前端 URL 页面状态
+
+新增 `frontend/src/navigation.ts`，把 8 个 `PAGE_KEYS`、`PageKey`、query 解析/写入与 `popstate` 同步收口为 `usePageNavigation()`。有效 `?page=` 直接选页；缺省 `/` 保持 overview 且不主动改写；非法或已退役 key 以 `replaceState` 归一到 `?page=overview`。Sidebar 与 action 内跳转统一走 `navigatePage()`，写入时保留其他 query/hash，同页点击不制造重复 history。Hook 只同步页面选择，Dashboard 外壳、SSE、snapshot、chat stream 与按页 Proposal 偏好均不 remount。
+
+没有引入 React Router 或状态管理依赖，也没有增加 clean-path/404/FastAPI fallback：当前产品是根路径托管的本机工具，query 足以表达 8 个稳定页面，避免扩大后端 surface。三条新增 Chromium 用例锁定 direct+reload、query preservation+Back/Forward、invalid/retired normalization；全量真实 Chromium `37/37`。frontend build（3310 modules）、Python full `469 passed, 1 warning`、Safety smoke `32 passed, 1 warning`、TUI typecheck/build 与 `138/138`、clean-wheel 均通过；in-app Browser 另行复核 URL 与可见内容一致，console 0 warning/error。没有修改 FastAPI、API/SSE、SQLite、watch、driver、SafetyGate 或 SAFETY.md。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -563,6 +570,7 @@ ProposalPanel 沿用既有桌面侧栏/窄屏 Drawer 两种容器，以版本化
 87. **typed `thought` 是 chat UI 可观测性，不是 VNext-4 账本重启**（A1.3b）：只在既有 provider stream→ChatRuntime→chat SSE 链路增加 message/thought 区分，放弃 Run/Turn/Event、registry/read model 与新持久化 schema；VNext-4 其余范围继续冻结，仍须满足可复现需求 + 显式 SPEC 决策才可重启。
 88. **provider reasoning summary 永远是不可信、只读的展示 metadata**（A1.3b）：只保存 completed turn 的摘要并从后续 LLM context 过滤；不得进入 PlanCompiler、Action Board、feedback、Gate 或审批依据，abort 的 partial summary 不落盘。模型是否给出摘要不影响 canonical reply/AgentOutput。
 89. **Dashboard page key 只保留唯一内容归属，不保留隐藏兼容别名**（C6）：直接退役 `world/safety/robots`，由 `state/hardware` 接管，并用新页正向覆盖与旧 key 负断言证明能力未丢失；放弃 alias/redirect，因为这些 key 只是无 URL 路由的前端内部状态，并非 API/TUI 契约，保留它们只会延续双导航真源。历史 Proposal localStorage 也只按当前 `PAGE_KEYS` 白名单读取，旧 key 自然失效。
+90. **本机根路径 Dashboard 先用 query 表达页面，不引入路由库或后端 clean-path fallback**（C6.1）：选择 `?page=<page-key>`，因为它能在不改变 FastAPI 静态托管与依赖图的前提下提供直达、刷新和 history；缺省 `/` 继续兼容 overview，显式非法 key 才 replace 归一。放弃 `/actions` 一类 clean path 与 404 页面，因为当前不是公网多路径应用，收益不足以覆盖后端 fallback、部署与测试面扩张。
 
 ## 4. 经验教训（流程侧）
 
@@ -605,5 +613,6 @@ ProposalPanel 沿用既有桌面侧栏/窄屏 Drawer 两种容器，以版本化
 - **导航退役必须同时证明旧入口消失与能力在新入口可达**（C6 的教训）：只断言菜单从 9 变 8 不能证明无能力丢失；真实 Chromium 还要逐项锁住 world/safety/capabilities/robots 的新归属，并验证活动导航与可见内容一致。
 - **CSS 隐藏不等于性能收口，响应式默认值也必须服从安全信号优先级**（C6 的教训）：Proposal 收起验收必须断言组件不挂载，不能只看宽度；同时组合测试窄屏、Actions 默认展开和待审批状态，才能发现 Drawer 遮蔽审批入口的问题。安全 override 应只控制可见性、不抹掉用户偏好，条件解除后再恢复。
 - **真实 Chromium 回归不得复用正在展示的用户工作区后端**（C6 layout follow-up 的教训）：Playwright 的 `reuseExistingServer` 会接受同端口的任意健康实例；若本地正在运行真实 SQLite workspace，包含真实 API 的场景会污染 action/chat/upload 状态，待审批信号还会改变移动端预期。全量回归前必须先释放测试端口，让配置启动隔离的 `.tmp/e2e` 后端；展示服务只能在回归结束后恢复。
+- **URL 状态不能只测点击后的地址字符串**（C6.1 的教训）：至少同时锁定 direct open、reload、Back/Forward、活动导航/内容一致、其他 query 保留，以及非法/退役 key 的 replace 归一；否则很容易得到“地址变了但视图没同步”或 history 堆积的半路由。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

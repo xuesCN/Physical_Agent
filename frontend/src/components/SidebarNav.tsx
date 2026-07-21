@@ -12,19 +12,7 @@ import { Layout, Menu, Typography } from "antd";
 import type { MenuProps } from "antd";
 import type { ReactNode } from "react";
 import type { Messages } from "../locales";
-
-export const PAGE_KEYS = [
-  "chat",
-  "overview",
-  "actions",
-  "state",
-  "hardware",
-  "memory",
-  "events",
-  "settings"
-] as const;
-
-export type PageKey = (typeof PAGE_KEYS)[number];
+import type { PageKey } from "../navigation";
 
 export const PAGE_LABELS: Record<PageKey, string> = {
   chat: "Chat",

@@ -2,7 +2,7 @@
 
 > 配套 `SPEC.zh-CN.md` §4 矩阵使用：矩阵管"做什么/状态"，本册管"怎么做"。每项含：思路、关键文件、坑、验收。
 > 写给后续执行者（人或 agent）。动工前先读 SPEC §0 不变量与 REFACTORING §3 决策先例；每项动工时按惯例先出一份轮次 brief。
-> 最后更新：2026-07-17
+> 最后更新：2026-07-21
 
 ---
 
@@ -216,6 +216,18 @@
 **T4.2 final-review repair 本地重开（2026-07-20）**：`f1ed6c773cebac930fd11578b6ef653e259cf6fa` 修复 matching shortcut/image shortcut reference：scanner 先在整个文档收集 0–3 个 ASCII leading spaces 的单行 definition label，trim 并折叠内部 ASCII space/tab、casefold 后匹配；收集时复用 `parseFence()` 跳过普通、reserved、invalid 与 unclosed fence range，避免把 code presentation 当文档结构。匹配 shortcut/image shortcut 与 definition block 都走既有 block-local literal fallback，完整保留 `!`、`[]`、`**`，不解析或渲染 destination；unmatched bracket prose 与相邻 supported block 仍格式化。严格 RED/GREEN 与 exact-commit 报告得到 parser+renderer `60/60`、full TUI `134/134`、typecheck/build exit 0、Python full `463 passed, 1 warning`；closure controller fresh docs+safety `24/24`、targeted safety `27/27`，boundary/package/diff clean。最终 re-review Critical=0、Important=0、Minor=1；唯一 Minor 是计划已允许、且因 Terminal 自动化禁令继续接受的非阻塞 live smoke omission。标题“已完成”表示能力与 final repair 已实现；本地证据提交阶段 SPEC 曾保持 🟡，直到下述新 exact-head workflows 成功。
 
 **T4.2 final-review repair exact-head CI（2026-07-20）**：implementation/docs head `6631f35b22eba6c6e57394c07fec3a26254aa686` 的 Push run `29728361574` 与 draft-PR run `29728365131` 均 attempt 1 completed success，`head_sha` 精确匹配。Push 的 frontend+wheel job `88306648770`、Python safety `88306648802`、Ink TUI `88306648860` 成功，generic matrix `88306649425`、PR-only Python full `88306649629`、Playwright `88306674380` skipped；draft-PR 的 Python safety `88306659766`、frontend+wheel `88306659770`、Python 3.12 full `88306659816`、Ink TUI `88306659823`、Playwright `88306659927` 成功，generic matrix `88306660569` skipped。只有这一代包含 `f1ed6c7` 与 living-doc repair 的 reviewed exact head 支持 final repair closure。
+
+## C6 Dashboard 信息架构重排
+
+**依据**：严格执行 `docs/design/ui-redesign-spec.zh-CN.md` A.1-A.5 与 `docs/design/dashboard-ia-redesign.html`，诊断证据见 `docs/brief-frontend-optimization-review.zh-CN.md` §4.6；不重新设计。
+
+**思路**：`SidebarNav` 把九项收敛为 `chat/overview/actions/state/hardware/memory/events/settings`；`renderPageContent()` 只搬现有组件，`state` 独占完整 ContextTabs，`actions` 通过 `only="feedback"` 只渲染反馈且不显示 tab bar。复用现有提案开关，把 ProposalPanel 改成按页面 localStorage 记忆、收起时不挂载；actions 默认展开，其余默认收起。ActionBoard 从 pending 的 `metadata.approval.required` 计算待审批数，空/普通 pending 默认折叠，待审批强制展开且禁用折叠。
+
+**关键文件**：`frontend/src/App.tsx`、`frontend/src/components/{SidebarNav,ContextTabs,ActionBoard}.tsx`、`frontend/src/locales/{en,zh}.ts`、`frontend/src/styles.css`、`frontend/e2e/dashboard.spec.ts`。`StateOverviewPanel` 已内部包含 `AgentTaskGraphCard`，overview 不重复挂载任务图；TUI view 名称是独立终端协议，本轮不改。
+
+**坑**：ChatPanel 迁出 overview 后，所有依赖默认页 chat 的 e2e 都必须先导航 `nav-chat`；ProposalPanel 收起时不挂载，既有表单用例必须先展开。退役 `world/safety/robots` 前用 e2e 证明 world/safety/capabilities 都在 state，RobotsPanel 在 hardware；不得以折叠隐藏待审批、Gate 结果或拒绝原因。不得新增路由/状态管理库，不改 Python 或后端 wire。
+
+**验收**：八项导航顺序与 A.1 一致；页面组成逐行符合 A.2；actions 无 tab bar 且只见 feedback，state 默认 world 并可切四项；提案按页默认/记忆/按需挂载；ActionBoard 三态及待审批不可折叠均由真实 Chromium 覆盖；推理摘要用例经 `nav-chat` 仍通过；frontend build、全量 Playwright、Python full、Safety smoke、TUI、clean-wheel 与 `git diff --check` 全绿。
 
 ## C4 i18n / E3 视觉打磨
 

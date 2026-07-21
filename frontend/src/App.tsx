@@ -1,5 +1,15 @@
+import { FormOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
 import { Alert, App as AntApp, Button, ConfigProvider, Drawer, Layout, Spin, Tour, theme } from "antd";
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from "react";
 import {
   abortChatStream,
   approveAction,
@@ -20,7 +30,7 @@ import { ContextTabs } from "./components/ContextTabs";
 import { ProposalPanel } from "./components/ProposalPanel";
 import { RawDebug } from "./components/RawDebug";
 import { RobotsPanel } from "./components/RobotsPanel";
-import { SidebarNav } from "./components/SidebarNav";
+import { PAGE_KEYS, SidebarNav } from "./components/SidebarNav";
 import type { PageKey } from "./components/SidebarNav";
 import { StateOverviewPanel } from "./components/StateOverviewPanel";
 import { StatusBar } from "./components/StatusBar";
@@ -69,6 +79,10 @@ const ConfigPanel = lazy(() =>
 );
 
 type BusyKey = "refresh" | "initialize" | "chat" | "proposal" | null;
+type ProposalPagePreferences = Partial<Record<PageKey, boolean>>;
+
+const PROPOSAL_PAGES_STORAGE_KEY = "physical-agent-proposal-pages:v1";
+const COMPACT_PROPOSAL_QUERY = "(max-width: 1080px)";
 
 export default function App() {
   const [language, setLanguage] = useState<Language>(() => resolveInitialLanguage());
@@ -155,7 +169,9 @@ function Dashboard({
   const [busy, setBusy] = useState<BusyKey>("refresh");
   const [activePage, setActivePage] = useState<PageKey>("overview");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [proposalPages, setProposalPages] = useState<ProposalPagePreferences>(
+    readProposalPagePreferences
+  );
   const [tourOpen, setTourOpen] = useState(() => localStorage.getItem(TOUR_STORAGE_KEY) !== "1");
   const [prefillAction, setPrefillAction] = useState<ActionItem | null>(null);
   const [prefillVersion, setPrefillVersion] = useState(0);
@@ -168,6 +184,24 @@ function Dashboard({
   const chatMessages = useMemo(
     () => streamMessages ?? state?.chat?.messages ?? [],
     [state?.chat?.messages, streamMessages]
+  );
+  const compactProposalLayout = useCompactProposalLayout();
+  const proposalExpanded = proposalPages[activePage] ?? activePage === "actions";
+  const compactApprovalPriority =
+    compactProposalLayout &&
+    activePage === "actions" &&
+    (state?.actions?.pending ?? []).some((action) => action.metadata?.approval?.required);
+  const visibleProposalExpanded = proposalExpanded && !compactApprovalPriority;
+
+  const setActiveProposalExpanded = useCallback(
+    (expanded: boolean) => {
+      setProposalPages((current) => {
+        const next = { ...current, [activePage]: expanded };
+        writeProposalPagePreferences(next);
+        return next;
+      });
+    },
+    [activePage]
   );
 
   useEffect(() => {
@@ -475,7 +509,7 @@ function Dashboard({
   function handleEditDraft(action: ActionItem) {
     setPrefillAction(action);
     setPrefillVersion((current) => current + 1);
-    setInspectorOpen(true);
+    setActiveProposalExpanded(true);
   }
 
   async function handleResetChat() {
@@ -540,11 +574,16 @@ function Dashboard({
             activePageLabel={labels.nav[activePage]}
             labels={labels}
             onRefresh={() => void loadSnapshot()}
-            onOpenInspector={() => setInspectorOpen(true)}
+            proposalDisabled={compactApprovalPriority}
+            onOpenInspector={() => setActiveProposalExpanded(true)}
           />
         </Layout.Header>
         <Layout.Content className="app-content">
-          <div className="workspace-frame">
+          <div
+            className={`workspace-frame ${
+              visibleProposalExpanded ? "proposal-expanded" : "proposal-collapsed"
+            }`}
+          >
             <main className="workspace-main" data-testid={`page-${activePage}`}>
               <WorkspaceNotice
                 error={snapshotError}
@@ -590,15 +629,40 @@ function Dashboard({
                 })}
               </Suspense>
             </main>
-            <aside className="inspector-column">
-              <ProposalPanel
-                state={state}
-                loading={busy === "proposal"}
-                onSubmitTask={handleTask}
-                onProposeAction={handleAction}
-                prefillAction={prefillAction}
-                prefillVersion={prefillVersion}
-              />
+            <aside
+              className={`inspector-column ${
+                visibleProposalExpanded
+                  ? "inspector-column-expanded"
+                  : "inspector-column-collapsed"
+              }`}
+            >
+              <Button
+                className="proposal-panel-toggle"
+                data-testid="proposal-panel-toggle"
+                type="text"
+                aria-label={
+                  visibleProposalExpanded ? labels.drawer.collapse : labels.drawer.open
+                }
+                icon={visibleProposalExpanded ? <RightOutlined /> : <LeftOutlined />}
+                onClick={() => setActiveProposalExpanded(!proposalExpanded)}
+              >
+                {!visibleProposalExpanded && (
+                  <span className="proposal-rail-label">
+                    <FormOutlined />
+                    {labels.app.propose}
+                  </span>
+                )}
+              </Button>
+              {!compactProposalLayout && visibleProposalExpanded && (
+                <ProposalPanel
+                  state={state}
+                  loading={busy === "proposal"}
+                  onSubmitTask={handleTask}
+                  onProposeAction={handleAction}
+                  prefillAction={prefillAction}
+                  prefillVersion={prefillVersion}
+                />
+              )}
             </aside>
           </div>
         </Layout.Content>
@@ -608,10 +672,10 @@ function Dashboard({
         className="proposal-drawer"
         width={420}
         placement="right"
-        open={inspectorOpen}
-        onClose={() => setInspectorOpen(false)}
+        open={compactProposalLayout && visibleProposalExpanded}
+        onClose={() => setActiveProposalExpanded(false)}
       >
-        {inspectorOpen && (
+        {compactProposalLayout && visibleProposalExpanded && (
           <ProposalPanel
             state={state}
             loading={busy === "proposal"}
@@ -786,6 +850,22 @@ function renderPageContent({
   onShowTour,
   onError
 }: RenderPageProps) {
+  if (activePage === "chat") {
+    return (
+      <ChatPanel
+        messages={chatMessages}
+        loading={busy === "chat"}
+        error={chatError}
+        onSend={onChat}
+        onStop={onStopChat}
+        onReset={onResetChat}
+        onAddDraft={onProposeAction}
+        onEditDraft={onEditDraft}
+        actionLoading={busy === "proposal"}
+      />
+    );
+  }
+
   if (activePage === "actions") {
     return (
       <div className="page-stack">
@@ -795,25 +875,17 @@ function renderPageContent({
           onApprove={onApproveAction}
           onReject={onRejectAction}
         />
-        <ContextTabs
-          state={state}
-          defaultActiveKey="feedback"
-          onOpenAction={onOpenAction}
-        />
+        <ContextTabs state={state} only="feedback" onOpenAction={onOpenAction} />
       </div>
     );
   }
 
-  if (activePage === "world") {
+  if (activePage === "state") {
     return (
       <div className="page-stack">
         <ContextTabs state={state} defaultActiveKey="world" onOpenAction={onOpenAction} />
       </div>
     );
-  }
-
-  if (activePage === "robots") {
-    return <RobotsPanel state={state} config={configResponse} />;
   }
 
   if (activePage === "hardware") {
@@ -840,14 +912,6 @@ function renderPageContent({
       <div className="two-panel-page">
         <UploadPanel onUploaded={onUploaded} onError={onError} />
         <MemorySearchPanel onError={onError} />
-      </div>
-    );
-  }
-
-  if (activePage === "safety") {
-    return (
-      <div className="page-stack">
-        <ContextTabs state={state} defaultActiveKey="safety" onOpenAction={onOpenAction} />
       </div>
     );
   }
@@ -881,32 +945,59 @@ function renderPageContent({
   }
 
   return (
-    <div className="overview-grid">
+    <div className="page-stack overview-grid">
       <StateOverviewPanel state={state} health={health} />
-      <div className="main-column">
-        <ActionBoard
-          actions={state?.actions}
-          loading={busy === "proposal"}
-          onApprove={onApproveAction}
-          onReject={onRejectAction}
-        />
-        <ChatPanel
-          messages={chatMessages}
-          loading={busy === "chat"}
-          error={chatError}
-          onSend={onChat}
-          onStop={onStopChat}
-          onReset={onResetChat}
-          onAddDraft={onProposeAction}
-          onEditDraft={onEditDraft}
-          actionLoading={busy === "proposal"}
-        />
-      </div>
-      <div className="context-column">
-        <ContextTabs state={state} onOpenAction={onOpenAction} />
-        <RobotsPanel state={state} config={configResponse} />
-      </div>
+      <RobotsPanel state={state} config={configResponse} />
     </div>
+  );
+}
+
+function readProposalPagePreferences(): ProposalPagePreferences {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const raw = localStorage.getItem(PROPOSAL_PAGES_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const source = parsed as Record<string, unknown>;
+    return PAGE_KEYS.reduce<ProposalPagePreferences>((preferences, page) => {
+      if (typeof source[page] === "boolean") {
+        preferences[page] = source[page];
+      }
+      return preferences;
+    }, {});
+  } catch {
+    return {};
+  }
+}
+
+function writeProposalPagePreferences(preferences: ProposalPagePreferences) {
+  try {
+    localStorage.setItem(PROPOSAL_PAGES_STORAGE_KEY, JSON.stringify(preferences));
+  } catch {
+    // UI preferences are best-effort when storage is unavailable.
+  }
+}
+
+function subscribeCompactProposalLayout(listener: () => void) {
+  const media = window.matchMedia(COMPACT_PROPOSAL_QUERY);
+  const handleChange = () => listener();
+  media.addEventListener("change", handleChange);
+  return () => media.removeEventListener("change", handleChange);
+}
+
+function compactProposalLayoutSnapshot() {
+  return window.matchMedia(COMPACT_PROPOSAL_QUERY).matches;
+}
+
+function useCompactProposalLayout() {
+  return useSyncExternalStore(
+    subscribeCompactProposalLayout,
+    compactProposalLayoutSnapshot,
+    () => false
   );
 }
 
@@ -920,12 +1011,12 @@ function buildTourSteps(labels: Messages) {
     {
       title: labels.tour.actionsTitle,
       description: labels.tour.actionsDescription,
-      target: () => queryTourTarget('[data-testid="action-board"]')
+      target: () => queryTourTarget('[data-testid="nav-actions"]')
     },
     {
       title: labels.tour.chatTitle,
       description: labels.tour.chatDescription,
-      target: () => queryTourTarget('[data-testid="chat-panel"]')
+      target: () => queryTourTarget('[data-testid="nav-chat"]')
     }
   ];
 }

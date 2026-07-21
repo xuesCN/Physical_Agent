@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Physical Agent · 信息架构重排原型</title>
+<style>
+:root{
+--bg:#f7f7f5;--surface:#fff;--surface-alt:#faf9f7;--border:#e3e2dd;--border-strong:#c9c8c2;
+--text:#1c1c1a;--text-2:#5f5e5a;--text-3:#8b8a84;
+--accent-bg:#e6f1fb;--accent-text:#185fa5;--accent-border:#378add;
+--warn-bg:#faeeda;--warn-text:#854f0b;--warn-border:#ba7517;
+--radius:8px;
+}
+@media (prefers-color-scheme:dark){
+:root{--bg:#1a1a19;--surface:#232322;--surface-alt:#1f1f1e;--border:#3a3a38;--border-strong:#4d4d4a;
+--text:#e8e7e3;--text-2:#a8a7a1;--text-3:#7a7975;
+--accent-bg:#0c447c;--accent-text:#b5d4f4;--accent-border:#378add;
+--warn-bg:#633806;--warn-text:#fac775;--warn-border:#ba7517;}
+}
+*{box-sizing:border-box}
+body{margin:0;padding:24px;background:var(--bg);color:var(--text);
+font:400 14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+.wrap{max-width:920px;margin:0 auto}
+h1{font-size:20px;font-weight:500;margin:0 0 4px}
+.sub{color:var(--text-2);font-size:13px;margin:0 0 20px}
+.bar{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+button{font:inherit;font-size:13px;padding:6px 14px;border:1px solid var(--border-strong);
+background:var(--surface);color:var(--text);border-radius:var(--radius);cursor:pointer}
+button:hover{background:var(--surface-alt)}
+.shell{display:flex;border:1px solid var(--border);border-radius:10px;overflow:hidden;
+background:var(--surface);min-height:440px}
+.nav{width:150px;flex:none;border-right:1px solid var(--border);padding:10px 0;background:var(--surface-alt)}
+.nav div{display:flex;align-items:center;gap:8px;padding:9px 12px;margin:0 6px;border-radius:var(--radius);
+cursor:pointer;font-size:13px;color:var(--text-2)}
+.nav div:hover{background:var(--surface)}
+.nav div.on{background:var(--accent-bg);color:var(--accent-text)}
+.dot{margin-left:auto;width:6px;height:6px;border-radius:50%;background:currentColor}
+.body{flex:1;min-width:0;display:flex;flex-direction:column}
+.crumb{padding:11px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-2)}
+.tag{font-size:11px;padding:2px 9px;border-radius:var(--radius)}
+.cols{display:flex;flex:1;min-width:0}
+.main{flex:1;min-width:0;padding:14px;display:flex;flex-direction:column;gap:10px}
+.blk{border:1px solid var(--border);border-radius:var(--radius);display:flex;align-items:center;
+justify-content:center;font-size:12px;color:var(--text-2);background:var(--surface-alt);text-align:center;padding:0 10px}
+.blk.chg{border:2px solid var(--accent-border)}
+.insp{flex:none;border-left:1px solid var(--border);background:var(--surface-alt);transition:width .18s}
+.note{margin-top:14px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);
+border-radius:var(--radius);font-size:13px;color:var(--text-2);line-height:1.7}
+.legend{margin-top:16px;font-size:12px;color:var(--text-3);line-height:1.8}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Physical Agent · 信息架构重排原型</h1>
+<p class="sub">点侧栏切换页面；右上按钮对比提案栏常驻与按需展开。蓝框 = 该页的改动点。规格见 ui-redesign-spec.zh-CN.md</p>
+
+<div class="bar">
+<span style="font-size:13px;color:var(--text-2)">提案栏</span>
+<button id="pnl"></button>
+<span style="font-size:12px;color:var(--text-3);margin-left:auto">切到「设置」页最能看出常驻栏的挤压</span>
+</div>
+
+<div class="shell">
+<div class="nav" id="nav"></div>
+<div class="body">
+<div class="crumb"><span id="crumb"></span><span class="tag" id="tag"></span></div>
+<div class="cols">
+<div class="main" id="main"></div>
+<div class="insp" id="insp"></div>
+</div>
+</div>
+</div>
+
+<div class="note" id="note"></div>
+
+<div class="legend">
+蓝色粗框 = 本次改动涉及的组件 · 侧栏蓝点 = 全新入口<br>
+退役的 page key：world / safety / robots（内容已由 state / hardware 页覆盖，无能力丢失）
+</div>
+</div>
+
+<script>
+var P={
+chat:{n:"对话",c:"新增",t:"a",b:[["ChatPanel 对话流",1,190],["草稿卡片 → Add to Actions",1,52]],
+d:"主工作流终于有独立入口。原本埋在概览页中间列，和另外四个组件抢空间。组件从 overview 迁出，不新写。"},
+overview:{n:"概览",c:"瘦身",t:"w",b:[["StateOverviewPanel 系统状态",0,56],["AgentTaskGraphCard 任务图",0,92],["RobotsPanel 机器人",0,76]],
+d:"从五个组件砍到三个：移出 ActionBoard（动作页已有）、ChatPanel（独立成页）、ContextTabs（并入状态页）。目标一屏看完，不再是 2721px 长页。"},
+actions:{n:"动作",c:"不变",t:"m",b:[["ActionBoard 动作板（含折叠规则）",1,96],["ContextTabs 仅 feedback，不显示页签栏",1,130]],
+d:"页面组成不变，但两处行为要改：ActionBoard 按状态折叠（待审批时强制展开），ContextTabs 在此页隐藏页签栏只渲染 feedback。提案栏此页默认展开。"},
+state:{n:"状态",c:"合并",t:"a",b:[["页签：世界 · 反馈 · 安全 · 能力",1,40],["选中页签的内容面板",0,190]],
+d:"吸收原「世界」「安全」两个侧栏项。页签成为唯一切换方式，侧栏高亮与内容不再脱节——A1 导航冲突就此消除。"},
+hardware:{n:"硬件",c:"合并",t:"a",b:[["HardwarePanel 接入",0,88],["ConfigPanel 配置",0,64],["RobotsPanel 机器人",1,76]],
+d:"吸收原「机器人」侧栏项——本页已经渲染 RobotsPanel，两页语义邻近容易混淆。组件组成不变，只是少了一个重复入口。"},
+memory:{n:"记忆",c:"不变",t:"m",b:[["UploadPanel 上传",0,100],["MemorySearchPanel 检索",0,100]],d:"保持现状。"},
+events:{n:"事件",c:"不变",t:"m",b:[["EventsPanel 事件流",0,140],["RawDebug 原始调试",0,60]],d:"保持现状。"},
+settings:{n:"设置",c:"不变",t:"m",b:[["SettingsPanel 设置",0,180],["RawDebug 原始调试",0,52]],
+d:"组成不变。但这页最能体现提案栏常驻的代价——切换上方按钮看对比：常驻时主卡片被压窄，Windows 路径会在词中间断行。"}};
+var order=["chat","overview","actions","state","hardware","memory","events","settings"];
+var cur="chat", open=false;
+var TC={a:["var(--accent-bg)","var(--accent-text)"],w:["var(--warn-bg)","var(--warn-text)"],m:["var(--surface-alt)","var(--text-3)"]};
+
+function nav(){
+document.getElementById("nav").innerHTML=order.map(function(k){
+var p=P[k];
+return '<div data-k="'+k+'" class="'+(k===cur?"on":"")+'">'+p.n+(p.c==="新增"?'<span class="dot"></span>':"")+'</div>';
+}).join("");
+}
+function render(){
+var p=P[cur];
+document.getElementById("crumb").textContent="工作台 / "+p.n;
+var t=document.getElementById("tag"), c=TC[p.t];
+t.textContent=p.c; t.style.background=c[0]; t.style.color=c[1];
+document.getElementById("main").innerHTML=p.b.map(function(b){
+return '<div class="blk'+(b[1]?" chg":"")+'" style="height:'+b[2]+'px">'+b[0]+'</div>';}).join("");
+var i=document.getElementById("insp");
+if(open){
+i.style.width="200px"; i.style.padding="14px 12px";
+i.innerHTML='<div style="font-size:12px;color:var(--text-2);margin-bottom:10px">Task / Action Proposal</div>'+
+'<div style="border:1px solid var(--border);border-radius:6px;height:34px;margin-bottom:8px;background:var(--surface)"></div>'+
+'<div style="border:1px solid var(--border);border-radius:6px;height:34px;margin-bottom:8px;background:var(--surface)"></div>'+
+'<div style="border:1px solid var(--border);border-radius:6px;height:34px;margin-bottom:8px;background:var(--surface)"></div>'+
+'<div style="border:1px solid var(--accent-border);border-radius:6px;height:32px;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--accent-text)">Submit Task</div>';
+}else{
+i.style.width="38px"; i.style.padding="14px 6px";
+i.innerHTML='<div style="writing-mode:vertical-rl;font-size:12px;color:var(--text-3);text-align:center">提案</div>';
+}
+document.getElementById("note").textContent=p.d;
+document.getElementById("pnl").textContent=open?"常驻（现状）":"按需展开（目标）";
+}
+document.getElementById("nav").onclick=function(e){
+var d=e.target.closest("[data-k]"); if(!d)return; cur=d.dataset.k; nav(); render();};
+document.getElementById("pnl").onclick=function(){open=!open; render();};
+nav(); render();
+</script>
+</body>
+</html>

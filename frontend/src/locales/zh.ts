@@ -10,13 +10,12 @@ export const zh = {
     refresh: "刷新"
   },
   nav: {
+    chat: "对话",
     overview: "概览",
     actions: "动作",
-    world: "世界",
-    robots: "机器人",
+    state: "状态",
     hardware: "硬件",
     memory: "记忆",
-    safety: "安全",
     events: "事件",
     settings: "设置"
   },
@@ -71,6 +70,11 @@ export const zh = {
     source: "来源",
     review: "复核",
     noActions: "暂无{status}动作",
+    noPendingActions: "暂无待处理动作",
+    waitingApprovalOne: "{count} 条动作等待你审批",
+    waitingApprovalMany: "{count} 条动作等待你审批",
+    expandBoard: "展开动作板",
+    collapseBoard: "收起动作板",
     noParams: "无参数",
     approvalUnknown: "审批未知",
     approvalRequired: "需要执行审批",
@@ -168,6 +172,8 @@ export const zh = {
     success: "项目已初始化"
   },
   drawer: {
-    title: "任务 / 动作提案"
+    title: "任务 / 动作提案",
+    open: "展开提案栏",
+    collapse: "收起提案栏"
   }
 } as const;

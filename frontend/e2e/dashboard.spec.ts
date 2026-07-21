@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 const TOUR_STORAGE_KEY = "physical-agent-tour-dismissed";
 const LANGUAGE_STORAGE_KEY = "physical-agent-language";
 const THEME_STORAGE_KEY = "physical-agent-theme";
+const PROPOSAL_PAGES_STORAGE_KEY = "physical-agent-proposal-pages:v1";
+const ACTION_BOARD_COLLAPSED_STORAGE_KEY = "physical-agent-action-board-collapsed:v1";
 
 function collectConsoleErrors(page: Page, expected404Urls: string[] = []) {
   const consoleErrors: string[] = [];
@@ -28,6 +30,23 @@ function collectConsoleErrors(page: Page, expected404Urls: string[] = []) {
     consoleErrors.push(error.message);
   });
   return consoleErrors;
+}
+
+async function tourTargets(page: Page, testId: string): Promise<boolean> {
+  return page.evaluate((id) => {
+    const nav = document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+    const placeholder = document.querySelector<HTMLElement>(".ant-tour-target-placeholder");
+    if (!nav || !placeholder) {
+      return false;
+    }
+    const navBox = nav.getBoundingClientRect();
+    const targetBox = placeholder.getBoundingClientRect();
+    const centerDistance = Math.hypot(
+      navBox.left + navBox.width / 2 - (targetBox.left + targetBox.width / 2),
+      navBox.top + navBox.height / 2 - (targetBox.top + targetBox.height / 2),
+    );
+    return centerDistance < 24 && targetBox.width < 100;
+  }, testId);
 }
 
 async function expectHealthyShell(page: Page) {
@@ -96,8 +115,11 @@ test("desktop dashboard smoke still loads and core panels respond", async ({
   );
 
   const views = [
-    { key: "overview", label: "Overview", panel: "chat-panel" },
+    { key: "chat", label: "Chat", panel: "chat-panel" },
+    { key: "overview", label: "Overview", panel: "state-overview-panel" },
     { key: "actions", label: "Actions", panel: "action-board" },
+    { key: "state", label: "State", panel: "context-tabs" },
+    { key: "hardware", label: "Hardware", panel: "hardware-panel" },
     { key: "memory", label: "Memory", panel: "upload-panel" },
     { key: "events", label: "Events", panel: "events-panel" },
     { key: "settings", label: "Settings", panel: "settings-panel" },
@@ -122,7 +144,7 @@ test("desktop dashboard smoke still loads and core panels respond", async ({
     "SAFETY.md remains file source",
   );
 
-  await page.getByTestId("nav-overview").click();
+  await page.getByTestId("nav-chat").click();
   await page
     .getByPlaceholder("Message the agent")
     .fill("remember that c3.2 e2e smoke is safe");
@@ -157,6 +179,15 @@ test("mobile smoke opens proposal drawer and navigates secondary panels", async 
     page.getByRole("dialog", { name: "Task / Action Proposal" }),
   ).toBeHidden();
 
+  await page.getByTestId("nav-actions").click();
+  await expect(
+    page.getByRole("dialog", { name: "Task / Action Proposal" }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("dialog", { name: "Task / Action Proposal" }),
+  ).toBeHidden();
+
   for (const key of ["memory", "events", "settings"]) {
     await page.getByTestId(`nav-${key}`).click();
     await expect(page.getByTestId(`page-${key}`)).toBeVisible();
@@ -167,6 +198,231 @@ test("mobile smoke opens proposal drawer and navigates secondary panels", async 
   }
 
   expectNoConsoleErrors(consoleErrors);
+});
+
+test("C6 navigation and page composition retire duplicate page keys without losing content", async ({
+  page,
+}) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await mockReadyApiWithRobot(page, {
+    world: {
+      summary: "C6 world is visible",
+      state: {
+        objects: {
+          c6_block: { type: "block", status: "available" },
+        },
+      },
+      environment: {},
+    },
+    safety: {
+      rules: { require_known_robot: true },
+    },
+  });
+
+  await page.goto("/");
+  await expectHealthyShell(page);
+  await expect
+    .poll(() =>
+      page.locator('[data-testid^="nav-"]').evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute("data-testid")),
+      ),
+    )
+    .toEqual([
+      "nav-chat",
+      "nav-overview",
+      "nav-actions",
+      "nav-state",
+      "nav-hardware",
+      "nav-memory",
+      "nav-events",
+      "nav-settings",
+    ]);
+  await expect(page.getByTestId("nav-world")).toHaveCount(0);
+  await expect(page.getByTestId("nav-safety")).toHaveCount(0);
+  await expect(page.getByTestId("nav-robots")).toHaveCount(0);
+
+  await page.getByTestId("nav-chat").click();
+  await expect(page.getByTestId("page-chat")).toBeVisible();
+  await expect(page.getByTestId("chat-panel")).toBeVisible();
+  await expect(page.getByTestId("nav-chat").locator("xpath=ancestor::li")).toHaveClass(
+    /ant-menu-item-selected/,
+  );
+
+  await page.getByTestId("nav-overview").click();
+  await expect(page.getByTestId("state-overview-panel")).toBeVisible();
+  await expect(page.getByTestId("robots-panel")).toBeVisible();
+  await expect(page.getByTestId("chat-panel")).toHaveCount(0);
+  await expect(page.getByTestId("action-board")).toHaveCount(0);
+  await expect(page.getByTestId("context-tabs")).toHaveCount(0);
+
+  await page.getByTestId("nav-state").click();
+  const stateContext = page.getByTestId("context-tabs");
+  await expect(page.getByTestId("page-state")).toBeVisible();
+  await expect(stateContext.getByRole("tab")).toHaveCount(4);
+  await expect(stateContext.getByRole("tab", { name: /World/ })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(stateContext).toContainText("c6_block");
+  await stateContext.getByRole("tab", { name: /Safety/ }).click();
+  await expect(stateContext).toContainText("require_known_robot");
+  await expect(page.getByTestId("nav-state").locator("xpath=ancestor::li")).toHaveClass(
+    /ant-menu-item-selected/,
+  );
+
+  await page.getByTestId("nav-actions").click();
+  await expect(page.getByTestId("action-board")).toBeVisible();
+  await expect(page.getByTestId("context-tabs").getByRole("tab")).toHaveCount(0);
+  await expect(page.getByTestId("context-tabs")).toContainText("No feedback");
+
+  await page.getByTestId("nav-hardware").click();
+  await expect(page.getByTestId("robots-panel")).toContainText("arm_1");
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("C6 proposal panel mounts on demand and remembers each page", async ({ page }) => {
+  const consoleErrors = collectConsoleErrors(page);
+  await mockReadyApiWithRobot(page);
+
+  await page.goto("/");
+  await expect(page.getByTestId("page-overview")).toBeVisible();
+  await expect(page.getByTestId("proposal-panel")).toHaveCount(0);
+  for (const pageKey of ["chat", "state", "hardware", "memory", "events", "settings"]) {
+    await page.getByTestId(`nav-${pageKey}`).click();
+    await expect(page.getByTestId("proposal-panel")).toHaveCount(0);
+  }
+  await page.getByTestId("nav-overview").click();
+  const proposalToggle = page.getByTestId("proposal-panel-toggle");
+  await expect(proposalToggle).toHaveAccessibleName("Open proposal panel");
+  await proposalToggle.click();
+  await expect(page.getByTestId("proposal-panel")).toBeVisible();
+
+  await page.getByTestId("nav-actions").click();
+  await expect(page.getByTestId("proposal-panel")).toBeVisible();
+  await expect(proposalToggle).toHaveAccessibleName("Collapse proposal panel");
+  await proposalToggle.click();
+  await expect(page.getByTestId("proposal-panel")).toHaveCount(0);
+
+  await page.getByTestId("nav-state").click();
+  await expect(page.getByTestId("proposal-panel")).toHaveCount(0);
+  await page.getByTestId("nav-overview").click();
+  await expect(page.getByTestId("proposal-panel")).toBeVisible();
+  await page.getByTestId("nav-actions").click();
+  await expect(page.getByTestId("proposal-panel")).toHaveCount(0);
+
+  const stored = await page.evaluate((key) => localStorage.getItem(key), PROPOSAL_PAGES_STORAGE_KEY);
+  expect(JSON.parse(stored ?? "{}")).toEqual({ overview: true, actions: false });
+  expectNoConsoleErrors(consoleErrors);
+});
+
+test("C6 ActionBoard collapses an empty board to one informative line", async ({ page }) => {
+  await mockReadyApiWithRobot(page);
+  await page.goto("/");
+  await page.getByTestId("nav-actions").click();
+
+  const board = page.getByTestId("action-board");
+  await expect(board.getByTestId("action-board-summary")).toContainText("No pending actions");
+  await expect(board.getByTestId("action-board-summary").locator(".ant-tag")).toHaveCount(0);
+  await expect(board.getByTestId("action-board-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await expect(board.getByTestId("action-board-body")).toHaveCount(0);
+  await board.getByTestId("action-board-toggle").click();
+  await expect(board.getByTestId("action-board-body")).toBeVisible();
+  await expect
+    .poll(() => page.evaluate((key) => localStorage.getItem(key), ACTION_BOARD_COLLAPSED_STORAGE_KEY))
+    .toBe("false");
+  await page.reload();
+  await page.getByTestId("nav-actions").click();
+  await expect(page.getByTestId("action-board-body")).toBeVisible();
+});
+
+test("C6 ActionBoard keeps counts visible when ordinary pending actions are collapsed", async ({
+  page,
+}) => {
+  await mockReadyApiWithRobot(page, {
+    actions: {
+      pending: [
+        {
+          id: "act-no-approval",
+          robot: "arm_1",
+          capability: "observe",
+          params: {},
+          metadata: { approval: { required: false, status: "not_required" } },
+        },
+      ],
+      in_progress: [],
+      completed: [
+        {
+          id: "act-completed",
+          robot: "arm_1",
+          capability: "observe",
+          params: {},
+        },
+      ],
+      cancelled: [],
+    },
+  });
+  await page.goto("/");
+  await page.getByTestId("nav-actions").click();
+
+  const board = page.getByTestId("action-board");
+  await expect(board.getByTestId("action-board-summary")).toContainText("Pending 1");
+  await expect(board.getByTestId("action-board-summary")).toContainText("Completed 1");
+  await expect(board.getByTestId("action-board-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await expect(board.getByTestId("action-board-body")).toHaveCount(0);
+});
+
+test("C6 ActionBoard forces approval-required pending actions open and cannot collapse", async ({
+  page,
+}) => {
+  await page.addInitScript((key) => localStorage.setItem(key, "true"), ACTION_BOARD_COLLAPSED_STORAGE_KEY);
+  await mockReadyApiWithRobot(page, {
+    actions: {
+      pending: [
+        {
+          id: "act-awaiting-human",
+          robot: "arm_1",
+          capability: "observe",
+          params: {},
+          metadata: { approval: { required: true, status: "pending" } },
+        },
+        {
+          id: "act-approved-but-still-pending",
+          robot: "arm_1",
+          capability: "observe",
+          params: {},
+          metadata: { approval: { required: true, status: "approved" } },
+        },
+      ],
+      in_progress: [],
+      completed: [],
+      cancelled: [],
+    },
+  });
+  await page.goto("/");
+  await page.getByTestId("nav-actions").click();
+
+  const board = page.getByTestId("action-board");
+  await expect(board).toHaveClass(/action-board-approval-required/);
+  await expect(board.getByTestId("action-board-summary")).toContainText(
+    "2 actions waiting for your approval",
+  );
+  await expect(board.getByTestId("action-board-toggle")).toHaveCount(0);
+  await expect(board.getByTestId("action-board-body")).toBeVisible();
+  await expect(board.getByRole("button", { name: "Approve execution" })).toBeVisible();
+  await expect(board.getByRole("button", { name: "Reject" }).first()).toBeVisible();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByTestId("open-proposal-drawer")).toBeDisabled();
+  await expect(page.getByRole("dialog", { name: "Task / Action Proposal" })).toHaveCount(0);
+  await expect(board.getByTestId("action-board-summary")).toBeVisible();
+  await expect(board.getByRole("button", { name: "Approve execution" })).toBeVisible();
+  await expect(board.getByRole("button", { name: "Reject" }).first()).toBeVisible();
 });
 
 test("browser upload of a markdown file succeeds and updates memory state", async ({
@@ -262,6 +518,7 @@ test("proposal params validation stays visible in the form", async ({
   await mockReadyApiWithRobot(page);
 
   await page.goto("/");
+  await page.getByTestId("proposal-panel-toggle").click();
   await expect(page.getByTestId("proposal-panel")).toBeVisible();
   await page.getByTestId("proposal-robot-select").click();
   await page
@@ -396,13 +653,9 @@ test("F2 readable context shows feedback world and capabilities without raw debu
 
   await page.goto("/");
   await expectHealthyShell(page);
+  await page.getByTestId("nav-actions").click();
   await expect(page.getByTestId("action-board")).toContainText("Params: object_id=red_block");
   await expect(page.getByTestId("action-board").locator(".raw-json-collapse")).toHaveCount(0);
-  await expect(page.getByTestId("context-tabs")).toContainText("red_block");
-  await expect(page.getByTestId("context-tabs")).toContainText("x=0.2");
-  await expect(page.getByTestId("context-tabs")).toContainText("workspace");
-
-  await page.getByRole("tab", { name: /Feedback/ }).click();
   await expect(page.getByTestId("context-tabs")).toContainText(
     "SafetyGate rejected the action",
   );
@@ -417,6 +670,10 @@ test("F2 readable context shows feedback world and capabilities without raw debu
   await page.getByRole("button", { name: /action act_pick_1/ }).first().click();
   await expect(page.getByTestId("page-actions")).toBeVisible();
 
+  await page.getByTestId("nav-state").click();
+  await expect(page.getByTestId("context-tabs")).toContainText("red_block");
+  await expect(page.getByTestId("context-tabs")).toContainText("x=0.2");
+  await expect(page.getByTestId("context-tabs")).toContainText("workspace");
   await page.getByRole("tab", { name: /Capabilities/ }).click();
   await expect(page.getByTestId("context-tabs")).toContainText("pick");
   await expect(page.getByTestId("context-tabs")).toContainText("Params: object_id*: string");
@@ -679,6 +936,12 @@ test("tour opens on first visit closes and can be reopened from settings", async
 
   await page.goto("/");
   await expect(page.getByText("Set up first")).toBeVisible();
+  await page.getByRole("button", { name: "Next" }).click();
+  await expect(page.getByText("Approve next")).toBeVisible();
+  expect(await tourTargets(page, "nav-actions")).toBe(true);
+  await page.getByRole("button", { name: "Next" }).click();
+  await expect(page.getByText("Observe feedback")).toBeVisible();
+  expect(await tourTargets(page, "nav-chat")).toBe(true);
   await page.getByRole("button", { name: "Close" }).click();
   await expect(page.evaluate(() => localStorage.getItem("physical-agent-tour-dismissed"))).resolves.toBe("1");
 
@@ -734,6 +997,7 @@ test("chat panel streams text incrementally and can stop", async ({ page }) => {
   );
 
   await page.goto("/");
+  await page.getByTestId("nav-chat").click();
   await page.getByPlaceholder("Message the agent").fill("stream a greeting");
   await page.getByPlaceholder("Message the agent").press("Enter");
   await expect(page.getByTestId("stop-chat-stream")).toBeEnabled();
@@ -812,6 +1076,7 @@ test("chat reasoning summary is a collapsed non-decision disclosure", async ({ p
   );
 
   await page.goto("/");
+  await page.getByTestId("nav-chat").click();
   await page.getByPlaceholder("给 agent 发消息").fill("解释你的结论");
   await page.getByPlaceholder("给 agent 发消息").press("Enter");
   const liveDisclosure = page.getByTestId("reasoning-summary");
@@ -859,6 +1124,7 @@ test("chat stop aborts the active stream and leaves a visible status", async ({
   );
 
   await page.goto("/");
+  await page.getByTestId("nav-chat").click();
   await page.getByPlaceholder("Message the agent").fill("stream slowly");
   await page.getByPlaceholder("Message the agent").press("Enter");
   await expect(page.getByTestId("chat-panel")).toContainText("Partial");
@@ -875,6 +1141,7 @@ test("chat stream unavailable falls back to regular chat", async ({ page }) => {
   await installUnavailableChatStream(page);
 
   await page.goto("/");
+  await page.getByTestId("nav-chat").click();
   await page.getByPlaceholder("Message the agent").fill("fallback please");
   await page.getByPlaceholder("Message the agent").press("Enter");
   await expect(page.getByTestId("chat-panel")).toContainText(
@@ -1184,7 +1451,7 @@ test("config missing state renders a clear nonblank dashboard", async ({
   await expect(page.getByTestId("sse-status")).toContainText(
     "SSE disconnected",
   );
-  await expect(page.getByTestId("action-board")).toBeVisible();
+  await expect(page.getByTestId("state-overview-panel")).toBeVisible();
   expectNoConsoleErrors(consoleErrors);
 });
 
@@ -1274,6 +1541,7 @@ test("real streaming AgentOutput and ChatPlan can be persisted to pending Action
   const consoleErrors = collectConsoleErrors(page);
   publishE2eCapabilities();
   await page.goto("/");
+  await page.getByTestId("nav-chat").click();
   const streamResponsePromise = page.waitForResponse(
     (response) =>
       response.url().includes("/api/chat/stream") &&
@@ -1324,6 +1592,8 @@ test("real streaming AgentOutput and ChatPlan can be persisted to pending Action
   await expect(cards).toHaveCount(1);
   await expect(cards).toContainText("arm_1.observe");
   await page.getByTestId("add-draft-to-actions").click();
+  await page.getByTestId("nav-actions").click();
+  await page.getByTestId("action-board-toggle").click();
   await expect(page.getByTestId("action-board")).toContainText(actionId);
   await expect(page.getByTestId("action-board")).toContainText("observe");
   await expect
@@ -1452,6 +1722,7 @@ test("streaming fence-like text stays inert until structured AgentOutput arrives
   );
 
   await page.goto("/");
+  await page.getByTestId("nav-chat").click();
   await page.getByPlaceholder("Message the agent").fill("observe incrementally");
   await page.getByPlaceholder("Message the agent").press("Enter");
   await expect(page.getByTestId("chat-panel")).toContainText(replyPrefix);
@@ -1557,6 +1828,7 @@ test("historical action-draft fences remain text and only structured output is a
   });
 
   await page.goto("/");
+  await page.getByTestId("nav-chat").click();
   const cards = page.getByTestId("draft-action-card");
   await expect(cards).toHaveCount(2);
   await expect(cards.nth(0)).toContainText("arm_1.observe");
@@ -1570,6 +1842,8 @@ test("historical action-draft fences remain text and only structured output is a
   await expect(page.getByTestId("chat-panel")).toContainText(fenceConflict.id);
 
   await cards.nth(0).getByTestId("add-draft-to-actions").click();
+  await page.getByTestId("nav-actions").click();
+  await page.getByTestId("action-board-toggle").click();
   await expect(page.getByTestId("action-board")).toContainText(structuredOnly.id);
   await expect(page.getByTestId("action-board")).not.toContainText(fenceOnly.id);
   await expect(page.getByTestId("action-board")).not.toContainText(fenceConflict.id);
@@ -1627,7 +1901,7 @@ test("Robots reads YAML execution mode while no executor is running", async ({ p
 
   await page.goto("/");
   await expect(page.getByTestId("executor-status")).toContainText("not running");
-  await page.getByTestId("nav-robots").click();
+  await page.getByTestId("nav-hardware").click();
   await expect(page.getByTestId("robots-panel")).toContainText("yaml_arm");
   await expect(page.getByTestId("robots-panel")).toContainText("vendor_arm");
   await expect(page.getByTestId("robots-panel")).toContainText("hardware");

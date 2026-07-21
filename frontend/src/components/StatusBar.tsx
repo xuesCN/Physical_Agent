@@ -20,6 +20,7 @@ interface StatusBarProps {
   labels: Messages;
   onRefresh: () => void;
   onOpenInspector: () => void;
+  proposalDisabled?: boolean;
 }
 
 export function StatusBar({
@@ -31,7 +32,8 @@ export function StatusBar({
   activePageLabel,
   labels,
   onRefresh,
-  onOpenInspector
+  onOpenInspector,
+  proposalDisabled = false
 }: StatusBarProps) {
   const backend = state?.backend || health?.backend || "-";
   const ready = Boolean(state?.ready ?? health?.ready);
@@ -79,6 +81,7 @@ export function StatusBar({
           data-testid="open-proposal-drawer"
           icon={<FormOutlined />}
           size="small"
+          disabled={proposalDisabled}
           onClick={onOpenInspector}
         >
           {labels.app.propose}

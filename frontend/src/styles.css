@@ -16,6 +16,9 @@
   --pa-accent: #2563eb;
   --pa-accent-soft: #f8fbff;
   --pa-accent-border: #bdd3f8;
+  --pa-warning-bg: #fff7e6;
+  --pa-warning-border: #d48806;
+  --pa-warning-text: #874d00;
 }
 
 body[data-theme="dark"] {
@@ -31,6 +34,9 @@ body[data-theme="dark"] {
   --pa-accent: #60a5fa;
   --pa-accent-soft: #14253a;
   --pa-accent-border: #315a91;
+  --pa-warning-bg: #3b2a10;
+  --pa-warning-border: #d89614;
+  --pa-warning-text: #ffd591;
   color-scheme: dark;
 }
 
@@ -184,9 +190,16 @@ body {
 
 .workspace-frame {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
   gap: 12px;
   align-items: start;
+}
+
+.workspace-frame.proposal-expanded {
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
+
+.workspace-frame.proposal-collapsed {
+  grid-template-columns: minmax(0, 1fr) 38px;
 }
 
 .workspace-main,
@@ -287,6 +300,36 @@ body {
   max-height: calc(100vh - 82px);
   min-width: 0;
   overflow: auto;
+}
+
+.inspector-column-collapsed {
+  overflow: hidden;
+  border: 1px solid var(--pa-border);
+  border-radius: 6px;
+  background: var(--pa-panel-bg);
+}
+
+.proposal-panel-toggle.ant-btn {
+  width: 100%;
+  color: var(--pa-muted-text);
+}
+
+.inspector-column-expanded > .proposal-panel-toggle.ant-btn {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.inspector-column-collapsed > .proposal-panel-toggle.ant-btn {
+  min-height: 156px;
+  padding: 8px 4px;
+}
+
+.proposal-rail-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  writing-mode: vertical-rl;
 }
 
 .panel {
@@ -526,6 +569,29 @@ body {
   gap: 8px;
 }
 
+.action-board-body {
+  display: grid;
+  gap: 10px;
+}
+
+.action-board-approval-required {
+  border-color: var(--pa-warning-border);
+}
+
+.action-board-approval-required .ant-card-head {
+  background: var(--pa-warning-bg);
+  border-bottom-color: var(--pa-warning-border);
+}
+
+.action-board-warning-icon,
+.action-board-warning-copy.ant-typography {
+  color: var(--pa-warning-text);
+}
+
+.context-tabs-single {
+  padding-top: 12px;
+}
+
 .reasoning-summary {
   max-width: 560px;
   padding: 8px 10px;
@@ -676,7 +742,7 @@ body {
 }
 
 @media (max-width: 1360px) {
-  .workspace-frame {
+  .workspace-frame.proposal-expanded {
     grid-template-columns: minmax(0, 1fr) 340px;
   }
 }

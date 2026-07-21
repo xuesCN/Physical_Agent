@@ -61,6 +61,7 @@
 | T4 | MOCE TUI 品牌、单一 Static transcript、轻量 finalized text 与宽度/物理 stdout 验收 | `7a968d9`、`69615dd`、`ed7cc4a`、`4fb0f57`、`e4ea0d4`、`c9981f0`、`83d9efe`、`88f7b5d`；review follow-up `a3d1d22`、`d25c80e`、`7e391b3`、`e9f886f`、`1d758f5`；test/CI follow-up `a8deeac`、`647ce53`；docs closure `8e30a42`；`038c1c6` runs `29629559330`/`29629560483` 与 `7d380f9` runs `29630023334`/`29630024721` 均仅 Ink TUI 失败，已执行的其余 jobs 成功；Push 条件型 full/Playwright skipped；implementation/docs closure `9c50067` 的 Push run `29630361521`、PR run `29630363135` 均 completed success，headSha 均为 `9c50067964e5ea184803e83526121388078862f9` |
 | T4.1 | 对话式 transcript、canonical terminal action activity 与终端宽度修复 | width/shared row `f81b134`；action activity `216a0b9`；owned action snapshot `8139d24`；clone-failure isolation `c2f8c7c`；App integration/read-only notice `e0215cb`。controller fresh gate：TUI typecheck/build exit 0、full `108/108`、activity/render/scenario `70/70`；Python safety `27/27`、full `463 passed`（仅 1 条已知 Starlette `TestClient` deprecation warning）；diff check 与禁止 import 扫描 clean。逐任务终审和整体 broad review 均 Critical=0、Important=0、Minor=0，broad verdict Ready to merge=Yes。implementation/docs exact head `357a4898fc19704179e15c1614f49e49f794263f`：Push run `29695566978`、draft-PR run `29695568726` 均 attempt 1 completed success。 |
 | T4.2 | finalized assistant 块级 Markdown、嵌套列表/code 悬挂缩进与 block-local fallback | parser `3b17ec6`；renderer `7c0a239`；physical width/App `25f20c4`；review repairs `499487c`、`8d578be`、`fe0b477`；final-review shortcut/image-reference repair `f1ed6c7`。`f1ed6c7` exact-commit：TUI parser+renderer `60/60`、full `134/134`、typecheck/build exit 0；Python full `463 passed, 1 warning`；controller fresh docs+safety `24/24`、safety `27/27`；boundary/package/diff clean。最终 re-review Critical=0、Important=0、Minor=1（接受非阻塞 Terminal smoke omission）。implementation/docs exact head `6631f35b22eba6c6e57394c07fec3a26254aa686`：Push `29728361574`、draft-PR `29728365131` 均 attempt 1 completed success。旧 `d72e187`/`a89be06` CI 当时有效但已被本修复 supersede。 |
+| C6 | Dashboard 信息架构重排：8 项导航、ContextTabs 唯一归属、按页 Proposal 与审批感知 ActionBoard | 本轮提交；frontend build 通过；真实 Chromium `33/33`；Python `469 passed`；Safety `32 passed`；TUI `138/138` + typecheck/build；clean-wheel 通过；最终复审 Critical/Important/Minor=0 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -459,6 +460,14 @@ final whole-branch review 在 evidence-only head `a89be0658a05f03ae20a9e2b707f69
 
 先前 `d72e187` 的 Push/PR `29725427128`/`29725429981` 与 `a89be06` 的 Push/PR `29725619311`/`29725622285` 在各自 exact head 上均成功，历史事实不撤销；但 `f1ed6c7` 改变最终产品树，所以这些 run 已 supersede，不能作为新 final head closure 证据。SPEC 因此曾退回 🟡。包含本修复与本地 living-doc evidence 的 implementation/docs exact head `6631f35b22eba6c6e57394c07fec3a26254aa686` 已由 Push run `29728361574` 与 draft-PR run `29728365131` 在 attempt 1 completed success：Push 的 Ink TUI、frontend+wheel、Python safety 成功，PR-only jobs skipped；draft-PR 的 Ink TUI、frontend+wheel、Python 3.12 full、Python safety、Playwright 成功，generic matrix skipped。安全/冻结边界、API、SQLite、watch、driver、SafetyGate、SAFETY.md、审批和 package dependency 均未改变。
 
+### C6：Dashboard 信息架构重排
+
+本轮把 Dashboard 的内容归属收敛为 8 个内部 page key：`chat` 独立承载原 Overview 中的 ChatPanel；`overview` 只保留 StateOverviewPanel 与 RobotsPanel，其中任务图已由 StateOverviewPanel 内部组合；`state` 接管原 `world/safety` 并成为四页签 ContextTabs 的唯一入口；`hardware` 继续组合 HardwarePanel、ConfigPanel 与 RobotsPanel，因此可直接退役 `robots`。Actions 页保留 ActionBoard，但 ContextTabs 通过 `only="feedback"` 只渲染 feedback，消除了侧栏高亮与内容页签互相矛盾的双导航。
+
+ProposalPanel 沿用既有桌面侧栏/窄屏 Drawer 两种容器，以版本化 localStorage 按 `PAGE_KEYS` 白名单保存每页偏好：Actions 无偏好时默认展开，其他页面默认收起；收起时组件不挂载，聊天 streaming 不再带动常驻 Proposal 子树更新。ActionBoard 的折叠偏好同样是展示态：空板只留单行灰色提示，普通 pending 留计数并折叠；只要 pending 中存在 `metadata.approval.required`，就忽略用户偏好、强制显示 warning 与审批按钮，并移除折叠入口。最终 review 补强了两个安全/可用性组合：Tour 锚点改为始终存在的导航项；窄屏 Actions 有待审批时，审批信号优先抑制 Proposal Drawer 并禁用打开按钮，待状态解除后恢复原按页偏好。
+
+验收采用真实行为而非只看 DOM 宽度：C6 五条专项锁定 8 项顺序、旧 key 负断言、新归属正断言、所有非 Actions 页默认不挂载 Proposal、按页持久化，以及 ActionBoard 三态；既有 reasoning summary、chat stream、proposal、robot 与 AgentOutput 用例按新导航迁移。最终 frontend `tsc -b && vite build` 通过（3309 modules），真实 Chromium `33/33`，Python full `469 passed, 1 warning`，Safety smoke `32 passed`，TUI typecheck/build 与 `138/138`，clean-wheel smoke 通过，代码复审 Critical/Important/Minor 均为 0。没有修改 Python、API/SSE、SQLite、ChatPlan、TUI view 协议、watch、driver、SafetyGate 或 SAFETY.md。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -550,6 +559,7 @@ final whole-branch review 在 evidence-only head `a89be0658a05f03ae20a9e2b707f69
 86. **shortcut reference 判定需要 document-wide label context，但 fence 仍是 presentation island**（T4.2 final review）：采用归一化的单行 definition label 集合，让 matching shortcut/image shortcut 整块 literal；收集阶段复用 scanner 自身 fence consumption，避免第二套 grammar 和 code 内容泄漏到文档结构。放弃 destination 解析与完整 CommonMark label 语义，只修 content-preservation 边界。
 87. **typed `thought` 是 chat UI 可观测性，不是 VNext-4 账本重启**（A1.3b）：只在既有 provider stream→ChatRuntime→chat SSE 链路增加 message/thought 区分，放弃 Run/Turn/Event、registry/read model 与新持久化 schema；VNext-4 其余范围继续冻结，仍须满足可复现需求 + 显式 SPEC 决策才可重启。
 88. **provider reasoning summary 永远是不可信、只读的展示 metadata**（A1.3b）：只保存 completed turn 的摘要并从后续 LLM context 过滤；不得进入 PlanCompiler、Action Board、feedback、Gate 或审批依据，abort 的 partial summary 不落盘。模型是否给出摘要不影响 canonical reply/AgentOutput。
+89. **Dashboard page key 只保留唯一内容归属，不保留隐藏兼容别名**（C6）：直接退役 `world/safety/robots`，由 `state/hardware` 接管，并用新页正向覆盖与旧 key 负断言证明能力未丢失；放弃 alias/redirect，因为这些 key 只是无 URL 路由的前端内部状态，并非 API/TUI 契约，保留它们只会延续双导航真源。历史 Proposal localStorage 也只按当前 `PAGE_KEYS` 白名单读取，旧 key 自然失效。
 
 ## 4. 经验教训（流程侧）
 
@@ -589,5 +599,7 @@ final whole-branch review 在 evidence-only head `a89be0658a05f03ae20a9e2b707f69
 - **TUI 测试先区分模拟 TTY 与 Ink CI 输出策略**（T4 CI 的教训）：`CI=true + debug:false` 会让 Ink 抑制动态 frame，这不是 Windows/Linux 产品差异。测试 harness 应分别暴露 stdin consumption 与 post-Enter semantic completion；物理 stdout 契约只在显式非 CI test child 中运行，CI 专属输出另设独立用例。
 - **push 必须在独立 review 修复完成后发生**（T4.2 的教训）：`25f20c4` 在 review 前提前 push，后续 CI 即使成功也只能算被 supersede 的历史运行；closure 文档只允许引用 reviewed exact head，并必须逐 run 核对 `headSha`、attempt 与全部 applicable job conclusion。
 - **provider 正文与 reasoning summary 必须按各自 wire shape 独立提取**（A1.3b 的教训）：Responses output text 位于 `content[*].text`，reasoning summary 位于 reasoning item 的 `summary[*].text`；共用 extractor 会把显示语义和正文语义混在一起。streaming 也要保留同一分类直到 UI，terminal persistence 只在 completed 后写 summary，才能同时锁住非 reasoning 字节兼容与 abort 零残留。
+- **导航退役必须同时证明旧入口消失与能力在新入口可达**（C6 的教训）：只断言菜单从 9 变 8 不能证明无能力丢失；真实 Chromium 还要逐项锁住 world/safety/capabilities/robots 的新归属，并验证活动导航与可见内容一致。
+- **CSS 隐藏不等于性能收口，响应式默认值也必须服从安全信号优先级**（C6 的教训）：Proposal 收起验收必须断言组件不挂载，不能只看宽度；同时组合测试窄屏、Actions 默认展开和待审批状态，才能发现 Drawer 遮蔽审批入口的问题。安全 override 应只控制可见性、不抹掉用户偏好，条件解除后再恢复。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

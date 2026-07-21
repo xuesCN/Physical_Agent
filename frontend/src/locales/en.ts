@@ -7,13 +7,12 @@ export const en = {
     refresh: "Refresh"
   },
   nav: {
+    chat: "Chat",
     overview: "Overview",
     actions: "Actions",
-    world: "World",
-    robots: "Robots",
+    state: "State",
     hardware: "Hardware",
     memory: "Memory",
-    safety: "Safety",
     events: "Events",
     settings: "Settings"
   },
@@ -67,6 +66,11 @@ export const en = {
     source: "Source",
     review: "Review",
     noActions: "No {status} actions",
+    noPendingActions: "No pending actions",
+    waitingApprovalOne: "{count} action waiting for your approval",
+    waitingApprovalMany: "{count} actions waiting for your approval",
+    expandBoard: "Expand Action Board",
+    collapseBoard: "Collapse Action Board",
     noParams: "No params",
     approvalUnknown: "approval unknown",
     approvalRequired: "Needs execution approval",
@@ -162,6 +166,8 @@ export const en = {
     success: "Project initialized"
   },
   drawer: {
-    title: "Task / Action Proposal"
+    title: "Task / Action Proposal",
+    open: "Open proposal panel",
+    collapse: "Collapse proposal panel"
   }
 };

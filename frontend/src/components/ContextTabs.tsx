@@ -18,12 +18,14 @@ import { asRecord, formatObjectValue, isNonEmptyRecord, statusText } from "./rea
 interface ContextTabsProps {
   state: AgentState | null;
   defaultActiveKey?: "world" | "feedback" | "safety" | "capabilities";
+  only?: "feedback";
   onOpenAction?: (actionId: string) => void;
 }
 
 export function ContextTabs({
   state,
   defaultActiveKey = "world",
+  only,
   onOpenAction
 }: ContextTabsProps) {
   const labels = useMessages();
@@ -76,6 +78,23 @@ export function ContextTabs({
       children: <CapabilitiesGrid capabilities={state?.capabilities} />
     }
   ];
+
+  if (only === "feedback") {
+    return (
+      <div
+        className="panel context-tabs context-tabs-single"
+        data-testid="context-tabs"
+        data-context-only="feedback"
+      >
+        <FeedbackTimeline
+          feedback={state?.feedback}
+          actions={state?.actions}
+          chat={state?.chat}
+          onOpenAction={onOpenAction}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="panel context-tabs" data-testid="context-tabs">

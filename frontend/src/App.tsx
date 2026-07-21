@@ -649,7 +649,9 @@ function Dashboard({
                 {!visibleProposalExpanded && (
                   <span className="proposal-rail-label">
                     <FormOutlined />
-                    {labels.app.propose}
+                    <span className="proposal-rail-text" data-testid="proposal-rail-text">
+                      {labels.app.propose}
+                    </span>
                   </span>
                 )}
               </Button>

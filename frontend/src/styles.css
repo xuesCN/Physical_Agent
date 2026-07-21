@@ -321,15 +321,35 @@ body {
 }
 
 .inspector-column-collapsed > .proposal-panel-toggle.ant-btn {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
   min-height: 156px;
-  padding: 8px 4px;
+  height: auto;
+  padding: 12px 0;
+  line-height: 1;
+}
+
+.inspector-column-collapsed > .proposal-panel-toggle.ant-btn .ant-btn-icon {
+  display: flex;
+  margin-inline-end: 0;
 }
 
 .proposal-rail-label {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+
+.proposal-rail-text {
   writing-mode: vertical-rl;
+  text-orientation: upright;
+  letter-spacing: 2px;
+  line-height: 1;
 }
 
 .panel {
@@ -515,6 +535,35 @@ body {
   min-height: 310px;
   overflow: auto;
   padding: 2px 2px 12px;
+}
+
+@media (min-width: 821px) {
+  .workspace-main[data-testid="page-chat"] {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 82px);
+    min-height: 0;
+  }
+
+  .workspace-main[data-testid="page-chat"] > .chat-panel {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .workspace-main[data-testid="page-chat"] > .chat-panel > .ant-card-body {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .workspace-main[data-testid="page-chat"] .bubble-stage {
+    flex: 1 1 0;
+    height: auto;
+    min-height: 0;
+  }
 }
 
 .chat-sender {

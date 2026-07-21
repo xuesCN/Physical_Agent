@@ -315,6 +315,63 @@ test("C6 proposal panel mounts on demand and remembers each page", async ({ page
   expectNoConsoleErrors(consoleErrors);
 });
 
+test("C6 chat fills the desktop workspace and keeps the proposal rail centered", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.addInitScript(
+    ({ languageKey }) => localStorage.setItem(languageKey, "zh"),
+    { languageKey: LANGUAGE_STORAGE_KEY },
+  );
+  await mockReadyApiWithRobot(page);
+
+  await page.goto("/");
+  await page.getByTestId("nav-chat").click();
+
+  const chatPanel = page.getByTestId("chat-panel");
+  const proposalToggle = page.getByTestId("proposal-panel-toggle");
+  const proposalText = page.getByTestId("proposal-rail-text");
+  await expect(chatPanel).toBeVisible();
+  await expect(proposalText).toHaveText("提案");
+
+  const layout = await page.evaluate(() => {
+    const chat = document.querySelector<HTMLElement>('[data-testid="chat-panel"]');
+    const toggle = document.querySelector<HTMLElement>(
+      '[data-testid="proposal-panel-toggle"]',
+    );
+    const text = document.querySelector<HTMLElement>('[data-testid="proposal-rail-text"]');
+    if (!chat || !toggle || !text) {
+      throw new Error("chat layout targets are missing");
+    }
+    const chatBox = chat.getBoundingClientRect();
+    const toggleBox = toggle.getBoundingClientRect();
+    const textBox = text.getBoundingClientRect();
+    return {
+      chatHeight: chatBox.height,
+      chatBottomGap: window.innerHeight - chatBox.bottom,
+      railCenterDelta: Math.abs(
+        toggleBox.left + toggleBox.width / 2 - (textBox.left + textBox.width / 2),
+      ),
+      railTextIsVertical: textBox.height > textBox.width,
+      railTextInside:
+        textBox.top >= toggleBox.top &&
+        textBox.bottom <= toggleBox.bottom &&
+        textBox.left >= toggleBox.left &&
+        textBox.right <= toggleBox.right,
+    };
+  });
+
+  expect(layout.chatHeight).toBeGreaterThan(760);
+  expect(layout.chatBottomGap).toBeGreaterThanOrEqual(10);
+  expect(layout.chatBottomGap).toBeLessThanOrEqual(14);
+  expect(layout.railCenterDelta).toBeLessThanOrEqual(1);
+  expect(layout.railTextIsVertical).toBeTruthy();
+  expect(layout.railTextInside).toBeTruthy();
+
+  await proposalToggle.click();
+  await expect(page.getByTestId("proposal-panel")).toBeVisible();
+});
+
 test("C6 ActionBoard collapses an empty board to one informative line", async ({ page }) => {
   await mockReadyApiWithRobot(page);
   await page.goto("/");

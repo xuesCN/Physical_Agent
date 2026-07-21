@@ -62,6 +62,7 @@
 | T4.1 | 对话式 transcript、canonical terminal action activity 与终端宽度修复 | width/shared row `f81b134`；action activity `216a0b9`；owned action snapshot `8139d24`；clone-failure isolation `c2f8c7c`；App integration/read-only notice `e0215cb`。controller fresh gate：TUI typecheck/build exit 0、full `108/108`、activity/render/scenario `70/70`；Python safety `27/27`、full `463 passed`（仅 1 条已知 Starlette `TestClient` deprecation warning）；diff check 与禁止 import 扫描 clean。逐任务终审和整体 broad review 均 Critical=0、Important=0、Minor=0，broad verdict Ready to merge=Yes。implementation/docs exact head `357a4898fc19704179e15c1614f49e49f794263f`：Push run `29695566978`、draft-PR run `29695568726` 均 attempt 1 completed success。 |
 | T4.2 | finalized assistant 块级 Markdown、嵌套列表/code 悬挂缩进与 block-local fallback | parser `3b17ec6`；renderer `7c0a239`；physical width/App `25f20c4`；review repairs `499487c`、`8d578be`、`fe0b477`；final-review shortcut/image-reference repair `f1ed6c7`。`f1ed6c7` exact-commit：TUI parser+renderer `60/60`、full `134/134`、typecheck/build exit 0；Python full `463 passed, 1 warning`；controller fresh docs+safety `24/24`、safety `27/27`；boundary/package/diff clean。最终 re-review Critical=0、Important=0、Minor=1（接受非阻塞 Terminal smoke omission）。implementation/docs exact head `6631f35b22eba6c6e57394c07fec3a26254aa686`：Push `29728361574`、draft-PR `29728365131` 均 attempt 1 completed success。旧 `d72e187`/`a89be06` CI 当时有效但已被本修复 supersede。 |
 | C6 | Dashboard 信息架构重排：8 项导航、ContextTabs 唯一归属、按页 Proposal 与审批感知 ActionBoard | 本轮提交；frontend build 通过；真实 Chromium `33/33`；Python `469 passed`；Safety `32 passed`；TUI `138/138` + typecheck/build；clean-wheel 通过；最终复审 Critical/Important/Minor=0 |
+| C6-layout | 对话页撑满可用高度，收起态提案栏居中纵排 | 本轮提交；frontend build 通过；隔离后端的真实 Chromium `34/34`；Python `469 passed`；实机 1600×900 截图复核通过 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -468,6 +469,8 @@ ProposalPanel 沿用既有桌面侧栏/窄屏 Drawer 两种容器，以版本化
 
 验收采用真实行为而非只看 DOM 宽度：C6 五条专项锁定 8 项顺序、旧 key 负断言、新归属正断言、所有非 Actions 页默认不挂载 Proposal、按页持久化，以及 ActionBoard 三态；既有 reasoning summary、chat stream、proposal、robot 与 AgentOutput 用例按新导航迁移。最终 frontend `tsc -b && vite build` 通过（3309 modules），真实 Chromium `33/33`，Python full `469 passed, 1 warning`，Safety smoke `32 passed`，TUI typecheck/build 与 `138/138`，clean-wheel smoke 通过，代码复审 Critical/Important/Minor 均为 0。没有修改 Python、API/SSE、SQLite、ChatPlan、TUI view 协议、watch、driver、SafetyGate 或 SAFETY.md。
 
+后续布局收口把桌面对话页主区、Chat Card body 与消息区串成一条有界 flex 高度链：卡片占满 header 以下的可用视口，长消息仍只在 `.bubble-stage` 内滚动，输入区保持可见；该规则只在 `min-width: 821px` 生效，避免覆盖既有移动端高度策略。提案栏不再让 icon 与文字共同继承 `writing-mode`，而是把箭头、编辑图标和独立的纵排文字按 column 居中。新增 Chromium 几何用例在 1600×900 下锁定卡片底部 12px 间距、文字纵向/居中/不越界及点击展开行为；隔离 `.tmp/e2e` 后端后 full `34/34`，frontend build 与 Python `469 passed` 通过。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -601,5 +604,6 @@ ProposalPanel 沿用既有桌面侧栏/窄屏 Drawer 两种容器，以版本化
 - **provider 正文与 reasoning summary 必须按各自 wire shape 独立提取**（A1.3b 的教训）：Responses output text 位于 `content[*].text`，reasoning summary 位于 reasoning item 的 `summary[*].text`；共用 extractor 会把显示语义和正文语义混在一起。streaming 也要保留同一分类直到 UI，terminal persistence 只在 completed 后写 summary，才能同时锁住非 reasoning 字节兼容与 abort 零残留。
 - **导航退役必须同时证明旧入口消失与能力在新入口可达**（C6 的教训）：只断言菜单从 9 变 8 不能证明无能力丢失；真实 Chromium 还要逐项锁住 world/safety/capabilities/robots 的新归属，并验证活动导航与可见内容一致。
 - **CSS 隐藏不等于性能收口，响应式默认值也必须服从安全信号优先级**（C6 的教训）：Proposal 收起验收必须断言组件不挂载，不能只看宽度；同时组合测试窄屏、Actions 默认展开和待审批状态，才能发现 Drawer 遮蔽审批入口的问题。安全 override 应只控制可见性、不抹掉用户偏好，条件解除后再恢复。
+- **真实 Chromium 回归不得复用正在展示的用户工作区后端**（C6 layout follow-up 的教训）：Playwright 的 `reuseExistingServer` 会接受同端口的任意健康实例；若本地正在运行真实 SQLite workspace，包含真实 API 的场景会污染 action/chat/upload 状态，待审批信号还会改变移动端预期。全量回归前必须先释放测试端口，让配置启动隔离的 `.tmp/e2e` 后端；展示服务只能在回归结束后恢复。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

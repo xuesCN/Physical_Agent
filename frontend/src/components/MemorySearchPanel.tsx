@@ -3,12 +3,14 @@ import { Button, Card, Empty, Input, InputNumber, List, Select, Space, Tag, Typo
 import { useState } from "react";
 import { searchMemory } from "../api";
 import type { MemoryChunk } from "../types";
+import { useMessages } from "../locales/context";
 
 interface MemorySearchPanelProps {
   onError: (error: Error) => void;
 }
 
 export function MemorySearchPanel({ onError }: MemorySearchPanelProps) {
+  const labels = useMessages();
   const [query, setQuery] = useState("");
   const [tags, setTags] = useState("");
   const [sourceType, setSourceType] = useState("");
@@ -39,7 +41,7 @@ export function MemorySearchPanel({ onError }: MemorySearchPanelProps) {
       title={
         <Space>
           <SearchOutlined />
-          <Typography.Text strong>Memory / Search</Typography.Text>
+          <Typography.Text strong>{labels.memorySearch.title}</Typography.Text>
         </Space>
       }
     >
@@ -101,7 +103,7 @@ export function MemorySearchPanel({ onError }: MemorySearchPanelProps) {
           )}
         />
       ) : (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No results" />
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={labels.memorySearch.noResults} />
       )}
     </Card>
   );

@@ -9,6 +9,7 @@ interface JsonSummaryLineProps {
   fallback?: string;
   icon?: ReactNode;
   className?: string;
+  collapsible?: boolean;
 }
 
 export function JsonSummaryLine({
@@ -17,9 +18,23 @@ export function JsonSummaryLine({
   text,
   fallback = "-",
   icon,
-  className
+  className,
+  collapsible = false
 }: JsonSummaryLineProps) {
   const summary = text ?? formatObjectValue(value, fallback);
+  if (collapsible) {
+    return (
+      <details className="json-summary-collapsible">
+        <summary className="json-summary-toggle">
+          {icon}
+          {label}:
+        </summary>
+        <Typography.Text className={className ?? "schema-summary json-summary-line"}>
+          {summary}
+        </Typography.Text>
+      </details>
+    );
+  }
   return (
     <Typography.Text className={className ?? "schema-summary json-summary-line"}>
       {icon}

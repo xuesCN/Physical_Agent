@@ -238,22 +238,22 @@ export function SettingsPanel({
       }
     >
       <Descriptions size="small" column={1} className="tight-descriptions">
-        <Descriptions.Item label="Backend">
+        <Descriptions.Item label={labels.settings.backend}>
           <Tag color={backendTagColor}>{activeBackend}</Tag>
         </Descriptions.Item>
-        <Descriptions.Item label="Workspace">
+        <Descriptions.Item label={labels.settings.workspace}>
           <Tag color={ready ? "green" : "gold"}>{ready ? "ready" : "not ready"}</Tag>
         </Descriptions.Item>
-        <Descriptions.Item label="Config">
+        <Descriptions.Item label={labels.settings.config}>
           {state?.config_path ?? health?.config_path ?? "-"}
         </Descriptions.Item>
-        <Descriptions.Item label="Workspace path">
+        <Descriptions.Item label={labels.settings.workspacePath}>
           {state?.workspace_path ?? health?.workspace_path ?? "-"}
         </Descriptions.Item>
-        <Descriptions.Item label="Message">
+        <Descriptions.Item label={labels.settings.message}>
           {state?.message ?? health?.message ?? "-"}
         </Descriptions.Item>
-        <Descriptions.Item label="Task">
+        <Descriptions.Item label={labels.settings.task}>
           {oneLine(state?.task?.body ?? state?.task?.task ?? state?.task, "-")}
         </Descriptions.Item>
       </Descriptions>
@@ -313,28 +313,28 @@ export function SettingsPanel({
           description={backendNotice.description}
         />
         <Descriptions size="small" column={1} className="tight-descriptions">
-          <Descriptions.Item label="State-check">
+          <Descriptions.Item label={labels.settings.stateCheck}>
             <Tag color={stateCheck?.ok ? "green" : "gold"}>{stateCheckStatus}</Tag>
           </Descriptions.Item>
-          <Descriptions.Item label="Workspace path">
+          <Descriptions.Item label={labels.settings.workspacePath}>
             {stateCheck?.workspace_path ?? state?.workspace_path ?? health?.workspace_path ?? "-"}
           </Descriptions.Item>
-          <Descriptions.Item label="Source of truth">
+          <Descriptions.Item label={labels.settings.sourceOfTruth}>
             {stateCheck?.source_of_truth ?? "-"}
           </Descriptions.Item>
-          <Descriptions.Item label="Payload">
+          <Descriptions.Item label={labels.settings.payload}>
             {stateCheck?.payload_format ?? "-"}
           </Descriptions.Item>
-          <Descriptions.Item label="Human view">
+          <Descriptions.Item label={labels.settings.humanView}>
             {stateCheck?.human_view ?? "export-audit"}
           </Descriptions.Item>
-          <Descriptions.Item label="Safety source">
+          <Descriptions.Item label={labels.settings.safetySource}>
             {stateCheck?.safety_source ?? "SAFETY.md"}
           </Descriptions.Item>
-          <Descriptions.Item label="SQLite schema">
+          <Descriptions.Item label={labels.settings.sqliteSchema}>
             {stateCheck?.sqlite_schema_complete == null ? "n/a" : stateCheck.sqlite_schema_complete ? "complete" : "incomplete"}
           </Descriptions.Item>
-          <Descriptions.Item label="Switching">
+          <Descriptions.Item label={labels.settings.switching}>
             {stateCheck?.switching_model ?? "Change config and restart; no GUI live backend switch."}
           </Descriptions.Item>
         </Descriptions>
@@ -385,17 +385,17 @@ export function SettingsPanel({
           initialValues={{ api_mode: "chat_completions" }}
           onFinish={handleSave}
         >
-          <Form.Item label="Base URL" name="base_url">
+          <Form.Item label={labels.settings.baseUrl} name="base_url">
             <Input placeholder="https://api.openai.com/v1" />
           </Form.Item>
-          <Form.Item label="API key" name="api_key">
+          <Form.Item label={labels.settings.apiKey} name="api_key">
             <Input.Password autoComplete="new-password" placeholder="Leave blank to keep existing key" />
           </Form.Item>
           <div className="two-col">
-            <Form.Item label="Model" name="model">
+            <Form.Item label={labels.settings.model} name="model">
               <Input placeholder="gpt-5.4" />
             </Form.Item>
-            <Form.Item label="API mode" name="api_mode">
+            <Form.Item label={labels.settings.apiMode} name="api_mode">
               <Select
                 options={[
                   { value: "chat_completions", label: "chat_completions" },

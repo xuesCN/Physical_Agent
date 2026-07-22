@@ -5,12 +5,14 @@ import type {
   AgentOutputOverview,
   AgentTaskOverview
 } from "../viewmodels/agentOutput";
+import { useMessages } from "../locales/context";
 
 interface AgentTaskGraphCardProps {
   output: AgentOutputOverview | null;
 }
 
 export function AgentTaskGraphCard({ output }: AgentTaskGraphCardProps) {
+  const labels = useMessages();
   return (
     <Card
       className="panel agent-task-graph-card"
@@ -18,7 +20,7 @@ export function AgentTaskGraphCard({ output }: AgentTaskGraphCardProps) {
       title={
         <Space>
           <SafetyCertificateOutlined />
-          <Typography.Text strong>Agent output tasks</Typography.Text>
+          <Typography.Text strong>{labels.taskGraph.title}</Typography.Text>
         </Space>
       }
       extra={
@@ -30,17 +32,17 @@ export function AgentTaskGraphCard({ output }: AgentTaskGraphCardProps) {
         ) : null
       }
     >
-      {output ? <AgentOutputContent output={output} /> : <EmptyAgentOutput />}
+      {output ? <AgentOutputContent output={output} labels={labels} /> : <EmptyAgentOutput labels={labels} />}
     </Card>
   );
 }
 
-function AgentOutputContent({ output }: { output: AgentOutputOverview }) {
+function AgentOutputContent({ output, labels }: { output: AgentOutputOverview; labels: ReturnType<typeof useMessages> }) {
   return (
     <Space direction="vertical" size={10} className="full-width">
       <div className="agent-output-summary">
         <Space size={6} wrap>
-          <Typography.Text type="secondary">Decision</Typography.Text>
+          <Typography.Text type="secondary">{labels.taskGraph.decision}</Typography.Text>
           <Tag color="blue">{humanize(output.decision)}</Tag>
           {output.proposalId ? (
             <Typography.Text code>{output.proposalId}</Typography.Text>
@@ -66,17 +68,17 @@ function AgentOutputContent({ output }: { output: AgentOutputOverview }) {
           scroll={{ x: 1100 }}
         />
       ) : (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No compiled tasks" />
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={labels.taskGraph.noCompiledTasks} />
       )}
     </Space>
   );
 }
 
-function EmptyAgentOutput() {
+function EmptyAgentOutput({ labels }: { labels: ReturnType<typeof useMessages> }) {
   return (
     <Empty
       image={Empty.PRESENTED_IMAGE_SIMPLE}
-      description="No compiled AgentOutput"
+      description={labels.taskGraph.noCompiledOutput}
     />
   );
 }

@@ -64,6 +64,7 @@
 | C6 | Dashboard 信息架构重排：8 项导航、ContextTabs 唯一归属、按页 Proposal 与审批感知 ActionBoard | 本轮提交；frontend build 通过；真实 Chromium `33/33`；Python `469 passed`；Safety `32 passed`；TUI `138/138` + typecheck/build；clean-wheel 通过；最终复审 Critical/Important/Minor=0 |
 | C6-layout | 对话页撑满可用高度，收起态提案栏居中纵排 | 本轮提交；frontend build 通过；隔离后端的真实 Chromium `34/34`；Python `469 passed`；实机 1600×900 截图复核通过 |
 | C6.1 | Dashboard 纯前端 `?page=` URL 状态、直达/刷新/history 同步 | frontend build 通过（3310 modules）；隔离后端真实 Chromium `37/37`；Python `469 passed`；Safety `32 passed`；TUI `138/138` + typecheck/build；clean-wheel 与 in-app Browser 复核通过；无 FastAPI/依赖改动 |
+| C5 | Dashboard 可读性与 i18n 收口：9 组件接 `useMessages`、Running 中英混排、Raw 折叠、焦点样式 | 本轮由 Claude 接手实现、用户本机跑门禁；`tsc -b` 与 `vite build`（3310 modules）通过；真实 Chromium `37 passed`；未改后端 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -477,6 +478,14 @@ ProposalPanel 沿用既有桌面侧栏/窄屏 Drawer 两种容器，以版本化
 新增 `frontend/src/navigation.ts`，把 8 个 `PAGE_KEYS`、`PageKey`、query 解析/写入与 `popstate` 同步收口为 `usePageNavigation()`。有效 `?page=` 直接选页；缺省 `/` 保持 overview 且不主动改写；非法或已退役 key 以 `replaceState` 归一到 `?page=overview`。Sidebar 与 action 内跳转统一走 `navigatePage()`，写入时保留其他 query/hash，同页点击不制造重复 history。Hook 只同步页面选择，Dashboard 外壳、SSE、snapshot、chat stream 与按页 Proposal 偏好均不 remount。
 
 没有引入 React Router 或状态管理依赖，也没有增加 clean-path/404/FastAPI fallback：当前产品是根路径托管的本机工具，query 足以表达 8 个稳定页面，避免扩大后端 surface。三条新增 Chromium 用例锁定 direct+reload、query preservation+Back/Forward、invalid/retired normalization；全量真实 Chromium `37/37`。frontend build（3310 modules）、Python full `469 passed, 1 warning`、Safety smoke `32 passed, 1 warning`、TUI typecheck/build 与 `138/138`、clean-wheel 均通过；in-app Browser 另行复核 URL 与可见内容一致，console 0 warning/error。没有修改 FastAPI、API/SSE、SQLite、watch、driver、SafetyGate 或 SAFETY.md。
+
+### C5：Dashboard 可读性与 i18n 收口
+
+C6/C6.1 收口信息架构与 URL 状态后，仍有 9 个组件（ProposalPanel、StateOverviewPanel 及其局部子卡、CapabilityCard、WorldObjectsTable、AgentTaskGraphCard、FeedbackTimeline、EventsPanel、MemorySearchPanel、UploadPanel）完全没接 `useMessages`，中文模式下常驻提案栏与概览首屏整块显示英文；ActionBoard 状态段还残留 `Running` 硬编码，与同组 `labels.actions.*` 形成「待处理 / Running / 已完成」中英混排。本轮补齐：`en.ts` 为源、`zh.ts` 覆盖，新增 proposal/overview/capability/world/taskGraph/feedbackTimeline/events/memorySearch/upload 九组词条；组件经 `useMessages()` context hook 就地取值，不改任何调用点——这是 i18n 基础设施当初选 context 而非 prop 透传的红利。
+
+可读性三项：feedback 时间线的 Raw 元数据摘要改原生 `<details>` 默认折叠（`JsonSummaryLine` 新增 opt-in `collapsible`，仅 FeedbackTimeline 启用，Params/Constraints/Payload 保持内联）；历史反馈徽章降饱和，与动作板当前状态区分，避免「待处理 0」旁并列历史 pending 徽章被误读；补全局 `:focus-visible` 描边，此前全仓 `:focus` 为 0。空状态高度与表格列宽属视觉判断项，按 brief 保守处理（列宽本有显式值，未盲调）。
+
+一处 e2e 回归教训：折叠 Raw 后 `F2 readable context` 用例断言 `context-tabs` 含 `"Raw:"` 失败——折叠 summary 只渲染 `Raw` 无冒号。修法是保留折叠、在 summary 补回冒号，而非改测试，既过断言又不丢 F2「结构化信息可读」契约。分工为 Claude 直接编辑、用户本机跑门禁：`tsc -b` 与 `vite build`（3310 modules）通过，真实 Chromium `37 passed`；沙盒缺 Linux 原生 rollup 与 Chromium，故构建/E2E 全部由用户执行。未触碰 Python、API/SSE、watch、driver、SafetyGate 或 SAFETY.md。收尾同轮补齐 `SettingsPanel`（state 摘要 + state-backend 诊断 + LLM 表单标签）、`HardwarePanel`（生成结果字段与 model placeholder）、`RawDebug` 空态、`ChatPanel` 清空 aria 的残留硬编码，组件层 `label=`/`description=` 英文归零；技术诊断词（Source of truth、SQLite schema 等）给出可辨识中文而非直译。
 
 ## 3. 关键决策与偏离（跨阶段汇总）
 

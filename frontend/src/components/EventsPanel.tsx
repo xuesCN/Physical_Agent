@@ -4,12 +4,14 @@ import type { ApiEvent } from "../types";
 import { JsonSummaryLine } from "./JsonSummary";
 import { FeedbackStatusTag } from "./FeedbackStatusTag";
 import { asRecord, formatObjectValue, formatPrimitive, readableDate } from "./readableFormatters";
+import { useMessages } from "../locales/context";
 
 interface EventsPanelProps {
   events: ApiEvent[];
 }
 
 export function EventsPanel({ events }: EventsPanelProps) {
+  const labels = useMessages();
   return (
     <Card
       className="panel events-panel"
@@ -17,7 +19,7 @@ export function EventsPanel({ events }: EventsPanelProps) {
       title={
         <Space>
           <ThunderboltOutlined />
-          <Typography.Text strong>Events</Typography.Text>
+          <Typography.Text strong>{labels.events.title}</Typography.Text>
         </Space>
       }
     >
@@ -27,18 +29,18 @@ export function EventsPanel({ events }: EventsPanelProps) {
           dataSource={events}
           renderItem={(event) => (
             <List.Item className="event-row">
-              <ReadableApiEvent event={event} />
+              <ReadableApiEvent event={event} label={labels.events.payload} />
             </List.Item>
           )}
         />
       ) : (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No events" />
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={labels.events.noEvents} />
       )}
     </Card>
   );
 }
 
-function ReadableApiEvent({ event }: { event: ApiEvent }) {
+function ReadableApiEvent({ event, label }: { event: ApiEvent; label: string }) {
   const payload = asRecord(event.payload);
   const state = asRecord(payload.state);
   const latestFeedback = asRecord(asRecord(state.feedback).latest);
@@ -60,7 +62,7 @@ function ReadableApiEvent({ event }: { event: ApiEvent }) {
           <Tag>{`action ${formatObjectValue(latestFeedback.action_id)}`}</Tag>
         )}
       </Space>
-      <JsonSummaryLine label="Payload" value={event.payload} />
+      <JsonSummaryLine label={label} value={event.payload} />
     </Space>
   );
 }

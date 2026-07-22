@@ -4,6 +4,7 @@ import type { UploadProps } from "antd";
 import { useState } from "react";
 import { uploadBrowserFile } from "../api";
 import type { AgentState, UploadResponse } from "../types";
+import { useMessages } from "../locales/context";
 
 interface UploadPanelProps {
   onUploaded: (state: AgentState, response: UploadResponse) => void;
@@ -21,6 +22,7 @@ interface UploadFeedback {
 }
 
 export function UploadPanel({ onUploaded, onError }: UploadPanelProps) {
+  const labels = useMessages();
   const [tags, setTags] = useState("");
   const [importance, setImportance] = useState(0);
   const [feedback, setFeedback] = useState<UploadFeedback | null>(null);
@@ -75,7 +77,7 @@ export function UploadPanel({ onUploaded, onError }: UploadPanelProps) {
       title={
         <Space>
           <InboxOutlined />
-          <Typography.Text strong>Upload</Typography.Text>
+          <Typography.Text strong>{labels.upload.title}</Typography.Text>
         </Space>
       }
     >
@@ -97,7 +99,7 @@ export function UploadPanel({ onUploaded, onError }: UploadPanelProps) {
         <p className="ant-upload-drag-icon">
           <InboxOutlined />
         </p>
-        <p className="ant-upload-text">Drop text files here</p>
+        <p className="ant-upload-text">{labels.upload.drop}</p>
         <p className="ant-upload-hint">5MB max</p>
       </Upload.Dragger>
       {feedback && (

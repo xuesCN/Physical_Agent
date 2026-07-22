@@ -906,3 +906,37 @@ body {
     padding: 10px;
   }
 }
+
+/* C5: keyboard focus visibility (previously no :focus styles anywhere) */
+a:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible,
+.ant-btn:focus-visible,
+.ant-segmented-item-input:focus-visible + .ant-segmented-item-label,
+.nav-item:focus-visible,
+summary:focus-visible {
+  outline: 2px solid #378add;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* C5: history feedback badges are lower-weight than live Action Board status,
+   so they don't get misread as current pending work */
+.feedback-history-item .ant-tag {
+  opacity: 0.85;
+  font-weight: 400;
+}
+
+/* C5: raw metadata summary collapses by default; click to expand */
+.json-summary-collapsible {
+  font-size: 12px;
+}
+.json-summary-toggle {
+  cursor: pointer;
+  color: #8b8a84;
+  list-style: revert;
+  user-select: none;
+}
+.json-summary-collapsible[open] .json-summary-toggle {
+  margin-bottom: 4px;
+}

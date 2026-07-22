@@ -100,7 +100,7 @@ export function ChatPanel({
           onConfirm={() => void onReset()}
         >
           <Button
-            aria-label="Clear chat history"
+            aria-label={labels.chat.clearChatAria}
             data-testid="reset-chat-button"
             disabled={loading || messages.length === 0}
             icon={<DeleteOutlined />}

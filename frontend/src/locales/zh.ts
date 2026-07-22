@@ -54,12 +54,30 @@ export const zh = {
     plan: "计划",
     exportAudit: "导出审计视图",
     save: "保存",
-    testConnection: "测试连接"
+    testConnection: "测试连接",
+    backend: "后端",
+    workspace: "工作区",
+    config: "配置",
+    workspacePath: "工作区路径",
+    message: "消息",
+    task: "任务",
+    stateCheck: "状态检查",
+    sourceOfTruth: "事实来源",
+    payload: "载荷",
+    humanView: "人类视图",
+    safetySource: "安全来源",
+    sqliteSchema: "SQLite 架构",
+    switching: "切换",
+    baseUrl: "Base URL",
+    apiKey: "API 密钥",
+    model: "模型",
+    apiMode: "API 模式"
   },
   actions: {
     ...en.actions,
     title: "动作板",
     pending: "待处理",
+    running: "运行中",
     completed: "已完成",
     cancelled: "已取消",
     target: "目标",
@@ -100,7 +118,8 @@ export const zh = {
     rawDebug: "原始调试",
     noSafetyRules: "暂无安全规则",
     noRobots: "暂无机器人",
-    noRobotsConfigured: "暂无已配置机器人"
+    noRobotsConfigured: "暂无已配置机器人",
+    noRawDebug: "暂无原始调试字段"
   },
   tour: {
     setupTitle: "先配置",
@@ -119,6 +138,7 @@ export const zh = {
     clearTitle: "清空聊天历史？",
     clearDescription: "Actions、feedback、memory 和 uploads 会保持不变。",
     clearOk: "清空",
+    clearChatAria: "清空聊天历史",
     draft: "草案",
     task: "任务",
     action: "动作",
@@ -153,7 +173,12 @@ export const zh = {
     registerDescription: "向 physical-agent.yaml 追加 robots 条目。watch 重启后才会连接它；此处不会触碰硬件。",
     robotId: "Robot ID",
     driver: "Driver（名称或路径）",
-    addToConfig: "添加到配置"
+    addToConfig: "添加到配置",
+    outputPath: "输出路径",
+    detectedTransport: "检测到的传输",
+    robotKind: "机器人类型",
+    resultTitle: "标题",
+    modelPlaceholder: "留空则使用已配置模型"
   },
   config: {
     ...en.config,
@@ -175,5 +200,73 @@ export const zh = {
     title: "任务 / 动作提案",
     open: "展开提案栏",
     collapse: "收起提案栏"
+  },
+  proposal: {
+    ...en.proposal,
+    title: "任务 / 动作提案",
+    task: "任务",
+    submitTask: "提交任务",
+    robot: "机器人",
+    capability: "能力",
+    actionId: "动作 ID",
+    paramsJson: "参数 JSON",
+    reason: "原因",
+    dependsOn: "依赖于"
+  },
+  overview: {
+    ...en.overview,
+    systemStatus: "系统状态",
+    backend: "后端",
+    workspace: "工作区",
+    message: "消息",
+    robots: "机器人",
+    capabilities: "能力",
+    worldObjects: "世界对象",
+    workspaceBounds: "工作区边界",
+    noRobots: "暂无机器人",
+    noCapabilities: "暂无能力",
+    noWorldObjects: "暂无世界对象"
+  },
+  capability: {
+    ...en.capability,
+    params: "参数",
+    constraints: "约束",
+    raw: "原始",
+    noCapabilities: "暂无能力"
+  },
+  world: {
+    ...en.world,
+    environment: "环境",
+    robotsInWorld: "世界中的机器人",
+    artifacts: "工件",
+    raw: "原始"
+  },
+  taskGraph: {
+    ...en.taskGraph,
+    title: "Agent 输出任务",
+    decision: "决策",
+    noCompiledTasks: "暂无已编译任务",
+    noCompiledOutput: "暂无已编译 AgentOutput"
+  },
+  feedbackTimeline: {
+    ...en.feedbackTimeline,
+    noFeedback: "暂无反馈",
+    raw: "原始"
+  },
+  events: {
+    ...en.events,
+    title: "事件",
+    payload: "载荷",
+    noEvents: "暂无事件"
+  },
+  memorySearch: {
+    ...en.memorySearch,
+    title: "记忆 / 检索",
+    noResults: "暂无结果"
+  },
+  upload: {
+    ...en.upload,
+    title: "上传",
+    drop: "拖入文本文件"
   }
 } as const;

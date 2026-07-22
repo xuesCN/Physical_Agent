@@ -137,7 +137,7 @@ export function ActionBoard({
             disabled={approvalForcesOpen}
             options={[
               { label: `${labels.actions.pending} ${actions?.pending?.length ?? 0}`, value: "pending" },
-              { label: `Running ${actions?.in_progress?.length ?? 0}`, value: "in_progress" },
+              { label: `${labels.actions.running} ${actions?.in_progress?.length ?? 0}`, value: "in_progress" },
               { label: `${labels.actions.completed} ${actions?.completed?.length ?? 0}`, value: "completed" },
               { label: `${labels.actions.cancelled} ${actions?.cancelled?.length ?? 0}`, value: "cancelled" }
             ]}

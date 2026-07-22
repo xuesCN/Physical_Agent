@@ -50,11 +50,29 @@ export const en = {
     plan: "Plan",
     exportAudit: "Export audit view",
     save: "Save",
-    testConnection: "Test connection"
+    testConnection: "Test connection",
+    backend: "Backend",
+    workspace: "Workspace",
+    config: "Config",
+    workspacePath: "Workspace path",
+    message: "Message",
+    task: "Task",
+    stateCheck: "State-check",
+    sourceOfTruth: "Source of truth",
+    payload: "Payload",
+    humanView: "Human view",
+    safetySource: "Safety source",
+    sqliteSchema: "SQLite schema",
+    switching: "Switching",
+    baseUrl: "Base URL",
+    apiKey: "API key",
+    model: "Model",
+    apiMode: "API mode"
   },
   actions: {
     title: "Action Board",
     pending: "Pending",
+    running: "Running",
     completed: "Completed",
     cancelled: "Cancelled",
     id: "ID",
@@ -95,7 +113,8 @@ export const en = {
     rawDebug: "Raw Debug",
     noSafetyRules: "No safety rules",
     noRobots: "No robots",
-    noRobotsConfigured: "No robots configured"
+    noRobotsConfigured: "No robots configured",
+    noRawDebug: "No raw debug fields"
   },
   tour: {
     setupTitle: "Set up first",
@@ -113,6 +132,7 @@ export const en = {
     clearTitle: "Clear chat history?",
     clearDescription: "Actions, feedback, memory, and uploads will stay unchanged.",
     clearOk: "Clear",
+    clearChatAria: "Clear chat history",
     draft: "Draft",
     task: "Task",
     action: "Action",
@@ -146,7 +166,12 @@ export const en = {
     registerDescription: "Appends a robots entry to physical-agent.yaml. Watch connects it after a restart; nothing touches hardware now.",
     robotId: "Robot ID",
     driver: "Driver (name or path)",
-    addToConfig: "Add to config"
+    addToConfig: "Add to config",
+    outputPath: "Output path",
+    detectedTransport: "Detected transport",
+    robotKind: "Robot kind",
+    resultTitle: "Title",
+    modelPlaceholder: "Leave blank to use configured model"
   },
   config: {
     refresh: "Refresh",
@@ -169,5 +194,64 @@ export const en = {
     title: "Task / Action Proposal",
     open: "Open proposal panel",
     collapse: "Collapse proposal panel"
+  },
+  proposal: {
+    title: "Task / Action Proposal",
+    task: "Task",
+    submitTask: "Submit Task",
+    robot: "Robot",
+    capability: "Capability",
+    actionId: "Action ID",
+    paramsJson: "Params JSON",
+    reason: "Reason",
+    dependsOn: "Depends on"
+  },
+  overview: {
+    systemStatus: "System status",
+    backend: "Backend",
+    workspace: "Workspace",
+    message: "Message",
+    robots: "Robots",
+    capabilities: "Capabilities",
+    worldObjects: "World objects",
+    workspaceBounds: "Workspace bounds",
+    noRobots: "No robots",
+    noCapabilities: "No capabilities",
+    noWorldObjects: "No world objects"
+  },
+  capability: {
+    params: "Params",
+    constraints: "Constraints",
+    raw: "Raw",
+    noCapabilities: "No capabilities"
+  },
+  world: {
+    environment: "Environment",
+    robotsInWorld: "Robots in world",
+    artifacts: "Artifacts",
+    raw: "Raw"
+  },
+  taskGraph: {
+    title: "Agent output tasks",
+    decision: "Decision",
+    noCompiledTasks: "No compiled tasks",
+    noCompiledOutput: "No compiled AgentOutput"
+  },
+  feedbackTimeline: {
+    noFeedback: "No feedback",
+    raw: "Raw"
+  },
+  events: {
+    title: "Events",
+    payload: "Payload",
+    noEvents: "No events"
+  },
+  memorySearch: {
+    title: "Memory / Search",
+    noResults: "No results"
+  },
+  upload: {
+    title: "Upload",
+    drop: "Drop text files here"
   }
 };

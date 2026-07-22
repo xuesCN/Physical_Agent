@@ -2,6 +2,7 @@ import { AimOutlined, FormOutlined, PlusOutlined } from "@ant-design/icons";
 import { Button, Card, Form, Input, Select, Space, Typography } from "antd";
 import { useEffect, useMemo } from "react";
 import type { ActionItem, AgentState, RobotInfo } from "../types";
+import { useMessages } from "../locales/context";
 
 interface ProposalPanelProps {
   state: AgentState | null;
@@ -33,6 +34,7 @@ export function ProposalPanel({
   prefillAction = null,
   prefillVersion = 0
 }: ProposalPanelProps) {
+  const labels = useMessages();
   const [taskForm] = Form.useForm<TaskValues>();
   const [actionForm] = Form.useForm<ActionValues>();
   const robots = state?.capabilities?.robots ?? {};
@@ -109,7 +111,7 @@ export function ProposalPanel({
       title={
         <Space>
           <FormOutlined />
-          <Typography.Text strong>Task / Action Proposal</Typography.Text>
+          <Typography.Text strong>{labels.proposal.title}</Typography.Text>
         </Space>
       }
     >
@@ -121,13 +123,13 @@ export function ProposalPanel({
       >
         <Form.Item
           name="task"
-          label="Task"
+          label={labels.proposal.task}
           rules={[{ required: true, message: "Task is required." }]}
         >
           <Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} />
         </Form.Item>
         <Button htmlType="submit" type="primary" icon={<AimOutlined />} loading={loading}>
-          Submit Task
+          {labels.proposal.submitTask}
         </Button>
       </Form>
 
@@ -141,14 +143,14 @@ export function ProposalPanel({
         requiredMark={false}
       >
         <div className="two-col">
-          <Form.Item name="robot" label="Robot" rules={[{ required: true }]}>
+          <Form.Item name="robot" label={labels.proposal.robot} rules={[{ required: true }]}>
             <Select
               data-testid="proposal-robot-select"
               options={robotOptions}
               placeholder="robot"
             />
           </Form.Item>
-          <Form.Item name="capability" label="Capability" rules={[{ required: true }]}>
+          <Form.Item name="capability" label={labels.proposal.capability} rules={[{ required: true }]}>
             <Select
               data-testid="proposal-capability-select"
               options={capabilityOptions}
@@ -156,19 +158,19 @@ export function ProposalPanel({
             />
           </Form.Item>
         </div>
-        <Form.Item name="id" label="Action ID">
+        <Form.Item name="id" label={labels.proposal.actionId}>
           <Input placeholder="auto" />
         </Form.Item>
-        <Form.Item name="params" label="Params JSON">
+        <Form.Item name="params" label={labels.proposal.paramsJson}>
           <Input.TextArea
             data-testid="proposal-params-input"
             autoSize={{ minRows: 3, maxRows: 6 }}
           />
         </Form.Item>
-        <Form.Item name="reason" label="Reason">
+        <Form.Item name="reason" label={labels.proposal.reason}>
           <Input />
         </Form.Item>
-        <Form.Item name="depends_on" label="Depends on">
+        <Form.Item name="depends_on" label={labels.proposal.dependsOn}>
           <Input placeholder="act_001, act_002" />
         </Form.Item>
         <Button
@@ -177,7 +179,7 @@ export function ProposalPanel({
           icon={<PlusOutlined />}
           loading={loading}
         >
-          Propose Action
+          {labels.app.propose}
         </Button>
       </Form>
     </Card>

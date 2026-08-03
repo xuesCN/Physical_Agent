@@ -7,6 +7,7 @@ import {
   SafetyOutlined
 } from "@ant-design/icons";
 import { Badge, Breadcrumb, Button, Space, Tag, Typography } from "antd";
+import { memo } from "react";
 import type { Messages } from "../locales";
 import type { AgentState, ExecutorProjection, HealthState } from "../types";
 
@@ -23,7 +24,7 @@ interface StatusBarProps {
   proposalDisabled?: boolean;
 }
 
-export function StatusBar({
+function StatusBarBase({
   health,
   state,
   sseConnected,
@@ -155,3 +156,5 @@ function readExecutorError(value: ExecutorProjection["last_error"]): string {
   }
   return value?.message ?? value?.error_type ?? "";
 }
+
+export const StatusBar = memo(StatusBarBase);

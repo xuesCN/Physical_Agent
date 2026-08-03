@@ -2,7 +2,7 @@
 
 > 本文合并了原 optimization-spec（安全不变量）、plan-f（当前目标）与 traceability-matrix（账本），原件已删除、git 历史可查。历史过程见 `REFACTORING.zh-CN.md`。
 > **维护规则**：每轮 session 收尾更新 §4 矩阵一行 → commit → push；里程碑拆分时拆行记录；状态以验收测试通过为准。
-> 最后更新：2026-07-21
+> 最后更新：2026-08-03
 
 ## 0. 安全边界（三层：宪法 / 授权策略 / 工程纪律）
 
@@ -113,6 +113,7 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | C4 | 前端 zh/EN i18n | PLAYBOOK 同名条目 | ✅ 2026-07-07 完成：轻量字典 + AntD locale + Settings 切换 + localStorage；高频导航/状态/Actions/Chat/Settings/Hardware/Config 文案已抽取 |
 | E3 | 暗色模式 + 首次引导 | PLAYBOOK 同名条目 | ✅ 2026-07-07 完成：AntD `darkAlgorithm` + CSS 变量暗色适配 + localStorage；首次 3 步 Tour 与 Settings 重开入口 |
 | C5 | Dashboard 可读性与 i18n 收口 | 本轮 brief `brief-frontend-optimization-review` | ✅ 2026-07-21 完成：9 个未接 `labels` 组件（ProposalPanel/StateOverviewPanel 及局部子卡/CapabilityCard/WorldObjectsTable/AgentTaskGraphCard/FeedbackTimeline/EventsPanel/MemorySearchPanel/UploadPanel）经 `useMessages()` 接入，新增 proposal/overview/capability/world/taskGraph/feedbackTimeline/events/memorySearch/upload 九组词条（en 源 + zh 覆盖）；修 ActionBoard `Running` 中英混排（补 `running` 词条）；feedback Raw 摘要原生 `<details>` 默认折叠（仅 FeedbackTimeline 启用，保留 `Raw:` 标签）；历史反馈徽章降饱和；全局 `:focus-visible` 描边（原 0 处）。`tsc -b`/`vite build`(3310 modules)/真实 Chromium `37 passed` 全绿；未改 Python/API/SSE/watch/driver/SafetyGate。收尾同轮补齐 `SettingsPanel`（state 摘要/state-backend 诊断/LLM 表单）、`HardwarePanel`（生成结果字段）、`RawDebug` 空态与 `ChatPanel` 清空 aria，组件层 `label=`/`description=` 硬编码归零 |
+| C7 | 流式聊天期整树重渲染收口 | `brief-frontend-optimization-review` §2 + rAF 测试设计 | ✅ 2026-08-03 完成：delta/thought 以 `requestAnimationFrame` 合帧，每帧至多一次 state flush；batcher 用 generation 隔离取消/结算后迟到的旧帧。历史消息、Markdown 已完成块与 StatusBar/SidebarNav/ProposalPanel 通过 `React.memo` + 稳定 handler 退出无关渲染，流式正文只重解析尾块；出现任意可能的 reference definition 标志 `]:` 时保守整篇单块，覆盖根级、容器内与多行 label，并保持 CommonMark 引用链接语义。保留 `idleWatchTick` SSE 去重，不改 API/SSE/watch/driver/SafetyGate/SAFETY.md。验收：unit 15/15（batcher 5 + blocks 10），`tsc -b && vite build`（3312 modules），真实 Chromium 37/37，Python full 469/469；独立复审问题均修复。后续仅保留 `streamMessages` 下沉、长会话虚拟列表、代码高亮与 SSE revision 去重等独立项 |
 | E0-e2e | Hardware/注册/DangerZone/ConfigPanel 的 Playwright 用例 | PLAYBOOK 同名条目 | ✅ 2026-07-07 完成：补 Danger Zone reset、Hardware scaffold→register→ConfigPanel、i18n、dark mode、Tour；dashboard e2e 18 passed |
 | B4-vec | 真实向量 RAG（sqlite-vec + embedding） | 延后项；原设计见 git 历史 optimization-spec §4 | ⏸ |
 | 基建 | CI（pytest 3.11/3.12 + 前端 build）；push 纪律；测试 env-scrub fixture | 流程欠账 | ✅ 当前 push 阻塞 Python safety smoke、frontend build/wheel 与 TUI；PR 额外阻塞 Python 3.12 full pytest 和真实 Chromium Playwright。Python 3.11/3.12 全量矩阵仍由 `workflow_dispatch full=true` 手动运行；细节以 `docs/CI.zh-CN.md` 为准 |

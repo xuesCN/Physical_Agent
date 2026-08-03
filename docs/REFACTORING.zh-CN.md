@@ -1,7 +1,7 @@
 # 重构过程
 
 > 本文浓缩自原 33 份 session-handoff 与 22 份 brief（已删除，git 历史可查）。姊妹文档：`SPEC.zh-CN.md`（目标与待办矩阵）。
-> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-21。
+> 范围：基线 `8fa197a` → 当前。最后更新：2026-08-03。
 
 ## 0. 基线与纪律
 
@@ -65,6 +65,7 @@
 | C6-layout | 对话页撑满可用高度，收起态提案栏居中纵排 | 本轮提交；frontend build 通过；隔离后端的真实 Chromium `34/34`；Python `469 passed`；实机 1600×900 截图复核通过 |
 | C6.1 | Dashboard 纯前端 `?page=` URL 状态、直达/刷新/history 同步 | frontend build 通过（3310 modules）；隔离后端真实 Chromium `37/37`；Python `469 passed`；Safety `32 passed`；TUI `138/138` + typecheck/build；clean-wheel 与 in-app Browser 复核通过；无 FastAPI/依赖改动 |
 | C5 | Dashboard 可读性与 i18n 收口：9 组件接 `useMessages`、Running 中英混排、Raw 折叠、焦点样式 | 本轮由 Claude 接手实现、用户本机跑门禁；`tsc -b` 与 `vite build`（3310 modules）通过；真实 Chromium `37 passed`；未改后端 |
+| C7 | 流式聊天期整树重渲染收口：delta rAF 攒批 + `MessageContent`/StatusBar/SidebarNav/ProposalPanel memo + handler `useCallback` + block 级 `MarkdownBlock` memo；rAF 与分块均提取为可测模块并补契约测试 | `npm run test:unit` 15/15（batcher 5 + blocks 10）；独立复审后补旧帧代际隔离与保守 document-wide reference fallback；`tsc -b && vite build` 通过（3312 modules）；真实 Chromium 37/37；Python 469/469；未改后端 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -487,6 +488,23 @@ C6/C6.1 收口信息架构与 URL 状态后，仍有 9 个组件（ProposalPanel
 
 一处 e2e 回归教训：折叠 Raw 后 `F2 readable context` 用例断言 `context-tabs` 含 `"Raw:"` 失败——折叠 summary 只渲染 `Raw` 无冒号。修法是保留折叠、在 summary 补回冒号，而非改测试，既过断言又不丢 F2「结构化信息可读」契约。分工为 Claude 直接编辑、用户本机跑门禁：`tsc -b` 与 `vite build`（3310 modules）通过，真实 Chromium `37 passed`；沙盒缺 Linux 原生 rollup 与 Chromium，故构建/E2E 全部由用户执行。未触碰 Python、API/SSE、watch、driver、SafetyGate 或 SAFETY.md。收尾同轮补齐 `SettingsPanel`（state 摘要 + state-backend 诊断 + LLM 表单标签）、`HardwarePanel`（生成结果字段与 model placeholder）、`RawDebug` 空态、`ChatPanel` 清空 aria 的残留硬编码，组件层 `label=`/`description=` 英文归零；技术诊断词（Source of truth、SQLite schema 等）给出可辨识中文而非直译。
 
+### C7：流式聊天期整树重渲染收口
+
+brief §2 记的 P1：`streamMessages` 挂在 Dashboard 顶层，聊天流式输出时每个 delta 都 `setStreamMessages`，令 Dashboard 及同屏子组件每 token 重渲染一次。核查时又发现一处 brief 未点破、实则更贵的热点：`ChatPanel` 的 `items` `useMemo` 依赖里含 `messages` 与两个每渲染换新引用的 handler（`onAddDraft`/`onEditDraft` 是 Dashboard 里的普通 `function` 声明），流式期该 memo 每 token 失效，导致**整段历史消息全量重跑 `<ReactMarkdown>` 解析**，成本 O(历史条数 × token 数)。
+
+本轮按 brief 的方案①轻量版 + ② + ③全部落地：
+
+- **①delta rAF 攒批**：`App.tsx handleChat` 通过 `createStreamingFrameBatcher` 调度，delta/thought 只累加到局部 `assistantContent`/`reasoningSummary` 并请求一次 `requestAnimationFrame`，把每 token 一次 `setState` 合并为每帧至多一次。`done`/`aborted`/`error` 三个终止分支先 `cancel()` 再走原逻辑（终态内容用完整 `assistantContent`，不丢字）；`finally` 用 `settle()` 结算 endedEarly 情形残留的最后一帧，防丢尾 token。刻意保留原 `idleWatchTick` SSE 去重逻辑（brief 明确"别动"）。
+- **②ChatPanel 拆条 memo**：`MessageContent` 用 `React.memo` 包裹；`updateStreamingAssistant` 本就对非流式消息返回原对象引用，故历史条 `message` 引用稳定。为让 memo 真正命中，`ChatPanel` 内 `handleAddDraft` 改 `useCallback`，`App.tsx` 的 `handleAction`/`handleEditDraft` 改 `useCallback`（依赖 `message` / `setActiveProposalExpanded`，二者在聊天页稳定）——即 brief 追问预警说的"memo 必须配 useCallback，单加 memo 无效"。效果：流式期只有正在生长的那条消息重渲染并重解析 markdown，历史条全部 memo 命中，热点从 O(历史) 降为 O(1)。
+
+- **③常驻组件 memo + handler 稳定**：`StatusBar`/`SidebarNav`/`ProposalPanel` 各改为 `export const X = memo(XBase)`；新增 `handleRefresh`/`handleOpenInspector`/`handleTask`（`useCallback`）替换传给它们的 inline 箭头。`navigatePage` 本已是 `useCallback([])`、`onCollapse` 是 setState setter，天然稳定未改。逐个核对四个 memo 组件在流式期收到的 props 全为基本类型或稳定引用（无 inline object/array prop），故流式期全部 bail；快照真更新时 props 变化仍正常重渲染，未牺牲正确性。
+
+**回归测试（按 `docs/superpowers/specs/2026-07-26-c7-raf-batching-test-design.md`）**：内嵌在组件闭包里的 rAF 生命周期只能靠完整浏览器流程间接验证，故按设计文档把它提取为 `frontend/src/streamingFrameBatcher.ts`——`createStreamingFrameBatcher({flush, requestFrame, cancelFrame}) => {schedule, settle, cancel}`，帧 API 可注入（生产用浏览器帧 API，测试注入手动帧队列，因此不依赖真实刷新率/计时器/绘制）。`App.tsx handleChat` 保留 `assistantContent`/`reasoningSummary` 聚合与 `setStreamMessages` 回调，只把 schedule/settle/cancel 生命周期换成 batcher，事件语义、最终消息内容、错误处理与 DOM 均不变。测试沿用 `@playwright/test`、不使用 `page` fixture、不引 Vitest/Jest：新增 `frontend/unit/streamingFrameBatcher.spec.ts` 与独立的 `playwright.unit.config.ts`（`npm run test:unit`），后者不配 webServer，使 Node 级契约测试无需 API/dev server 或浏览器即可运行，与需要真实 Chromium 的 `test:e2e` 分开。独立复审发现，已取消/结算的旧 rAF 回调若被环境迟到执行，可能误消费刚排入的新一轮 flush；实现因此加入单调递增 generation，旧回调只对自己的 generation 生效。五条 batcher 契约覆盖 burst、settle、cancel，以及 cancel→新 schedule、settle→新 schedule 两种陈旧帧跨代执行场景。变异验证按文档执行：临时移除 `schedule()` 里"已有帧则不重复排队"的守卫后，burst 用例如期转红（`actual: 3, expected: 1`），恢复实现后全绿。
+
+**block 级 memo（2026-07-27）**：②只做到 per-message，正在流式那条仍每帧整段重解析。本轮补 `frontend/src/markdownBlocks.ts` 的 `splitMarkdownBlocks()`，`ChatPanel` 的 `MarkdownBody` 逐块渲染、`MarkdownBlock` 各自 `memo`，把这条消息内部从 `O(整段)` 压到 `O(尾块)`。**未引新依赖**：采用保守切分器——只在下一行顶格且非列表/引用/缩进/未闭合 fence 内部时才切，宁可合并也不误切。切分保持无损（`join("") === 原文`），空行分隔符归属前一块，因此消息增长时已完成块逐字节不变。独立复审发现，跨块渲染会破坏 CommonMark 文档级 reference definition；切分器现在把任意 `]:` 视为可能的定义并保守返回整篇单块，从而覆盖根级、容器内与多行 label。误判只会放弃该条消息的分块优化，不改变输出；漏判则会改变渲染，因此这里明确偏向 fail-safe。**与 draft 的关系**已核实无冲突：`structuredDraftActions()` 只接受 `physical-agent/agent-output/v1` 结构化信封，draft 卡片由 `metadata.agent_output` 驱动、是正文的兄弟节点，且只在 `done` 才到达；分块只是 `message.content` 的纯渲染优化，绝不反向喂给 draft 提取。十条 block 契约覆盖无损重组、fence、松散列表、引用/缩进代码、普通块切分、未闭合 fence、流式增长稳定性，以及根级、容器内、多行 label 三种 document-wide reference link；后三项均用真实 `ReactMarkdown` 静态渲染断言。
+
+验收：`npm run test:unit` 15/15（batcher 5 + blocks 10）；`tsc -b && vite build` 通过（3312 modules）；隔离后端真实 Chromium 37/37；Python full 469/469（2 条环境 warning）。未触碰 Python、API/SSE、watch、driver、SafetyGate 或 SAFETY.md。未做项留后续：尾块未闭合降级、代码高亮、SSE revision 去重（需后端加字段）、长会话虚拟列表、`streamMessages` 下沉（Dashboard 本体每帧仍重渲染一次，但 memo 子组件已退出，成本属可接受残余）。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -580,6 +598,7 @@ C6/C6.1 收口信息架构与 URL 状态后，仍有 9 个组件（ProposalPanel
 88. **provider reasoning summary 永远是不可信、只读的展示 metadata**（A1.3b）：只保存 completed turn 的摘要并从后续 LLM context 过滤；不得进入 PlanCompiler、Action Board、feedback、Gate 或审批依据，abort 的 partial summary 不落盘。模型是否给出摘要不影响 canonical reply/AgentOutput。
 89. **Dashboard page key 只保留唯一内容归属，不保留隐藏兼容别名**（C6）：直接退役 `world/safety/robots`，由 `state/hardware` 接管，并用新页正向覆盖与旧 key 负断言证明能力未丢失；放弃 alias/redirect，因为这些 key 只是无 URL 路由的前端内部状态，并非 API/TUI 契约，保留它们只会延续双导航真源。历史 Proposal localStorage 也只按当前 `PAGE_KEYS` 白名单读取，旧 key 自然失效。
 90. **本机根路径 Dashboard 先用 query 表达页面，不引入路由库或后端 clean-path fallback**（C6.1）：选择 `?page=<page-key>`，因为它能在不改变 FastAPI 静态托管与依赖图的前提下提供直达、刷新和 history；缺省 `/` 继续兼容 overview，显式非法 key 才 replace 归一。放弃 `/actions` 一类 clean path 与 404 页面，因为当前不是公网多路径应用，收益不足以覆盖后端 fallback、部署与测试面扩张。
+91. **流式重渲染采用 rAF 攒批 + 分层 memo，不引状态管理库、不先做全局 state 下沉**（C7）：选择 `requestAnimationFrame` 合帧（而非固定毫秒节流），配 generation 隔离陈旧回调；`MessageContent`/`MarkdownBlock` 与常驻组件 `React.memo` + 关键 handler `useCallback`，把每 token O(历史) 的 Markdown 重解析压到 O(尾块)，并让流式无关组件退出渲染。放弃方案①的"彻底版"（把 `streamMessages` 下沉进 ChatPanel/独立 store），因为现有分层已吃掉主要卡顿且改动面小可回滚；`streamMessages` 仍留在 Dashboard 顶层，Dashboard 本体每帧至多重渲染一次，若 profiling 仍显示瓶颈再下沉。保留 `idleWatchTick` SSE 去重不动。
 
 ## 4. 经验教训（流程侧）
 
@@ -623,5 +642,7 @@ C6/C6.1 收口信息架构与 URL 状态后，仍有 9 个组件（ProposalPanel
 - **CSS 隐藏不等于性能收口，响应式默认值也必须服从安全信号优先级**（C6 的教训）：Proposal 收起验收必须断言组件不挂载，不能只看宽度；同时组合测试窄屏、Actions 默认展开和待审批状态，才能发现 Drawer 遮蔽审批入口的问题。安全 override 应只控制可见性、不抹掉用户偏好，条件解除后再恢复。
 - **真实 Chromium 回归不得复用正在展示的用户工作区后端**（C6 layout follow-up 的教训）：Playwright 的 `reuseExistingServer` 会接受同端口的任意健康实例；若本地正在运行真实 SQLite workspace，包含真实 API 的场景会污染 action/chat/upload 状态，待审批信号还会改变移动端预期。全量回归前必须先释放测试端口，让配置启动隔离的 `.tmp/e2e` 后端；展示服务只能在回归结束后恢复。
 - **URL 状态不能只测点击后的地址字符串**（C6.1 的教训）：至少同时锁定 direct open、reload、Back/Forward、活动导航/内容一致、其他 query 保留，以及非法/退役 key 的 replace 归一；否则很容易得到“地址变了但视图没同步”或 history 堆积的半路由。
+- **`React.memo` 只有配稳定引用才生效，热点常藏在被 `useMemo` 依赖拖累的子渲染里**（C7 的教训）：给组件加 memo 前必须先确认它收到的 handler/props 引用稳定——Dashboard 里的普通 `function` 声明每渲染换新引用，会让下游 `useMemo`/`memo` 全部失效，单加 memo 等于白加，memo + `useCallback` 必须成套做。定位流式卡顿也别只盯 setState 频率：真正贵的是 `ChatPanel.items` `useMemo` 因不稳定依赖每 token 失效、连带整段历史重跑 markdown 解析，把每 token O(历史) 降为 O(1) 比单纯降 setState 频率收益更大。rAF 攒批则要在终止/早停路径配 cancel + settle，避免丢尾 token。
+- **组件闭包里的调度逻辑要提取成可注入依赖的模块才可测**（C7 测试的教训）：内嵌在 `handleChat` 里的 rAF 生命周期只能靠完整浏览器流程间接验证，测试要么退化成"源码里有没有 `requestAnimationFrame`"的字符串断言，要么去 mock React setter。把帧 API 做成可注入参数后，契约（每帧至多一次 flush、settle 不丢尾、cancel 后陈旧帧不得二次 flush）可以用手动帧队列直接断言，不依赖真实刷新率、计时器或绘制。补回归测试时还应做变异验证——移除"已有帧不重复排队"守卫后 burst 用例必须转红，否则测的是实现在场而非契约成立。Node 级契约测试应配独立的 Playwright config（不带 webServer），与需要真实 Chromium 和后端的 e2e 分开，避免为一个纯函数模块启动整套服务。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

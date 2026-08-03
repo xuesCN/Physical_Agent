@@ -1,6 +1,6 @@
 import { AimOutlined, FormOutlined, PlusOutlined } from "@ant-design/icons";
 import { Button, Card, Form, Input, Select, Space, Typography } from "antd";
-import { useEffect, useMemo } from "react";
+import { memo, useEffect, useMemo } from "react";
 import type { ActionItem, AgentState, RobotInfo } from "../types";
 import { useMessages } from "../locales/context";
 
@@ -26,7 +26,7 @@ interface ActionValues {
   depends_on?: string;
 }
 
-export function ProposalPanel({
+function ProposalPanelBase({
   state,
   loading,
   onSubmitTask,
@@ -207,3 +207,5 @@ function splitList(value?: string): string[] {
     ? value.split(",").map((item) => item.trim()).filter(Boolean)
     : [];
 }
+
+export const ProposalPanel = memo(ProposalPanelBase);

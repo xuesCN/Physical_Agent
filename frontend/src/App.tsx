@@ -43,6 +43,7 @@ import {
   resolveInitialTheme
 } from "./locales";
 import { MessagesProvider } from "./locales/context";
+import { createStreamingFrameBatcher } from "./streamingFrameBatcher";
 import type { Language, Messages, ThemeMode } from "./locales";
 import { PAGE_KEYS, usePageNavigation } from "./navigation";
 import type { PageKey } from "./navigation";
@@ -247,6 +248,14 @@ function Dashboard({
     void loadConfiguration();
   }, [loadConfiguration]);
 
+  // Stable handlers so the memoized StatusBar bails out of per-frame re-renders
+  // during chat streaming.
+  const handleRefresh = useCallback(() => void loadSnapshot(), [loadSnapshot]);
+  const handleOpenInspector = useCallback(
+    () => setActiveProposalExpanded(true),
+    [setActiveProposalExpanded]
+  );
+
   useEffect(() => {
     const source = new EventSource("/api/events");
     const eventTypes = ["hello", "executor", "state", "watch_step", "error"];
@@ -326,6 +335,19 @@ function Dashboard({
     let assistantContent = "";
     let reasoningSummary = "";
 
+    // High-frequency SSE deltas are coalesced into one repaint per animation
+    // frame. Without this, a fast model emits hundreds of setStreamMessages per
+    // second and each one re-renders the Dashboard subtree.
+    const streamFrames = createStreamingFrameBatcher({
+      flush: () =>
+        setStreamMessages((current) =>
+          updateStreamingAssistant(current, assistantKey, assistantContent, {
+            stream_status: "streaming",
+            reasoning_summary: reasoningSummary
+          })
+        )
+    });
+
     try {
       await sendChatStream(text, {
         streamId,
@@ -340,24 +362,18 @@ function Dashboard({
           if (event.type === "delta") {
             streamStarted = true;
             assistantContent += String(payload.delta ?? "");
-            setStreamMessages((current) =>
-              updateStreamingAssistant(current, assistantKey, assistantContent)
-            );
+            streamFrames.schedule();
             return;
           }
           if (event.type === "thought") {
             streamStarted = true;
             reasoningSummary += String(payload.delta ?? "");
-            setStreamMessages((current) =>
-              updateStreamingAssistant(current, assistantKey, assistantContent, {
-                stream_status: "streaming",
-                reasoning_summary: reasoningSummary
-              })
-            );
+            streamFrames.schedule();
             return;
           }
           if (event.type === "done") {
             streamFinished = true;
+            streamFrames.cancel();
             if (isAgentState(payload.state)) {
               setState(payload.state);
               setStreamMessages(null);
@@ -379,6 +395,7 @@ function Dashboard({
           }
           if (event.type === "aborted") {
             streamFinished = true;
+            streamFrames.cancel();
             setChatStreamError(labels.chat.stopped);
             if (isAgentState(payload.state)) {
               setState(payload.state);
@@ -388,6 +405,7 @@ function Dashboard({
           }
           if (event.type === "error") {
             streamFinished = true;
+            streamFrames.cancel();
             const text = String(payload.message ?? labels.chat.streamFailed);
             setChatStreamError(text);
             if (isAgentState(payload.state)) {
@@ -425,6 +443,7 @@ function Dashboard({
         showError(message, error);
       }
     } finally {
+      streamFrames.settle();
       chatAbortControllerRef.current = null;
       chatStreamIdRef.current = null;
       setBusy(null);
@@ -439,18 +458,21 @@ function Dashboard({
     chatAbortControllerRef.current?.abort();
   }
 
-  async function handleTask(task: string) {
-    setBusy("proposal");
-    try {
-      const response = await submitTask(task);
-      setState(response.state);
-      message.success(response.message);
-    } catch (error) {
-      showError(message, error);
-    } finally {
-      setBusy(null);
-    }
-  }
+  const handleTask = useCallback(
+    async (task: string) => {
+      setBusy("proposal");
+      try {
+        const response = await submitTask(task);
+        setState(response.state);
+        message.success(response.message);
+      } catch (error) {
+        showError(message, error);
+      } finally {
+        setBusy(null);
+      }
+    },
+    [message]
+  );
 
   async function handleInitialize() {
     setBusy("initialize");
@@ -467,19 +489,22 @@ function Dashboard({
     }
   }
 
-  async function handleAction(action: ActionItem) {
-    setBusy("proposal");
-    try {
-      const response = await proposeAction(action);
-      setState(response.state);
-      setPrefillAction(null);
-      message.success(response.message);
-    } catch (error) {
-      showError(message, error);
-    } finally {
-      setBusy(null);
-    }
-  }
+  const handleAction = useCallback(
+    async (action: ActionItem) => {
+      setBusy("proposal");
+      try {
+        const response = await proposeAction(action);
+        setState(response.state);
+        setPrefillAction(null);
+        message.success(response.message);
+      } catch (error) {
+        showError(message, error);
+      } finally {
+        setBusy(null);
+      }
+    },
+    [message]
+  );
 
   async function handleApproveAction(actionId: string) {
     setBusy("proposal");
@@ -507,11 +532,14 @@ function Dashboard({
     }
   }
 
-  function handleEditDraft(action: ActionItem) {
-    setPrefillAction(action);
-    setPrefillVersion((current) => current + 1);
-    setActiveProposalExpanded(true);
-  }
+  const handleEditDraft = useCallback(
+    (action: ActionItem) => {
+      setPrefillAction(action);
+      setPrefillVersion((current) => current + 1);
+      setActiveProposalExpanded(true);
+    },
+    [setActiveProposalExpanded]
+  );
 
   async function handleResetChat() {
     setBusy("chat");
@@ -574,9 +602,9 @@ function Dashboard({
             loading={busy === "refresh"}
             activePageLabel={labels.nav[activePage]}
             labels={labels}
-            onRefresh={() => void loadSnapshot()}
+            onRefresh={handleRefresh}
             proposalDisabled={compactApprovalPriority}
-            onOpenInspector={() => setActiveProposalExpanded(true)}
+            onOpenInspector={handleOpenInspector}
           />
         </Layout.Header>
         <Layout.Content className="app-content">

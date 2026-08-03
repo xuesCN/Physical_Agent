@@ -8,10 +8,11 @@ import {
 } from "@ant-design/icons";
 import { Bubble, Sender } from "@ant-design/x";
 import { Alert, Button, Card, Descriptions, Empty, Popconfirm, Space, Tag, Typography } from "antd";
-import { useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { structuredDraftActions } from "../agentOutput";
 import { useMessages } from "../locales/context";
+import { splitMarkdownBlocks } from "../markdownBlocks";
 import type { ActionItem, ChatMessage } from "../types";
 import { JsonSummaryLine } from "./JsonSummary";
 import { expectedSummary } from "./readableFormatters";
@@ -42,6 +43,19 @@ export function ChatPanel({
   const labels = useMessages();
   const [draft, setDraft] = useState("");
   const [submittingDraft, setSubmittingDraft] = useState<string | null>(null);
+  // Stable across renders so memoized MessageContent items can bail out; without
+  // it every streaming token would re-parse the markdown of the whole history.
+  const handleAddDraft = useCallback(
+    async (action: ActionItem, key: string) => {
+      setSubmittingDraft(key);
+      try {
+        await onAddDraft(action);
+      } finally {
+        setSubmittingDraft(null);
+      }
+    },
+    [onAddDraft]
+  );
   const items = useMemo(
     () =>
       messages.map((message, index) => {
@@ -56,20 +70,13 @@ export function ChatPanel({
               originalMessage={originalMessage}
               submittingDraft={submittingDraft}
               disabled={loading || actionLoading}
-              onAddDraft={async (action, key) => {
-                setSubmittingDraft(key);
-                try {
-                  await onAddDraft(action);
-                } finally {
-                  setSubmittingDraft(null);
-                }
-              }}
+              onAddDraft={handleAddDraft}
               onEditDraft={onEditDraft}
             />
           )
         };
       }),
-    [actionLoading, loading, messages, onAddDraft, onEditDraft, submittingDraft]
+    [actionLoading, loading, messages, handleAddDraft, onEditDraft, submittingDraft]
   );
 
   async function submit(value: string) {
@@ -172,7 +179,7 @@ interface MessageContentProps {
   onEditDraft: (action: ActionItem) => void;
 }
 
-function MessageContent({
+const MessageContent = memo(function MessageContent({
   message,
   messageIndex,
   originalMessage,
@@ -208,9 +215,7 @@ function MessageContent({
           </Typography.Paragraph>
         </details>
       )}
-      <div className="markdown-body">
-        <ReactMarkdown>{message.content}</ReactMarkdown>
-      </div>
+      <MarkdownBody content={message.content} />
       {drafts.map((draft, draftIndex) => {
         const key = `${message.created_at ?? messageIndex}-${draftIndex}`;
         const action = withDraftMetadata(draft, {
@@ -232,7 +237,31 @@ function MessageContent({
       })}
     </div>
   );
+});
+
+/**
+ * Renders the reply text as independently memoized top-level blocks. While a
+ * message streams, only the trailing block changes, so completed blocks keep
+ * their rendered output instead of re-parsing Markdown on every token. It also
+ * insulates the text from draft interaction state: toggling `submittingDraft`
+ * re-renders the message but leaves every block's content identical.
+ */
+function MarkdownBody({ content }: { content: string }) {
+  const blocks = useMemo(() => splitMarkdownBlocks(content), [content]);
+  return (
+    <div className="markdown-body">
+      {blocks.map((block, index) => (
+        // Blocks are only ever appended or edited in place at the tail, never
+        // reordered, so the index is a stable identity here.
+        <MarkdownBlock key={index} content={block} />
+      ))}
+    </div>
+  );
 }
+
+const MarkdownBlock = memo(function MarkdownBlock({ content }: { content: string }) {
+  return <ReactMarkdown>{content}</ReactMarkdown>;
+});
 
 function reasoningSummaryFromMetadata(
   metadata: Record<string, unknown> | undefined

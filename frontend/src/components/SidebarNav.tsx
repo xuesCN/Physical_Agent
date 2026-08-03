@@ -10,6 +10,7 @@ import {
 } from "@ant-design/icons";
 import { Layout, Menu, Typography } from "antd";
 import type { MenuProps } from "antd";
+import { memo } from "react";
 import type { ReactNode } from "react";
 import type { Messages } from "../locales";
 import type { PageKey } from "../navigation";
@@ -82,7 +83,7 @@ interface SidebarNavProps {
   onCollapse: (collapsed: boolean) => void;
 }
 
-export function SidebarNav({
+function SidebarNavBase({
   activePage,
   collapsed,
   labels,
@@ -118,3 +119,5 @@ export function SidebarNav({
     </Layout.Sider>
   );
 }
+
+export const SidebarNav = memo(SidebarNavBase);

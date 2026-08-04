@@ -53,11 +53,11 @@ rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Dr
 | F3 | context_builder 解耦（已完成） | `context_builder` 统一 reply/proposal/planner/tool_loop 上下文；ContextBudget 收拢魔法数字；world/capabilities 超限摘要化；memory 按 importance 排序注入；golden-file 测试 |
 | F4 | 闭环地基（已完成） | 提案带 expected 断言 → 执行后**确定性比对**（不用 LLM 当裁判）→ 写入 `expectation_check` feedback；violated/skipped 回灌 LLM 上下文，自动重试默认关 |
 | VNext | Assurance-first Agent runtime（已落地部分保留，后续扩张暂停） | 已完成 compiled topology/current projection、verification/dependency/timeout 调度、atomic feedback、proposal actions batch 单事务，以及 workspace singleton watch lease + unique claim-owner CAS/reset guard。R0-R8 期间不新增独立 task table、持久化 task graph、Run/Turn/Event 或 registry/read-model；先删除重复兼容面，不把 current projection 表述成持久化 obligation engine |
-| F5 | 硬件生态（条件触发，当前冻结） | R0-R8 期间即使设备条件满足也先不扩实现；收口后再按实机需求重启。原候选：F5.1 LeRobot motors、F5.2 ros_mcp、F5.3 感知语义层 |
+| F5 | 硬件生态（条件触发；仅 F5.0 已由实机需求重启） | 2026-08-04 用户提供 `project/car_agent` 固件、接入说明与明确实机需求，因此只重启 F5.0 自包含小车 driver；F5.1 LeRobot motors、F5.2 ros_mcp、F5.3 感知语义层继续冻结，不随本条自动恢复 |
 | **T（独立线：Ink 终端 UI）** | 第五入口 | Node/TS/Ink 5 交互式终端工作台（`tui/` 目录，纯 API 客户端零核心改动）；T1 只读（状态+流式 chat+actions 实时）→ T2 交互（提交/审批/重置，审批依赖 F1.3）→ T3 补齐。typer CLI 保留管脚本化，Ink 管交互；选 Ink 而非 Textual 是为复用 dashboard 的 React 技能。与 F 主线无依赖（除 T2 审批），可随时穿插 |
 | F6 | Demo Twin + BYO Simulator（冻结） | F6.0-F6.4 全部暂停；R0-R8 不以 demo、SceneView、remote_sim 或 conformance 为由扩大协议面。收口后若重启，仍需先做场景规格且不做通用仿真平台 |
 
-**R0-R8 功能冻结（2026-07-10，R8.1 延续）**：VNext-3/4、W4/W5/W6.2、F0 后续实验、F5、F6、B4-vec、registry/read-model 新能力、自动 replan/无人值守档均暂停。R8.1 不解冻 VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 或自动 replan；只有出现可复现的真实需求并形成显式 SPEC 决策后，才可重启对应条目。
+**R0-R8 功能冻结（2026-07-10，R8.1 延续；2026-08-04 单项例外）**：VNext-3/4、W4/W5/W6.2、F0 后续实验、F5.1-F5.3、F6、B4-vec、registry/read-model 新能力、自动 replan/无人值守档均暂停。F5.0 因已经出现可复现的 `car_agent` 实机接入需求而单项重启；该决定不解冻其余条目，也不授权绕过 watch/SafetyGate 或引入高频流式控制通道。
 
 **其他挂起（明确不做）**：Langfuse 观测平台（2026-07-05 评估：F0 量级几十次调用，本地 JSONL 留痕足够；重启条件=F4 闭环自动调用量增大或 F6.2 批量评测需要打分 UI，届时优先 Cloud 免费档）、instructor / LiteLLM（等 F0 数据）、chat markdown **深度**渲染扩展（基础渲染已由用户以 react-markdown 落地于 ChatPanel；代码高亮/一键复制等扩展不排期）、通用 yaml 编辑器（lite 版已够）、schema 驱动表单库 rjsf/JSON Forms（2026-07-05 评估：产品无手写 JSON 需求——若将来出现高频结构化输入场景再评估，届时选 rjsf + @rjsf/antd）、**通用仿真平台**（2026-07-05 产品决定：只做 demo twin 与 BYO 接口，若 F6 解冻仍遵守）。
 
@@ -95,6 +95,7 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | W5 | driver 编写守则：阻塞调用须带超时或走 to_thread（写进 driver 模板与生成规则） | 讨论产出 | ⏸ R0-R8 冻结；现有安全回归仍必须守住 timeout/to_thread 纪律 |
 | W6.1 | workspace watch runtime lease + unique executor/claim-owner CAS | VNext 执行协调风险 | ✅ 2026-07-10 完成：active `watch-executor` lease 阻止第二 runtime；关键阶段续租，失租 fatal stop；action terminal mutation 校验 unique claim_owner；stale shutdown 不 halt；active lease 阻止 workspace reset |
 | W6.2 | driver/transport/hardware-level fencing token | VNext 执行协调风险 | ⏸ R0-R8 冻结：数据库 lease 不能撤销 in-flight command 的风险说明保持；只有明确实机 HA/接管需求才重启 |
+| F5.0 | `car_agent` 自包含 WiFi/TCP-NDJSON 实机 driver | `PLAYBOOK` F5.0 + `docs/superpowers/plans/2026-08-04-car-agent-driver.md` | ✅ 2026-08-04 软件交付完成：新增现有 local loader 可加载的 `car_agent/` bundle、默认禁运动样例和双语 bring-up；严格握手/NDJSON id 关联，始终 `observe/stop`，仅显式速度+时长包络且远端声明 drive 时发布需审批的 bounded `drive_for`。绝对 deadline、sent-time watchdog 续租、迟到 ACK、取消与未确认 stop 均 fail closed；Watch hardware 审批与 Gate-before-execute 已用 loopback TCP 集成验证。不改请求/提案侧、watch、SafetyGate、SAFETY 文件真源、loader/registry 或通用 transport。证据：car `52 passed`、受影响矩阵 `131 passed`、Python full `521 passed, 2 warnings`；独立终审 Critical/Important=0。真实 IP/实测包络尚未提供，**真实连接和运动未验收**，Level 0 继续只允许车轮架空台架 |
 | F5.1-F5.3 | LeRobot motors / ros_mcp / 感知语义层 | §2 | ⏸ R0-R8 冻结；之后仍需设备条件触发 |
 | F6.0 | 场景规格设计（arm 继承 mock_arm；car 能力词汇表从零定） | §2 | ⏸ R0-R8 冻结 |
 | F6.1 | Hero Demo Twin：机械臂（公司产品）+ 通用 SceneView 面板 | §2 | ⏸ R0-R8 冻结 |

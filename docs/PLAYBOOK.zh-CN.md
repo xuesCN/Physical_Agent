@@ -131,6 +131,20 @@
 
 **W6.2 未完成**：将 epoch/fencing token 下沉到 driver/transport/设备或独占硬件代理，让控制面拒绝旧 owner I/O；定义 owner 崩溃、存储不可达、命令在途、接管前 fresh observe/fail-safe halt 的语义。验收要求旧 owner 即使仍存活、迟到 I/O 也不能影响继任者，接管绝不重放旧 action。
 
+## F5.0 car_agent 自包含实机 driver
+
+**触发与范围**（2026-08-04）：用户已提供 `moce_sdk_YYZ-Final/project/car_agent` Level 0 固件和 `docs/AGENT_INTEGRATION.md`，并明确要求先跑通 Physical Agent 作为上位机、Chat 只提供 action proposal 的链路。本条只交付一个由现有 local loader 加载的 `car_agent/` bundle；不修改 core loader/registry、请求侧、watch 或 SafetyGate，也不解冻 F5.1-F5.3/F6。
+
+**实现口径**：`driver.py` 自带异步 TCP + NDJSON 客户端，通过一条长连接按请求 `id` 关联响应；请求使用紧凑单行 JSON 并限制在固件 2048-byte 线以内，忽略不匹配 `id` 的额外响应，只依赖 `ok` 与 `error.code`。`connect()` 核验 `moce-physical-agent/v1`、`moce-car`、`car_agent` 和远端能力后发送一次安全 `stop`；`disconnect()` 只释放自身连接，避免 stale owner 在 W6.1 接管后发物理副作用；`heartbeat()` 只做 `health`，`halt()` 走顶层 `stop`。
+
+**能力口径**：始终发布 `observe` 与 `stop`；只有配置同时给出 `max_abs_speed`（1..60）和 `max_duration_ms`（1..28000），且远端声明 `drive`，才发布 `drive_for(speed, duration_ms)`。`drive_for` 每次只发送固件支持的扁平数值 `args`，按小于 800ms 看门狗的刷新间隔续发，逐次检查实际 `speed`、`clamped` 与 `motor_available`，并在成功、失败和取消路径都尝试 `stop`。每次 drive 响应等待受动作绝对 deadline 与请求 timeout 的较小值约束，迟到 ACK 不得把动作报告为 completed；任何无法确认的 stop 都立即关闭 transport、清空远端运动能力，直到 fresh handshake。能力 schema/constraints 使用同一配置包络，令 watch SafetyGate 在调用 driver 前先拒绝越界动作；运动能力显式 `requires_approval=true`。未配置包络时不得用固件 ±60 技术上限冒充实车安全上限。
+
+**状态口径**：`observe` 以 `moving`/`motor_cmd` 推导运行状态，绝不相信固件恒为 `idle` 的 `status`；`tof_mm` 与 `tof_valid`、`tof_available` 原样成组暴露，不把无效读数解释为无障碍。Level 0 没有编码器、闭环速度、转向、本地避障或认证；README 和示例配置必须写明只在可信 2.4GHz 网络、车轮架空、有人值守且可直接断电时使用。
+
+**坑**：设备只服务一个 TCP 客户端；不得同时运行独立 watch 与 `api --watch`/内嵌 watch，不得自动重放未知结果的 `execute`，也不得在 `disconnect()` 善意停车。`halt()` 与 `disconnect()` 的相反语义必须分别有测试。固件一次超长请求可能产生多条响应，因此即使 driver 自身永不发送超长行，也必须按 `id` 跳过额外响应。请求超时与刷新间隔都必须留出相对 800ms 看门狗的余量；阻塞 socket API 禁用，统一使用 asyncio stream（W5）。
+
+**验收**：真实 asyncio fake server 覆盖握手/身份拒绝、NDJSON 分帧与额外响应、远端错误码、observe 字段语义、无包络不发布运动能力、Gate-facing schema/constraints、连续 drive 刷新、clamp/电机不可用/超时/取消均最终 stop、WatchRuntime 加载 local bundle；专项、安全边界与全量 `pytest` 通过。实车未提供 IP 与安全包络前，只完成 mock 协议联调，不声称真实运动已验收。
+
 ## F5.1 LeRobot motors（触发：舵机臂到手）
 
 **思路**：`feetech-servo-sdk` 进 `[servo]` extra；新 driver `feetech_arm`——初始化 FeetechMotorsBus（端口/波特率/舵机 id 表进 config_schema），observe 轮询 Present_Position/Load/Temperature/Voltage，execute 的 move_to 走 sync write 目标位置，halt 写 Torque_Enable=0。参考 LeRobot `src/lerobot/motors/feetech/`。

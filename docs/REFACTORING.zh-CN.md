@@ -1,7 +1,7 @@
 # 重构过程
 
 > 本文浓缩自原 33 份 session-handoff 与 22 份 brief（已删除，git 历史可查）。姊妹文档：`SPEC.zh-CN.md`（目标与待办矩阵）。
-> 范围：基线 `8fa197a` → 当前。最后更新：2026-08-03。
+> 范围：基线 `8fa197a` → 当前。最后更新：2026-08-04。
 
 ## 0. 基线与纪律
 
@@ -34,6 +34,7 @@
 | Audit-doc-html | current architecture audit 静态 HTML 阅读页 | 本轮提交 |
 | F3 | context_builder 解耦：reply/proposal/planner/tool_loop 上下文统一 | `9cbb540` |
 | F4 | 期望-比对-回灌：expected 确定性比对、feedback 回灌、前端可见性 | `b5be3b7` |
+| F5.0 | `car_agent` 自包含 TCP/NDJSON driver：默认禁运动、bounded `drive_for`、Watch/SafetyGate 实机链路地基 | 本轮提交；car 专项 `52 passed`、受影响矩阵 `131 passed`、Python full `521 passed`；独立终审 Critical/Important=0 |
 | W2 | 观察并发化 + observe 频率与 tick 解耦 | `4e0f732` |
 | W3 | transport 断线重连：可选 policy、fail-fast、driver reinit hook | `1d9a812`, `7762c0f` |
 | VNext-0 | ProposalService + typed metadata + 执行边界 + execution_mode 地基 | 本轮提交 |
@@ -113,6 +114,14 @@
 ### D3-D4：看门狗与实机
 
 **D3** 把 heartbeat/halt 从 no-op 钩子接入 WatchRuntime 常驻循环（每 tick 心跳、关停 halt，`heartbeat_enabled`/`halt_on_shutdown` 开关）；**D3.1** 软件看门狗策略：连续心跳失败计数、达阈值 best-effort halt、恢复时写审计事件；**实机回归** 用 moce 臂真机跑通接入-执行-回报全链路；**D4** 收口实机准备清单文档。
+
+### F5.0：car_agent 自包含实机 driver
+
+2026-08-04 的真实小车接入需求单项重启 F5.0，不解冻 F5.1-F5.3/F6。实现选择根目录 `car_agent/` local-driver bundle，复用既有 manifest loader、PhysicalDriver、WatchRuntime 与 SafetyGate，不改 builtin registry、core transport、请求/Chat/API 或 SAFETY 文件真源。bundle 自带异步 TCP/UTF-8 NDJSON 客户端，严格核验 `moce-physical-agent/v1`、`moce-car`、`car_agent` 与健康/必要能力；请求紧凑单行且小于 2048 bytes，按 `id` 跳过额外响应，只依赖 `ok`/`error.code`，不自动重连或重放未知结果动作。
+
+默认配置不含本地运动包络，因此连接前后都只发布 `observe/stop`；只有同时配置 `max_abs_speed` 与 `max_duration_ms` 且远端声明 `drive` 才发布需审批的 `drive_for`。一个 Gate-approved execute 内按绝对 deadline 与 800ms 固件 watchdog 续发：下一帧从前一发送时刻调度，慢 ACK 不叠加 refresh 延迟；是否需要尾帧也从 `sent_at + 700ms` 的保守覆盖判断，测试同时锁定 drive→drive 与最后 drive→stop 均小于 800ms。迟到 ACK 不报告 completed；clamp、有效 speed 不符、电机不可用、远端错误、超时和取消均尝试最终 stop。任何未确认 stop（包括握手基线）都会断开 transport、清空远端运动能力，防止同一批次后续 action 继续续租。`halt()` 明确停车，`disconnect()` 明确只释放旧 owner 自身连接。
+
+测试使用真实 asyncio loopback TCP server 覆盖身份/健康/能力拒绝、NDJSON 分帧与畸形 envelope、远端错误码、无包络 fail closed、慢响应 cadence、绝对 deadline、取消、停车失败失效、Watch hardware 审批和 Gate-before-execute；样例配置与双语 README 固定“默认不能动”、单 watch、可信 2.4GHz、LLM 本地设置与车轮架空流程。最终证据：car driver/example `52 passed`；loader/manifest/safety/watch/timeout 受影响矩阵 `131 passed`；Python full `521 passed, 2 warnings`（既有 Starlette TestClient deprecation 与 pytest cache 权限提示）；两轮独立终审最终 Critical=0、Important=0。尚未提供真实小车 IP 与实测安全包络，因此本轮只完成软件/协议 fake 联调，**不声称真实连接或运动已验收**。
 
 ### A1 系列：官方 SDK 与聊天体验（重构后期补做）
 
@@ -599,6 +608,7 @@ brief §2 记的 P1：`streamMessages` 挂在 Dashboard 顶层，聊天流式输
 89. **Dashboard page key 只保留唯一内容归属，不保留隐藏兼容别名**（C6）：直接退役 `world/safety/robots`，由 `state/hardware` 接管，并用新页正向覆盖与旧 key 负断言证明能力未丢失；放弃 alias/redirect，因为这些 key 只是无 URL 路由的前端内部状态，并非 API/TUI 契约，保留它们只会延续双导航真源。历史 Proposal localStorage 也只按当前 `PAGE_KEYS` 白名单读取，旧 key 自然失效。
 90. **本机根路径 Dashboard 先用 query 表达页面，不引入路由库或后端 clean-path fallback**（C6.1）：选择 `?page=<page-key>`，因为它能在不改变 FastAPI 静态托管与依赖图的前提下提供直达、刷新和 history；缺省 `/` 继续兼容 overview，显式非法 key 才 replace 归一。放弃 `/actions` 一类 clean path 与 404 页面，因为当前不是公网多路径应用，收益不足以覆盖后端 fallback、部署与测试面扩张。
 91. **流式重渲染采用 rAF 攒批 + 分层 memo，不引状态管理库、不先做全局 state 下沉**（C7）：选择 `requestAnimationFrame` 合帧（而非固定毫秒节流），配 generation 隔离陈旧回调；`MessageContent`/`MarkdownBlock` 与常驻组件 `React.memo` + 关键 handler `useCallback`，把每 token O(历史) 的 Markdown 重解析压到 O(尾块)，并让流式无关组件退出渲染。放弃方案①的"彻底版"（把 `streamMessages` 下沉进 ChatPanel/独立 store），因为现有分层已吃掉主要卡顿且改动面小可回滚；`streamMessages` 仍留在 Dashboard 顶层，Dashboard 本体每帧至多重渲染一次，若 profiling 仍显示瓶颈再下沉。保留 `idleWatchTick` SSE 去重不动。
+92. **设备专用 driver 先随硬件 bundle 交付，运动能力以本地实测包络 opt-in**（F5.0）：选择 `car_agent/` local driver + 标准库 asyncio stream，放弃在首台 Level 0 小车上提前抽象 core TCP/NDJSON transport 或 builtin registry。固件 ±60 只是技术夹限，不是实车安全值；缺任一速度/时长上限就不发布运动。未知动作结果不重放，未确认 stop 立即断连并撤销运动，fresh handshake 才能恢复。
 
 ## 4. 经验教训（流程侧）
 
@@ -606,6 +616,7 @@ brief §2 记的 P1：`streamMessages` 挂在 Dashboard 顶层，聊天流式输
 - **快照式文档过期极快**：REFACTOR-LOG/system-summary 写完次日即失真；解法是活账本（SPEC §4）+ 每轮更新一行。
 - **git/CI 基建要跟上纪律**：长期单分支不 push、无 CI、测试对宿主环境敏感（代理变量/Python 版本），均记为工程欠账。
 - **mock 测不出阻塞类缺陷**（W1 的教训）：凡是"永不失败"的测试替身，都在掩盖一类真实故障模式；需要故意注入挂死/超时的对抗性测试。
+- **watchdog 测试必须覆盖最后一条命令到停车，且覆盖窗口从发送时刻计算**（F5.0 的教训）：只看相邻 drive gap 会漏掉尾部提前 watchdog；从 ACK 时刻重新起算会把响应延迟错误地加回剩余覆盖。fake server 应记录 drive/stop 到达时刻，慢响应正例同时断言 drive→drive 与 tail→stop 都小于设备 watchdog。
 - **LLM 实验先固定凭据源与 provider 能力，再谈 planner 质量**（F0 的教训）：同一个 OpenAI-compatible 入口可能不支持 `response_format`/JSON mode；批量实验要先用 `.env` 连通、记录模型能力，再靠本地 schema 校验兜底，否则会把 provider 兼容问题误读成 planner/Gate 问题。
 - **结构化 streaming 的降级边界必须按“是否已产出 byte”定义**（R5）：按异常类型无条件重试会把一次 turn 偷换成两次不一致决策；producer 测试必须同时断言 early delta、midstream abort、close 和零 draft persistence。
 - **后端退役要同时保迁移旁路与清 UI 口径**（B6 的教训）：删除 factory 分支不够，CLI 迁移、state-check、前端说明、e2e mock、操作手册和旧 handoff 都可能继续暴露退役后端。

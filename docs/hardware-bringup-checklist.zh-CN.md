@@ -158,6 +158,40 @@ FastAPI 后端，默认不启动 watch：
 5. 每次只提交一个动作，观察完成后再继续。
 6. 禁止一上来跑大幅运动、复杂 pick/place、多步任务、自动循环任务或带不确定目标的自然语言任务。
 
+## car_agent 小车准备小节
+
+参考：
+
+- `car_agent/README.zh-CN.md`
+- `car_agent/physical-agent.yaml`
+- `car_agent/physical_driver.yaml`
+
+配置重点：
+
+- 将 `host: REPLACE_WITH_CAR_IP` 替换为小车当前 DHCP 地址；默认 TCP 端口为 `8080`。
+- 样例故意不配置 `max_abs_speed` 与 `max_duration_ms`，因此首次连接只发布 `observe` 和 `stop`。
+- `max_abs_speed` 与 `max_duration_ms` 必须在轮子离地标定后同时填写；只填一项会被 manifest 拒绝。
+- driver 只接受 `protocol: moce-physical-agent/v1`、`device: moce-car`、`project: car_agent` 的固件身份。
+- 小车与上位机必须处于同一个可信 2.4GHz 网络；固件没有鉴权或 TLS，同一时刻只运行一个控制客户端。
+- 当前 driver 只通过 scripted TCP fake 与 Watch/SafetyGate 集成测试，尚未完成真实小车连接或运动验收。
+
+首次连接顺序：
+
+```powershell
+.\.venv\Scripts\physical-agent.exe init --config car_agent\physical-agent.yaml
+.\.venv\Scripts\physical-agent.exe state-check --config car_agent\physical-agent.yaml
+.\.venv\Scripts\physical-agent.exe doctor --config car_agent\physical-agent.yaml
+.\.venv\Scripts\physical-agent.exe watch --config car_agent\physical-agent.yaml
+```
+
+在另一个终端运行：
+
+```powershell
+.\.venv\Scripts\physical-agent.exe inspect --config car_agent\physical-agent.yaml
+```
+
+第一阶段只验证连接、`observe`、`stop`、watchdog/TOF 字段和审计记录。确认轮子离地固定、物理断电可立即触达、方向和最低稳定 PWM 后，再同时加入保守的运动上限并重启 watch。第一次 `drive_for` 应为单条、短时、低 PWM、人工审批动作；软件 `stop`、800 ms watchdog 和 TOF 观察均不能替代硬件急停或断电。
+
 ## 小智 xiaozhi 准备小节
 
 参考：

@@ -2,7 +2,7 @@
 
 > 配套 `SPEC.zh-CN.md` §4 矩阵使用：矩阵管"做什么/状态"，本册管"怎么做"。每项含：思路、关键文件、坑、验收。
 > 写给后续执行者（人或 agent）。动工前先读 SPEC §0 不变量与 REFACTORING §3 决策先例；每项动工时按惯例先出一份轮次 brief。
-> 最后更新：2026-07-21
+> 最后更新：2026-08-10
 
 ---
 
@@ -21,6 +21,16 @@
 **当前进度**：R3-R8 的删除与双轨门禁均已完成并有提交/远端 CI 证据。R8 已完成收口：正式 current docs 与示例统一到 SQLite/structured `AgentOutput`/独立 watch 主链；删除可陈旧的 `ChatPlan.actions` 第三份投影和 chat-side `executed=0` 心智残留；proposal/chat/task 与 approve/reject 的 200 响应写入 typed OpenAPI；wheel clean-install、真实 Chromium、TUI、Python full、Safety AST/grep 与文档 golden 均通过。实现 closure commit `c4da4f9`，fork Push run `29476327424`、PR run `29476329954` 均成功；evidence closure `33b062b`，fork Push run `29477199756`、PR run `29477202468` 均成功。旧 fence-only chat 只显示普通文本，Action Board、approve/reject mutation、pending/approval/SafetyGate 与 watch 唯一执行权保持不变；冻结项不自动恢复。
 
 **R8.1 review hardening（已完成）**：只关闭阶段 review 发现的 LOG 多进程 mirror/安全收尾、in-progress Gate evidence 与 claim owner 关联、`ChatPlan.agent_output` 嵌套 OpenAPI 及证据账本缺口。实现提交为 `6d53db3`、`4c9c6a4` + `c38e3ec`、`89f84c8`，review follow-up 为 `241fe8d` terminal final owner、`fc282cf` newest raw owner Gate validation + real dependency path、`b2c93bb` denial-only fallback。早期定向/阶段证据保留：Task 1 focused `60 passed`、group `177 passed`、阶段 full `439 passed`，Task 2 combined `127 passed`，Task 3 focused `78 passed + 78 passed`。最终本地证据（2026-07-17）：Python full `462 passed, 1 warning`；TUI typecheck/test/build `61 passed`；frontend `tsc -b && vite build` （3309 modules）与真实 Chromium `27 passed`；clean-wheel base/server-extra smoke 通过；多进程 LOG + halt + Gate owner + OpenAPI + Safety AST + docs/golden/Moce 专项 `71 passed`；受影响 state/projection/API/MCP/watch/safety `152 passed`；`git diff --check`、tracked dist、退役 production markers 与受保护 snapshot diff 均 clean；独立终审经四轮 fix/re-review 后 Critical=0、Important=0、Minor=0。远端 closure 证据（2026-07-17）：implementation/local closure `8438cb7`；fork Push run `29553985591`、PR run `29553987358` 均 completed success，headSha 均为 `8438cb7bf5f356021cb602908552a069e8227bc4`。PR 保持 OPEN + draft。
+
+## A1.1b LLM 结构化输出错误处理硬化
+
+**实现口径（2026-08-10）**：chat/planner 使用 `agent/llm_contracts.py` 的封闭 Pydantic model 同时生成 provider schema 并完成本地字段验证；adapter 保守预检 strict 兼容性，兼容时走 `json_schema`，含自由 JSON 或 provider 不支持组合关键字的契约直接走 JSON mode。非流式只对 JSON/Pydantic 契约错误修复一次，耗尽返回 `StructuredOutputError`，并写 validation-stage trace。
+
+**边界**：修复发生在 canonical output、Draft 或 Action 被接受/持久化前；流式一旦产出 provider byte，只终止当前 turn，不二次调用。provider/transport/refusal/schema 编程错误及 Gate、expected、action 失败均不重试；结构化输出耗尽在 explicit/auto chat 都 fail closed，只有非结构化 provider 可用性错误保留既有 auto fallback；不引入新 LLM 框架。
+
+**坑**：provider format fallback、validation repair 与 auto replan 是三件事；Pydantic 单真源不等于收紧 public/persistence model；`expected` 继续是可形成 skipped 的诊断元数据；公开 issue 只保留脱敏的 path/code；流式 reply 校验不得改写已经输出的空白字符。
+
+**验收**：覆盖首次合法、一次修复成功、修复耗尽、schema bug、429/timeout/refusal、unknown field、stream partial 与零 pending action；API 不暴露裸模型错误，trace 可关闭。专项 `143 passed, 1 warning`；Python full `555 passed, 1 warning`；独立终审无 P0/P1。
 
 ## F0 LLM planner 实验
 

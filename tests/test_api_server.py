@@ -26,7 +26,11 @@ from physical_agent.api.server import (
     create_app,
 )
 from physical_agent.config import write_default_config
-from physical_agent.llm import OpenAICompatibleError, llm_settings_path
+from physical_agent.llm import (
+    OpenAICompatibleError,
+    StructuredOutputError,
+    llm_settings_path,
+)
 from physical_agent.protocol.schemas import Observation
 from physical_agent.state import open_state_store
 
@@ -1137,6 +1141,117 @@ def test_api_chat_uses_chat_runtime_llm_when_settings_exist(tmp_path, monkeypatc
     assert messages[0]["content"] == "hello from API"
 
 
+def test_api_chat_maps_structured_output_exhaustion_to_sanitized_502(
+    tmp_path, monkeypatch
+):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+
+    class FakeRuntime:
+        def respond(self, message):
+            raise StructuredOutputError(
+                "RAW_PROVIDER_SECRET is not allowed",
+                code="retries_exhausted",
+                retryable=False,
+                attempts=2,
+                issues=[
+                    {
+                        "path": "/intent",
+                        "code": "schema_enum",
+                        "message": "RAW_PROVIDER_SECRET",
+                    }
+                ],
+            )
+
+    monkeypatch.setattr(
+        api_server_module,
+        "_new_chat_runtime",
+        lambda config, **kwargs: FakeRuntime(),
+    )
+    client = TestClient(create_app(config_path))
+
+    response = client.post(
+        "/api/chat",
+        json={"message": "hello", "planner": "llm"},
+    )
+
+    assert response.status_code == 502
+    body = response.json()
+    assert body["details"] == {
+        "code": "llm_output_invalid",
+        "reason": "retries_exhausted",
+        "attempts": 2,
+        "issues": [{"path": "/intent", "code": "schema_enum"}],
+    }
+    assert "RAW_PROVIDER_SECRET" not in response.text
+    assert store.read_actions()["pending"] == []
+
+
+def test_api_task_structured_output_failure_creates_no_pending_action(
+    tmp_path, monkeypatch
+):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+
+    def fail_submit_task(self, task, **kwargs):
+        raise StructuredOutputError(
+            "invalid planner output",
+            code="schema_mismatch",
+            retryable=True,
+            issues=[
+                {
+                    "path": "/actions/0/robot",
+                    "code": "schema_minLength",
+                    "message": "invalid",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(
+        api_server_module.ProposalService,
+        "submit_task",
+        fail_submit_task,
+    )
+    client = TestClient(create_app(config_path))
+
+    response = client.post("/api/tasks/submit", json={"task": "look around"})
+
+    assert response.status_code == 502
+    assert response.json()["details"]["code"] == "llm_output_invalid"
+    assert response.json()["details"]["reason"] == "schema_mismatch"
+    assert store.read_actions()["pending"] == []
+
+
+def test_api_schema_programming_error_is_500_not_output_502(tmp_path, monkeypatch):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+
+    class FakeRuntime:
+        def respond(self, message):
+            raise StructuredOutputError(
+                "local schema is invalid",
+                code="schema_invalid",
+                retryable=False,
+                issues=[{"path": "/", "code": "schema_invalid", "message": "bad"}],
+            )
+
+    monkeypatch.setattr(
+        api_server_module,
+        "_new_chat_runtime",
+        lambda config, **kwargs: FakeRuntime(),
+    )
+    client = TestClient(create_app(config_path))
+
+    response = client.post("/api/chat", json={"message": "hello", "planner": "llm"})
+
+    assert response.status_code == 500
+    assert response.json()["details"]["code"] == "llm_schema_invalid"
+    assert response.json()["details"]["reason"] == "schema_invalid"
+
+
 def test_api_chat_falls_back_to_rule_based_without_llm_settings(tmp_path, monkeypatch):
     TestClient = _client_or_skip()
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
@@ -1307,6 +1422,49 @@ def test_api_chat_stream_sends_sanitized_error_event(tmp_path, monkeypatch):
     assert [event["type"] for event in events] == ["start", "error"]
     assert "<redacted>" in events[-1]["payload"]["message"]
     assert "sk-local-secret-7890" not in events[-1]["payload"]["message"]
+
+
+def test_api_chat_stream_sanitizes_runtime_error_event_and_preserves_code(
+    tmp_path, monkeypatch
+):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+
+    class FakeRuntime:
+        def respond_stream(self, message, **kwargs):
+            yield {
+                "type": "error",
+                "message": "Bearer sk-runtime-secret failed",
+                "code": "llm_output_invalid",
+                "reason": "schema_mismatch",
+                "attempts": 1,
+                "mode": "llm",
+                "reply": "",
+            }
+
+    monkeypatch.setattr(
+        api_server_module,
+        "_new_chat_runtime",
+        lambda config, **kwargs: FakeRuntime(),
+    )
+
+    client = TestClient(create_app(config_path))
+    with client.stream(
+        "POST",
+        "/api/chat/stream",
+        json={"message": "hello", "stream_id": "stream-runtime-error"},
+    ) as response:
+        assert response.status_code == 200
+        events = _sse_events("".join(response.iter_text()))
+
+    assert [event["type"] for event in events] == ["start", "error"]
+    payload = events[-1]["payload"]
+    assert payload["message"] == "Bearer <redacted> failed"
+    assert payload["code"] == "llm_output_invalid"
+    assert payload["reason"] == "schema_mismatch"
+    assert payload["attempts"] == 1
+    assert "sk-runtime-secret" not in json.dumps(payload)
 
 
 def test_api_chat_stream_abort_registry_stops_before_consuming_runtime(tmp_path, monkeypatch):

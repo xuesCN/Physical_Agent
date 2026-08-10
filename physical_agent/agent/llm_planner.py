@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
-import re
 from typing import Any
 
 from physical_agent.agent.context_builder import (
@@ -10,48 +8,15 @@ from physical_agent.agent.context_builder import (
     ContextBudget,
     build_planner_context,
 )
+from physical_agent.agent.llm_contracts import ACTION_PLAN_SCHEMA, PlannerLLMResponse
 from physical_agent.agent.planner import Planner
 from physical_agent.agent.rule_based import RuleBasedPlanner
-from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
-from physical_agent.protocol.expectations import EXPECTED_JSON_SCHEMA
-from physical_agent.protocol.actions import SAFETY_INTENT_JSON_SCHEMA
+from physical_agent.llm import (
+    OpenAICompatibleClient,
+    OpenAICompatibleSettings,
+    ProviderRefusalError,
+)
 from physical_agent.protocol.schemas import Action
-
-
-ACTION_PLAN_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["actions"],
-    "properties": {
-        "refusal_reason": {"type": "string"},
-        "actions": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["robot", "capability", "params", "reason", "depends_on"],
-                "properties": {
-                    "robot": {"type": "string"},
-                    "capability": {"type": "string"},
-                    "params": {"type": "object", "additionalProperties": True},
-                    "reason": {"type": "string"},
-                    "depends_on": {
-                        "type": "array",
-                        "items": {"type": ["string", "integer"]},
-                    },
-                    "metadata": {
-                        "type": "object",
-                        "additionalProperties": True,
-                        "properties": {
-                            "expected": EXPECTED_JSON_SCHEMA,
-                            "safety_intent": SAFETY_INTENT_JSON_SCHEMA,
-                        },
-                    },
-                },
-            },
-        }
-    },
-}
 
 
 class LLMPlanner(Planner):
@@ -106,14 +71,20 @@ class LLMPlanner(Planner):
             previous_agent_output=previous_agent_output,
             budget=self.context_budget,
         )
-        payload = self.client.structured_json(
-            context.messages,
-            schema=ACTION_PLAN_SCHEMA,
-            schema_name="physical_action_plan",
-            temperature=context.temperature,
-            max_tokens=context.max_tokens,
-            metadata={"physical_agent_surface": "planner"},
-        )
+        try:
+            payload = self.client.structured_json(
+                context.messages,
+                schema=ACTION_PLAN_SCHEMA,
+                schema_name="physical_action_plan",
+                response_model=PlannerLLMResponse,
+                temperature=context.temperature,
+                max_tokens=context.max_tokens,
+                metadata={"physical_agent_surface": "planner"},
+                max_validation_retries=1,
+            )
+        except ProviderRefusalError as exc:
+            self.last_refusal_reason = exc.refusal
+            return []
         actions_data = payload.get("actions", [])
         refusal_reason = payload.get("refusal_reason")
         self.last_refusal_reason = str(refusal_reason) if refusal_reason else None
@@ -138,35 +109,6 @@ class LLMPlanner(Planner):
             )
             actions.append(Action.model_validate(item))
         return actions
-
-
-def _extract_json(text: str) -> dict[str, Any]:
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
-        stripped = re.sub(r"\s*```$", "", stripped)
-    try:
-        value = json.loads(stripped)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", stripped, re.DOTALL)
-        if not match:
-            raise
-        value = json.loads(match.group(0))
-    if not isinstance(value, dict):
-        raise ValueError("LLM planner response must be a JSON object.")
-    return value
-
-
-def _json_safe(value: Any) -> Any:
-    if hasattr(value, "model_dump"):
-        return value.model_dump(mode="json")
-    if isinstance(value, dict):
-        return {key: _json_safe(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_json_safe(item) for item in value]
-    return value
-
-
 def _normalize_depends_on(
     value: Any,
     action_ids: list[str],

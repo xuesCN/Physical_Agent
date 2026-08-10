@@ -1,6 +1,8 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 import physical_agent.agent.chat_runtime as chat_runtime_module
 import physical_agent.cli as cli_module
 from typer.testing import CliRunner
@@ -8,7 +10,13 @@ from typer.testing import CliRunner
 from physical_agent.agent.chat_runtime import ChatRuntime
 from physical_agent.application.proposals import ProposalService
 from physical_agent.drivers.mock_arm import MockArmDriver
-from physical_agent.llm import StreamChunk, llm_settings_path, write_llm_settings_file
+from physical_agent.llm import (
+    ProviderRefusalError,
+    StreamChunk,
+    StructuredOutputError,
+    llm_settings_path,
+    write_llm_settings_file,
+)
 from physical_agent.quickstart import setup_project
 from physical_agent.protocol.schemas import Action, Observation
 from physical_agent.state import open_state_store
@@ -287,30 +295,207 @@ def test_chat_runtime_stream_writes_completed_assistant_message(tmp_path, monkey
 
     class FakeClient:
         def stream_structured_json(self, messages, **kwargs):
-            yield StreamChunk(kind="message", text='{"reply":"hel')
+            yield StreamChunk(kind="message", text='{"reply":" hel')
             yield StreamChunk(
                 kind="message",
-                text='lo","intent":"chat","steps":[],"actions":[],"memory":[]}',
+                text='lo ","intent":"chat","steps":[],"actions":[],"memory":[]}',
             )
 
         def parse_structured_json_text(self, content, **kwargs):
-            return json.loads(content)
+            response_model = kwargs["response_model"]
+            return response_model.model_validate_json(content).model_dump(
+                mode="json", exclude_none=True
+            )
 
     monkeypatch.setattr(runtime, "_llm_client", lambda: FakeClient())
 
     events = list(runtime.respond_stream("hello"))
 
     assert [event["type"] for event in events] == ["delta", "delta", "done"]
-    assert events[-1]["reply"] == "hello"
+    assert events[-1]["reply"] == " hello "
     store = open_state_store(config_path=config_path)
     messages = store.read_chat()["messages"]
     assert [item.role for item in messages] == ["user", "assistant"]
-    assert messages[-1].content == "hello"
+    assert messages[-1].content == " hello "
     assert messages[-1].metadata["stream_status"] == "completed"
     assert messages[-1].metadata["partial"] is False
     assert "draft_actions" not in messages[-1].metadata
     assert "chat_contract" not in messages[-1].metadata
     assert "has_structured_draft" not in messages[-1].metadata
+    assert store.read_actions()["pending"] == []
+
+
+@pytest.mark.parametrize("planner_name", ["llm", "auto"])
+def test_chat_runtime_nonstream_structured_failure_closes_persisted_turn(
+    tmp_path, monkeypatch, planner_name
+):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name=planner_name,
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+
+    class FakeClient:
+        def structured_json(self, messages, **kwargs):
+            raise StructuredOutputError(
+                "RAW_PROVIDER_SECRET violated the schema",
+                code="retries_exhausted",
+                retryable=False,
+                attempts=2,
+                issues=[
+                    {
+                        "path": "/intent",
+                        "code": "schema_enum",
+                        "message": "RAW_PROVIDER_SECRET",
+                    }
+                ],
+            )
+
+    monkeypatch.setattr(runtime, "_llm_client", lambda: FakeClient())
+
+    with pytest.raises(StructuredOutputError):
+        runtime.respond("look around")
+
+    store = open_state_store(config_path=config_path)
+    messages = store.read_chat()["messages"]
+    assert [message.role for message in messages] == ["user", "assistant"]
+    assert "RAW_PROVIDER_SECRET" not in messages[-1].content
+    assert "RAW_PROVIDER_SECRET" not in json.dumps(messages[-1].metadata)
+    assert messages[-1].metadata["code"] == "llm_output_invalid"
+    assert messages[-1].metadata["attempts"] == 2
+    plan = store.read_plan()["plan"]
+    assert plan.status == "error"
+    assert plan.agent_output is None
+    assert store.read_actions()["pending"] == []
+
+
+def test_chat_runtime_stream_validation_failure_is_terminal_and_sanitized(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="llm",
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+
+    class FakeClient:
+        stream_calls = 0
+
+        def stream_structured_json(self, messages, **kwargs):
+            self.stream_calls += 1
+            yield StreamChunk(
+                kind="message",
+                text=(
+                    '{"reply":"partial","intent":"RAW_PROVIDER_SECRET",'
+                    '"steps":[],"actions":[],"memory":[]}'
+                ),
+            )
+
+        def parse_structured_json_text(self, content, **kwargs):
+            raise StructuredOutputError(
+                "RAW_PROVIDER_SECRET is not an allowed intent",
+                code="schema_mismatch",
+                retryable=True,
+                issues=[
+                    {
+                        "path": "/intent",
+                        "code": "schema_enum",
+                        "message": "RAW_PROVIDER_SECRET",
+                    }
+                ],
+            )
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(runtime, "_llm_client", lambda: fake_client)
+
+    events = list(runtime.respond_stream("hello"))
+
+    assert [event["type"] for event in events] == ["delta", "error"]
+    assert fake_client.stream_calls == 1
+    error = events[-1]
+    assert error["code"] == "llm_output_invalid"
+    assert error["reason"] == "schema_mismatch"
+    assert "RAW_PROVIDER_SECRET" not in error["message"]
+    assert error["agent_output"] is None
+    store = open_state_store(config_path=config_path)
+    assistant = store.read_chat()["messages"][-1]
+    assert assistant.metadata["stream_status"] == "error"
+    assert assistant.metadata["partial"] is True
+    assert "RAW_PROVIDER_SECRET" not in json.dumps(assistant.metadata)
+    assert store.read_plan()["plan"].agent_output is None
+    assert store.read_actions()["pending"] == []
+
+
+def test_chat_runtime_stream_partial_reply_then_refusal_fails_closed(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="llm",
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+
+    class FakeClient:
+        stream_calls = 0
+
+        def stream_structured_json(self, messages, **kwargs):
+            self.stream_calls += 1
+            yield StreamChunk(kind="message", text='{"reply":"partial')
+            raise ProviderRefusalError("Policy refusal.")
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(runtime, "_llm_client", lambda: fake_client)
+
+    events = list(runtime.respond_stream("hello"))
+
+    assert [event["type"] for event in events] == ["delta", "error"]
+    assert fake_client.stream_calls == 1
+    assert events[-1]["reason"] == "provider_incomplete"
+    assert events[-1]["agent_output"] is None
+    assert "Policy refusal" not in events[-1]["reply"]
+    store = open_state_store(config_path=config_path)
+    assistant = store.read_chat()["messages"][-1]
+    assert assistant.content == "partial"
+    assert assistant.metadata["stream_status"] == "error"
+    assert store.read_actions()["pending"] == []
+
+
+def test_chat_runtime_stream_refusal_before_reply_is_one_reply_only_turn(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="auto",
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+
+    class FakeClient:
+        def stream_structured_json(self, messages, **kwargs):
+            raise ProviderRefusalError("Policy refusal.")
+            yield  # pragma: no cover - keep this method a generator.
+
+    monkeypatch.setattr(runtime, "_llm_client", lambda: FakeClient())
+
+    events = list(runtime.respond_stream("hello"))
+
+    assert [event["type"] for event in events] == ["delta", "done"]
+    assert events[-1]["reply"] == "Policy refusal."
+    assert events[-1]["agent_output"] is None
+    store = open_state_store(config_path=config_path)
+    assistant = store.read_chat()["messages"][-1]
+    assert assistant.metadata["refusal_reason"] == "Policy refusal."
     assert store.read_actions()["pending"] == []
 
 

@@ -41,6 +41,7 @@ from physical_agent.llm import (
     LLMSettingsError,
     OpenAICompatibleClient,
     OpenAICompatibleSettings,
+    StructuredOutputError,
     llm_settings_path,
     public_llm_settings_summary,
     resolve_llm_settings_values,
@@ -310,12 +311,11 @@ def create_app(
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(_request: Request, exc: Exception) -> Any:
-        # Endpoints only translate ApiRequestError themselves; anything else
-        # would otherwise surface to the client as a bare "Internal Server
-        # Error" with no way to see the cause from the dashboard.
+        # Unexpected exceptions can contain provider output, credentials, or
+        # local paths.  Detailed diagnostics stay in server-side logs/traces.
         return JSONResponse(
             status_code=500,
-            content={"ok": False, "message": f"{type(exc).__name__}: {exc}"},
+            content={"ok": False, "message": "Internal server error."},
         )
 
     @app.get("/api/health")
@@ -950,6 +950,8 @@ class ApiController:
                 task,
                 proposed_by="api",
             )
+        except StructuredOutputError as exc:
+            raise _structured_output_api_error(exc) from exc
         except ValueError as exc:
             raise ApiRequestError(
                 f"Task produced an invalid action proposal: {exc}",
@@ -995,7 +997,10 @@ class ApiController:
             enable_code_skills=False,
             enable_hardware_integration=False,
         )
-        response = runtime.respond(message)
+        try:
+            response = runtime.respond(message)
+        except StructuredOutputError as exc:
+            raise _structured_output_api_error(exc) from exc
         config, store = self._store(require_exists=True)
         store.append_log("API chat replied without executing watch.", actor="api")
         state = self._state(config, store)
@@ -1138,10 +1143,17 @@ class ApiController:
                         {
                             "reply": item.get("reply", ""),
                             "mode": item.get("mode", "rule_based"),
-                            "message": item.get("message", ""),
+                            "message": _sanitize_api_message(
+                                str(item.get("message", "")),
+                                self.safe_resolved_llm_settings_values(),
+                            ),
                             "state": _json_safe(state),
                         }
                     )
+                    if event_type == "error":
+                        for key in ("code", "reason", "attempts"):
+                            if item.get(key) is not None:
+                                payload_data[key] = _json_safe(item[key])
                 else:
                     payload_data.update(_json_safe(item))
                 yield {"type": event_type, "payload": payload_data}
@@ -1810,6 +1822,42 @@ def _api_chat_planner(value: str | None) -> str:
     if planner in {"rule_based", "rules", "offline"}:
         return "rule_based"
     return "auto"
+
+
+def _structured_output_api_error(exc: StructuredOutputError) -> ApiRequestError:
+    schema_programming_error = exc.code in {
+        "schema_invalid",
+        "schema_model_mismatch",
+    }
+    status_code = 500 if schema_programming_error else 502
+    return ApiRequestError(
+        "The model returned an invalid structured response; no action was created.",
+        status_code=status_code,
+        details={
+            "code": (
+                "llm_schema_invalid"
+                if schema_programming_error
+                else "llm_output_invalid"
+            ),
+            "reason": exc.code,
+            "attempts": exc.attempts,
+            "issues": _public_structured_issues(exc),
+        },
+    )
+
+
+def _public_structured_issues(exc: StructuredOutputError) -> list[dict[str, str]]:
+    public: list[dict[str, str]] = []
+    for issue in exc.issues[:12]:
+        path = str(issue.get("path") or "/")
+        code = str(issue.get("code") or "validation")
+        public.append(
+            {
+                "path": path[:200],
+                "code": re.sub(r"[^a-zA-Z0-9_.-]", "_", code)[:80],
+            }
+        )
+    return public
 
 
 def _sanitize_api_message(message: str, settings: dict[str, str]) -> str:

@@ -2,7 +2,7 @@
 
 > 本文合并了原 optimization-spec（安全不变量）、plan-f（当前目标）与 traceability-matrix（账本），原件已删除、git 历史可查。历史过程见 `REFACTORING.zh-CN.md`。
 > **维护规则**：每轮 session 收尾更新 §4 矩阵一行 → commit → push；里程碑拆分时拆行记录；状态以验收测试通过为准。
-> 最后更新：2026-08-03
+> 最后更新：2026-08-10
 
 ## 0. 安全边界（三层：宪法 / 授权策略 / 工程纪律）
 
@@ -86,6 +86,7 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | VNext-1 | AgentOutput + trusted PlanCompiler + assurance task DAG | `agent-architecture-vnext.zh-CN.md` | ✅ 2026-07-10 本轮完成：每个 Action 编译出唯一 mandatory、watch-owned Gate；Approval?/PhysicalAction/Verification? 形成无环依赖；advisory SafetyIntent 进入 schema/prompt；ProposalService、API、MCP、AgentRuntime、Chat draft/tool loop 与 ChatPlan 已接线，定向测试覆盖图不变量与伪造防护 |
 | VNext-2 | materialized AgentOutput + structured feedback + scheduler hardening | `agent-architecture-vnext.zh-CN.md` | ✅ 2026-07-10 本轮完成：`output_projection` 合成当前状态并重建 active tasks；feedback 原子追加；dependency、heartbeat、effective timeout、per-robot claim 已硬化；AgentRuntime 等 verification；Web/TUI 展示 current projection。**这仍不是持久化 obligation engine** |
 | VNext-2b | atomic proposal actions batch | `agent-architecture-vnext.zh-CN.md` | ✅ 2026-07-10 完成：StateStore 增加 `append_pending_actions()`，SQLite 用一个事务归一化并插入整个 batch；ProposalService 只调用 batch API；任一冲突回滚全部 actions，测试覆盖 all-or-nothing |
+| A1.1b | LLM 结构化输出契约与错误恢复硬化 | `specs/002-structured-output-hardening/` | 🟡 2026-08-10 实现与本地验收完成：chat/planner 的 LLM-facing schema 收敛为 Pydantic 单真源；strict-compatible 契约走 `json_schema`，开放 JSON 走 JSON mode + 本地强校验；非流式契约错误最多修复一次，耗尽返回 typed error，API 与 validation trace 已收口；流式产出 byte 后不重调，失败不产生 `AgentOutput` 或 pending action；provider refusal 在 Chat/Responses、流式/非流式均优先 fail closed。专项 `143 passed, 1 warning`，Python full `555 passed, 1 warning`；待 commit/push 后转 ✅。本条是用户明确请求的 A1 维护例外，不解冻 F0、自动 replan、VNext-4 或 Instructor/LiteLLM。 |
 | A1.3b | 借鉴 ACP typed chunk 暴露 provider reasoning summary | `REFACTORING.zh-CN.md` §2「A1.3b」 | ✅ 2026-07-21 完成：既有 chat SSE 新增 `thought` 事件，React 与 TUI 以“模型推理摘要”默认折叠展示；非 reasoning/Chat Completions 保持 message-only，abort 不持久化 partial summary，`done.agent_output`/ChatPlan 契约不变。显式决策保持：这只是 UI 可观测性改进；不新增数据库表，摘要只进入 completed chat metadata，不进入 PlanCompiler、Action Board、feedback、Gate、审批依据或 LLM 上下文；不引入 Run/Turn/Event ledger，不引入 registry/read model，VNext-4 其余部分继续冻结。本决定不构成 VNext-4 重启；未来仍只有出现可复现的真实需求并形成显式 SPEC 决策后，才可重启对应冻结部分。验收：Python full `469 passed, 1 warning`；Safety smoke `32 passed`；TUI typecheck/build 通过、full `138 passed`；frontend `tsc -b && vite build` 通过（3309 modules）；真实 Chromium `28 passed`；clean-wheel base/server-extra smoke 通过；`git diff --check` clean |
 | VNext-3 | persistent task/obligation state + persisted graph/action transaction | `agent-architecture-vnext.zh-CN.md` | ⏸ R0-R8 冻结：当前 Action Board/feedback 继续作为运行事实，output projection 继续作为 current read model；只有收口后出现明确跨重启 terminal task 恢复需求才重启评审 |
 | VNext-4 | Run/Turn/Event ledger + typed stream + registry/read model | `agent-architecture-vnext.zh-CN.md` | ⏸ R0-R8 冻结：避免在兼容字段与 read model 尚未去重时增加第二套账本/registry；不自动恢复 |

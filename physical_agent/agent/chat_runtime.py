@@ -12,6 +12,7 @@ from physical_agent.agent.code_runtime import CodeSkillRuntime
 from physical_agent.agent.code_router import CodeIntentRouter
 from physical_agent.agent.context_builder import build_context
 from physical_agent.agent.driver_coder import DriverCodingAgent
+from physical_agent.agent.llm_contracts import CHAT_RESPONSE_SCHEMA, ChatLLMResponse
 from physical_agent.agent.onboarding import HardwareIntegrationAssistant
 from physical_agent.agent.rule_based import RuleBasedPlanner
 from physical_agent.agent.skills import SkillRouter
@@ -19,56 +20,21 @@ from physical_agent.agent.tool_loop import OpenAIToolLoop
 from physical_agent.application.plan_compiler import compile_agent_output, task_graph_steps
 from physical_agent.application.output_projection import materialize_agent_output
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config, write_default_config
-from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings, StreamChunk
-from physical_agent.protocol.expectations import EXPECTED_JSON_SCHEMA
+from physical_agent.llm import (
+    OpenAICompatibleClient,
+    OpenAICompatibleSettings,
+    ProviderRefusalError,
+    StreamChunk,
+    StructuredOutputError,
+)
 from physical_agent.protocol.agent_output import AgentOutput
 from physical_agent.protocol.actions import (
-    SAFETY_INTENT_JSON_SCHEMA,
     parse_action_metadata,
 )
 from physical_agent.protocol.retrieval import retrieved_context_payload
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, CodeTaskResult, StrictModel
 from physical_agent.state import StateStore, open_state_store
 
-
-CHAT_RESPONSE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["reply", "intent", "steps", "actions", "memory"],
-    "properties": {
-        "reply": {"type": "string", "minLength": 1},
-        "intent": {"type": "string", "enum": ["chat", "inspect", "act", "remember"]},
-        "steps": {"type": "array", "items": {"type": "string"}},
-        "refusal_reason": {"type": "string"},
-        "actions": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["robot", "capability", "params", "reason", "depends_on"],
-                "properties": {
-                    "robot": {"type": "string"},
-                    "capability": {"type": "string"},
-                    "params": {"type": "object", "additionalProperties": True},
-                    "reason": {"type": "string"},
-                    "depends_on": {
-                        "type": "array",
-                        "items": {"type": ["string", "integer"]},
-                    },
-                    "metadata": {
-                        "type": "object",
-                        "additionalProperties": True,
-                        "properties": {
-                            "expected": EXPECTED_JSON_SCHEMA,
-                            "safety_intent": SAFETY_INTENT_JSON_SCHEMA,
-                        },
-                    },
-                },
-            },
-        },
-        "memory": {"type": "array", "items": {"type": "string"}},
-    },
-}
 
 class ChatReplyTurn(StrictModel):
     kind: Literal["reply"] = "reply"
@@ -264,7 +230,12 @@ class ChatRuntime:
                     memory=memory,
                     retrieved_context=self._retrieved_context(message),
                 )
+            except ProviderRefusalError as exc:
+                response = _provider_refusal_payload(exc.refusal)
             except Exception as exc:
+                if isinstance(exc, StructuredOutputError):
+                    self._persist_nonstream_error(workspace, exc, mode=mode)
+                    raise
                 if (self.planner_name or "").lower() != "auto":
                     raise
                 response = self._respond_with_rules(
@@ -441,8 +412,38 @@ class ChatRuntime:
                         )
                     if turn.reply != base_reply:
                         raise ValueError("Compiled ChatTurn changed the provider reply.")
+                except ProviderRefusalError as exc:
+                    if reply_parts:
+                        raise StructuredOutputError(
+                            "The provider refused after emitting partial reply text.",
+                            code="provider_incomplete",
+                            retryable=False,
+                            issues=[
+                                {
+                                    "path": "/reply",
+                                    "code": "partial_then_refusal",
+                                    "message": "refusal followed partial reply text",
+                                }
+                            ],
+                        ) from exc
+                    response = _provider_refusal_payload(exc.refusal)
+                    intent = response["intent"]
+                    steps = response["steps"]
+                    turn = self._prepare_chat_turn(
+                        response,
+                        capabilities=capabilities,
+                        safety_rules=workspace.read_safety().get("rules", {}),
+                    )
+                    for delta in _text_chunks(turn.reply):
+                        if _stream_cancelled(cancel_check):
+                            turn = None
+                            raise _ChatStreamAborted()
+                        reply_parts.append(delta)
+                        yield {"type": "delta", "delta": delta}
                 except Exception as exc:
                     if isinstance(exc, _ChatStreamAborted):
+                        raise
+                    if isinstance(exc, StructuredOutputError):
                         raise
                     if (
                         not self._auto_mode_requested()
@@ -537,15 +538,22 @@ class ChatRuntime:
                 )
             raise
         except Exception as exc:
+            public_error = _chat_error_message(exc)
             result = self._finish_stream_reply(
                 reply="".join(reply_parts),
                 mode=mode,
                 status="error",
                 intent=intent,
                 steps=steps,
-                error=str(exc),
+                error=public_error,
             )
-            yield {"type": "error", "message": str(exc), **result}
+            error_details = _chat_error_details(exc)
+            yield {
+                "type": "error",
+                "message": public_error,
+                **error_details,
+                **result,
+            }
 
     def _stream_chat_decision_with_llm(
         self,
@@ -616,6 +624,8 @@ class ChatRuntime:
             payload = client.parse_structured_json_text(
                 "".join(raw_parts),
                 schema=CHAT_RESPONSE_SCHEMA,
+                response_model=ChatLLMResponse,
+                metadata={"physical_agent_surface": "chat_stream"},
             )
             response = _normalize_chat_payload(payload)
             if not parser.complete or parser.text != response["reply"]:
@@ -1048,11 +1058,46 @@ class ChatRuntime:
             bundle.messages,
             schema=CHAT_RESPONSE_SCHEMA,
             schema_name="physical_agent_chat_response",
+            response_model=ChatLLMResponse,
             temperature=bundle.temperature,
             max_tokens=bundle.max_tokens,
             metadata={"physical_agent_surface": "chat"},
+            max_validation_retries=1,
         )
         return _normalize_chat_payload(payload)
+
+    def _persist_nonstream_error(
+        self,
+        workspace: StateStore,
+        error: StructuredOutputError,
+        *,
+        mode: str,
+    ) -> None:
+        """Close the already-persisted user turn without storing raw LLM output."""
+
+        message = _chat_error_message(error)
+        plan = ChatPlan(
+            status="error",
+            intent="chat",
+            summary=message,
+            steps=[],
+            needs_watch=False,
+            agent_output=None,
+        )
+        workspace.write_plan(plan)
+        workspace.append_chat_message(
+            "assistant",
+            message,
+            metadata={
+                "intent": "chat",
+                "agent_output": None,
+                "needs_watch": False,
+                "streamed": False,
+                "status": "error",
+                **_chat_error_details(error),
+            },
+        )
+        workspace.append_log(f"Chat {mode} structured output failed closed.", actor="agent")
 
     def _prepare_chat_turn(
         self,
@@ -1723,6 +1768,34 @@ def _normalize_chat_payload(payload: dict[str, Any]) -> dict[str, Any]:
             if payload.get("refusal_reason") is not None
             else None
         ),
+    }
+
+
+def _provider_refusal_payload(refusal: str) -> dict[str, Any]:
+    reason = refusal.strip() or "The model refused this request."
+    return {
+        "reply": reason,
+        "intent": "chat",
+        "steps": [],
+        "actions": [],
+        "memory": [],
+        "refusal_reason": reason,
+    }
+
+
+def _chat_error_message(error: Exception) -> str:
+    if isinstance(error, StructuredOutputError):
+        return "The model returned an invalid structured response; no action was created."
+    return str(error)
+
+
+def _chat_error_details(error: Exception) -> dict[str, Any]:
+    if not isinstance(error, StructuredOutputError):
+        return {}
+    return {
+        "code": "llm_output_invalid",
+        "reason": error.code,
+        "attempts": error.attempts,
     }
 
 

@@ -1,7 +1,7 @@
 # 重构过程
 
 > 本文浓缩自原 33 份 session-handoff 与 22 份 brief（已删除，git 历史可查）。姊妹文档：`SPEC.zh-CN.md`（目标与待办矩阵）。
-> 范围：基线 `8fa197a` → 当前。最后更新：2026-08-04。
+> 范围：基线 `8fa197a` → 当前。最后更新：2026-08-10。
 
 ## 0. 基线与纪律
 
@@ -21,6 +21,7 @@
 | D1-D2 | Transport 抽象 + WS → Serial/Loopback | `55addad` `7b1706a` |
 | D3-D4 | 心跳/halt 挂入循环 → watchdog 策略 → 实机回归与清单 | `14c9dcb` `bc12329` `9cb1978` `25c41e1` |
 | A1 | 官方 SDK → 设置/chat 桥 → 流式/abort → B5 收口 → 深思考 | `9c25e90` `affbda7` `605015c` `b5b6071` `3a807e7` |
+| A1.1b | Pydantic LLM contract 单真源 + 一次非流式 validation repair + typed API/trace | 专项 `143 passed, 1 warning`；Python full `555 passed, 1 warning`；独立终审无 P0/P1；commit/push 待完成 |
 | A1.3b | typed chat chunk + provider reasoning summary 的只读 UI 可观测性 | 本轮提交；Python `469 passed`、TUI `138 passed`、Chromium `28 passed`、clean-wheel smoke 通过 |
 | E0 | GUI 功能对齐（重置/硬件面板/配置注册） | E0 提交 + `29fb512` |
 | W1 | 驱动调用超时保护 | `2f00615` |
@@ -134,6 +135,12 @@ A1 最初被跳过（工具循环建在自研 urllib 客户端上"够用"），�
 ChatRuntime 只把 completed turn 的摘要写入 assistant chat metadata；中途 abort 会关闭同一个 provider iterator，并在 persistence 前丢弃 partial summary。SSE 新增 `thought`，`start/delta/done/aborted/error` 与 `done.agent_output`/ChatPlan 保持不变。React 用默认关闭的 `<details>` 展示完整摘要，Ink TUI 用带折叠标记的单行摘要行展示，两端都标注“模型推理摘要，仅供参考，不是决策依据”。context builder 在回放 chat history 前移除 `reasoning_summary`，负用例同时锁定摘要不进入 PlanCompiler 输入、AgentOutput/Action Board 或 feedback；未新增数据库表，metadata 仍沿用既有 chat persistence。
 
 边界保持：没有修改 watch、driver、SafetyGate、SAFETY.md、审批或执行主链；没有实现 raw CoT、ACP 协议、Run/Turn/Event ledger、registry/read model 或第六入口，VNext-4 其余部分继续冻结。验证：Python full `469 passed, 1 warning`；Safety smoke `32 passed`；TUI typecheck/test/build 通过（`138 passed`）；frontend `tsc -b && vite build` 通过（3309 modules）；真实 Chromium Playwright `28 passed`；clean-wheel base/server-extra smoke 通过；`git diff --check` clean。
+
+### A1.1b：结构化输出契约与错误恢复硬化
+
+历史 A1.1 只解决 provider strict/JSON mode 降级和本地 `jsonschema` 兜底，本轮进一步以 `agent/llm_contracts.py` 的 `ChatLLMResponse` / `PlannerLLMResponse` 建立 LLM-facing Pydantic 单真源；provider schema 与本地验证来自同一 model，public/persistence model 的兼容面不随之收紧。`_strict_schema_compatible()` 保守识别 provider 支持的封闭 schema；含自由 JSON 或不支持组合关键字的 action 契约直接使用 JSON mode，避免制造注定失败的 strict 请求。F4 的 `expected` 继续是容错诊断元数据，坏 check 形成 skipped，不阻止合法 action。
+
+`structured_json()` 将 provider format negotiation 与内容修复分开：只有非流式 JSON/Pydantic 契约错误可修复一次，provider refusal、传输失败和 schema 编程错误立即失败；耗尽后返回稳定 typed error，并记录 attempt/code/issues。task/explicit LLM chat 将模型输出错误映射为 `llm_output_invalid`，auto chat 对 structured exhaustion 同样 fail closed，避免规则 fallback 偷产 Draft；非结构化 provider 可用性错误仍保留旧 fallback。流式继续遵守 R5 的 byte 边界，reply 校验不改写已输出字符，失败不生成 `AgentOutput` 或 pending action。Responses 同时出现 convenience `output_text` 与显式 refusal 时，必须先接受 refusal 语义，不能让文本捷径绕过拒绝。专项验收 `143 passed, 1 warning`；Python full `555 passed, 1 warning`；独立终审无 P0/P1。
 
 ### E0：GUI 功能对齐（还 C3 的账）
 
@@ -582,7 +589,7 @@ brief §2 记的 P1：`streamMessages` 挂在 Dashboard 顶层，聊天流式输
 64. **保留 `gui` 命令，不保留第二 controller**（R1.5）：命令兼容通过正式 FastAPI app factory 实现；legacy 模块只在 R2 门禁通过前作为回退存在，不再是默认入口。
 65. **真实 setup 失败不自动高频重连硬件**（R1.5）：missing init/external lease 可以安全轮询；driver connect/setup 错误 degraded fail-stop，交给显式进程生命周期重试。
 66. **Dashboard 是 wheel package resource，hashed build 必须去陈旧化**（R1.5）：源码 cwd 只能做开发 fallback；增量 wheel 在复制前清目标 dist，并验证 wheel 资源集合与当前 Vite 输出严格相等。
-67. **structured streaming 只能有一次权威决策调用**（R5）：同一 provider stream 同时承载 reply 与 action intents；format fallback 只允许发生在零 byte 阶段，已经产生 byte 后失败就终止该 turn，不能再调用模型拼接第二份 actions。
+67. **structured streaming 只能有一次权威决策调用**（R5）：同一 provider stream 同时承载 reply 与 action intents；format fallback 只允许发生在零 byte 阶段，已经产生 byte 后失败就终止该 turn，不能再调用模型拼接第二份 actions。A1.1b 只在非流式且 canonical output 尚未接受或持久化时，对 JSON/Pydantic 契约错误做至多一次修复；它不是自动 replan，也不适用于 provider/refusal、Gate、expected 或 action 失败。
 68. **兼容 fence 只曾是 structured output 的临时投影，不是输入**（R5/R7）：R5 期间 draft IDs/dependencies 先稳定、compiler 后注入 Gate，再从同一 actions 写 fence；后端从未 fence → AgentOutput。R7 后连该投影也不再输出。
 69. **Stop 的语义包含上游资源释放和零 draft persistence**（R5）：只停浏览器渲染不够；abort 必须 close provider iterator，并在 compile/persist/done 前复查，partial assistant 可留审计但不能带可提交 draft metadata。
 70. **terminal persistence 必须 exactly-once**（R5）：SSE `done` 已落 completed 后，consumer close 只是资源清理，不能再落 cancelled 或降级 ChatPlan。
@@ -619,6 +626,7 @@ brief §2 记的 P1：`streamMessages` 挂在 Dashboard 顶层，聊天流式输
 - **watchdog 测试必须覆盖最后一条命令到停车，且覆盖窗口从发送时刻计算**（F5.0 的教训）：只看相邻 drive gap 会漏掉尾部提前 watchdog；从 ACK 时刻重新起算会把响应延迟错误地加回剩余覆盖。fake server 应记录 drive/stop 到达时刻，慢响应正例同时断言 drive→drive 与 tail→stop 都小于设备 watchdog。
 - **LLM 实验先固定凭据源与 provider 能力，再谈 planner 质量**（F0 的教训）：同一个 OpenAI-compatible 入口可能不支持 `response_format`/JSON mode；批量实验要先用 `.env` 连通、记录模型能力，再靠本地 schema 校验兜底，否则会把 provider 兼容问题误读成 planner/Gate 问题。
 - **结构化 streaming 的降级边界必须按“是否已产出 byte”定义**（R5）：按异常类型无条件重试会把一次 turn 偷换成两次不一致决策；producer 测试必须同时断言 early delta、midstream abort、close 和零 draft persistence。
+- **provider 成功只代表传输完成，不代表结构化结果可用**（A1.1b 的教训）：format fallback 与 validation repair 必须分开观测；本地失败记录 attempt/code/issues，测试同时锁住修复耗尽、公开错误脱敏与零 Draft/Action。
 - **后端退役要同时保迁移旁路与清 UI 口径**（B6 的教训）：删除 factory 分支不够，CLI 迁移、state-check、前端说明、e2e mock、操作手册和旧 handoff 都可能继续暴露退役后端。
 - **同名产品动作要拆 UI 文案和数据语义**（F1 的教训）：draft 提交与执行审批都容易被叫 Approve；若文案不拆，用户会误以为点一次就放行执行，或误把提交动作板当成绕过审批。
 - **模型自带的证明必须给人看见**（F4 的教训）：expected 不参与安全裁决，但它会影响后续诊断上下文；至少要在 draft/action 详情露出摘要或 raw，避免变成不可见的“模型自证”。

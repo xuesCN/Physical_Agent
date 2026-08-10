@@ -13,7 +13,9 @@ from physical_agent.llm import (
     OpenAICompatibleClient,
     OpenAICompatibleError,
     OpenAICompatibleSettings,
+    ProviderRefusalError,
     StreamChunk,
+    StructuredOutputError,
     llm_settings_path,
     public_llm_settings_summary,
     read_llm_settings_file,
@@ -1099,6 +1101,351 @@ def test_structured_json_fallback_still_validates_schema(fake_openai):
         )
 
 
+def test_structured_json_repairs_one_invalid_response_with_bounded_candidate_context(
+    fake_openai,
+):
+    fake_openai.chat_outputs = [
+        _chat_text("not-json RAW_PROVIDER_SECRET"),
+        _chat_text(json.dumps({"answer": "pong"})),
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["answer"],
+        "properties": {"answer": {"type": "string"}},
+    }
+
+    result = OpenAICompatibleClient(settings).structured_json(
+        [{"role": "user", "content": "ping"}],
+        schema=schema,
+        schema_name="ping_response",
+        max_validation_retries=1,
+    )
+
+    assert result == {"answer": "pong"}
+    calls = fake_openai.instances[0].calls
+    assert len(calls) == 2
+    assert all(call["payload"]["response_format"]["type"] == "json_schema" for call in calls)
+    repair_messages = calls[1]["payload"]["messages"]
+    assert "json_decode" in repair_messages[-1]["content"]
+    assert repair_messages[-2] == {
+        "role": "assistant",
+        "content": "not-json RAW_PROVIDER_SECRET",
+    }
+    assert "RAW_PROVIDER_SECRET" not in repair_messages[-1]["content"]
+
+
+def test_structured_json_exhausts_after_one_repair(fake_openai):
+    fake_openai.chat_outputs = [
+        _chat_text("not-json first"),
+        _chat_text("not-json second"),
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(StructuredOutputError) as info:
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+            },
+            schema_name="ping_response",
+            max_validation_retries=1,
+        )
+
+    assert info.value.code == "retries_exhausted"
+    assert info.value.attempts == 2
+    assert len(fake_openai.instances[0].calls) == 2
+
+
+def test_structured_json_does_not_fallback_for_unrelated_bad_request(fake_openai):
+    fake_openai.chat_outputs = [FakeBadRequestError("context length exceeded")]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(OpenAICompatibleError, match="context length exceeded"):
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+            },
+            schema_name="ping_response",
+            max_validation_retries=1,
+        )
+
+    assert len(fake_openai.instances[0].calls) == 1
+
+
+@pytest.mark.parametrize(
+    "provider_error",
+    [
+        FakeRateLimitError("rate limited"),
+        FakeTimeoutError("timed out"),
+    ],
+)
+def test_structured_json_transport_errors_are_not_content_repaired(
+    fake_openai, provider_error
+):
+    fake_openai.chat_outputs = [provider_error]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(OpenAICompatibleError):
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+            },
+            schema_name="ping_response",
+            max_validation_retries=1,
+        )
+
+    assert len(fake_openai.instances[0].calls) == 1
+
+
+def test_structured_json_refusal_is_not_repaired(fake_openai):
+    fake_openai.chat_outputs = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "refusal": "Policy refusal.",
+                    }
+                }
+            ]
+        }
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(ProviderRefusalError, match="Policy refusal"):
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+            },
+            schema_name="ping_response",
+            max_validation_retries=1,
+        )
+
+    assert len(fake_openai.instances[0].calls) == 1
+
+
+def test_responses_refusal_wins_over_direct_output_text(fake_openai):
+    fake_openai.responses_outputs = [
+        {
+            "output_text": json.dumps({"answer": "must-not-be-accepted"}),
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {"type": "refusal", "refusal": "Policy refusal."}
+                    ],
+                }
+            ],
+        }
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+
+    with pytest.raises(ProviderRefusalError, match="Policy refusal"):
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+            },
+            schema_name="ping_response",
+            max_validation_retries=1,
+        )
+
+    assert len(fake_openai.instances[0].calls) == 1
+
+
+def test_structured_json_rejects_invalid_schema_before_provider_call(fake_openai):
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(StructuredOutputError) as info:
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={"type": "not-a-json-schema-type"},
+            schema_name="broken_response",
+        )
+
+    assert info.value.code == "schema_invalid"
+    assert fake_openai.instances[0].calls == []
+
+
+def test_structured_json_rejects_more_than_one_validation_retry(fake_openai):
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(ValueError, match="must be 0 or 1"):
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={"type": "object"},
+            schema_name="bounded_response",
+            max_validation_retries=2,
+        )
+
+    assert fake_openai.instances[0].calls == []
+
+
+def test_validation_failure_writes_attempt_and_code_trace(
+    fake_openai, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PA_LLM_TRACE", raising=False)
+    fake_openai.chat_outputs = [_chat_text("not-json")]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(StructuredOutputError):
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+            },
+            schema_name="ping_response",
+            metadata={"physical_agent_surface": "validation_test"},
+        )
+
+    records = []
+    for path in (tmp_path / "workspace" / "llm-trace").glob("*.jsonl"):
+        records.extend(
+            json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+        )
+    validation = [record for record in records if record["stage"] == "validation"]
+    assert len(validation) == 1
+    assert validation[0]["surface"] == "validation_test"
+    assert validation[0]["attempt"] == 1
+    assert validation[0]["error_code"] == "invalid_json"
+    assert validation[0]["issues"][0]["code"] == "json_decode"
+
+
+def test_validation_failure_trace_can_be_disabled(fake_openai, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PA_LLM_TRACE", "0")
+    fake_openai.chat_outputs = [_chat_text("not-json")]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(StructuredOutputError):
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+            },
+            schema_name="ping_response",
+        )
+
+    assert not (tmp_path / "workspace" / "llm-trace").exists()
+
+
+def test_stream_chat_refusal_deltas_are_accumulated(fake_openai):
+    fake_openai.chat_outputs = [
+        [
+            {"choices": [{"delta": {"refusal": "Policy "}}]},
+            {"choices": [{"delta": {"refusal": "refusal."}}]},
+        ]
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(ProviderRefusalError) as info:
+        list(
+            OpenAICompatibleClient(settings).stream_chat_text(
+                [{"role": "user", "content": "ping"}]
+            )
+        )
+
+    assert info.value.refusal == "Policy refusal."
+
+
+def test_stream_responses_refusal_deltas_use_done_reason(fake_openai):
+    fake_openai.responses_outputs = [
+        [
+            {"type": "response.refusal.delta", "delta": "Policy "},
+            {"type": "response.refusal.delta", "delta": "refusal."},
+            {"type": "response.refusal.done", "refusal": "Policy refusal."},
+        ]
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+
+    with pytest.raises(ProviderRefusalError) as info:
+        list(
+            OpenAICompatibleClient(settings).stream_chat_text(
+                [{"role": "user", "content": "ping"}]
+            )
+        )
+
+    assert info.value.refusal == "Policy refusal."
+
+
 def test_responses_structured_json_uses_responses_text_format(fake_openai):
     fake_openai.responses_outputs = [_responses_text(json.dumps({"answer": "pong"}))]
     settings = OpenAICompatibleSettings(
@@ -1276,7 +1623,7 @@ def test_llm_planner_parses_actions_from_chat_completion(fake_openai):
     assert actions[1].depends_on == ["act_001"]
     assert actions[1].metadata["expected"][0]["value"] == "tray"
     payload = fake_openai.instances[0].calls[0]["payload"]
-    assert payload["response_format"]["type"] == "json_schema"
+    assert payload["response_format"] == {"type": "json_object"}
 
 
 def test_llm_planner_parses_actions_from_responses_api(fake_openai):
@@ -1314,5 +1661,93 @@ def test_llm_planner_parses_actions_from_responses_api(fake_openai):
     assert [action.capability for action in actions] == ["observe"]
     payload = fake_openai.instances[0].calls[0]["payload"]
     assert "JSON action intents" in payload["instructions"]
-    assert payload["text"]["format"]["type"] == "json_schema"
+    assert payload["text"]["format"] == {"type": "json_object"}
     assert payload["metadata"]["physical_agent_surface"] == "planner"
+
+
+def test_llm_planner_repairs_unknown_action_field_once(fake_openai):
+    fake_openai.chat_outputs = [
+        _chat_text(
+            json.dumps(
+                {
+                    "actions": [
+                        {
+                            "robot": "arm_1",
+                            "capability": "observe",
+                            "params": {},
+                            "reason": "Inspect world state.",
+                            "depends_on": [],
+                            "unexpected": "must be removed",
+                        }
+                    ]
+                }
+            )
+        ),
+        _chat_text(
+            json.dumps(
+                {
+                    "actions": [
+                        {
+                            "robot": "arm_1",
+                            "capability": "observe",
+                            "params": {},
+                            "reason": "Inspect world state.",
+                            "depends_on": [],
+                        }
+                    ]
+                }
+            )
+        ),
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    actions = LLMPlanner(settings=settings).plan(
+        task="look around",
+        capabilities={"robots": {"arm_1": {"capabilities": [{"name": "observe"}]}}},
+        world={"state": {}, "observation": Observation(summary="")},
+    )
+
+    assert [action.capability for action in actions] == ["observe"]
+    calls = fake_openai.instances[0].calls
+    assert len(calls) == 2
+    assert all(
+        call["payload"]["response_format"] == {"type": "json_object"}
+        for call in calls
+    )
+    assert "schema_additionalProperties" in calls[1]["payload"]["messages"][-1]["content"]
+
+
+def test_llm_planner_provider_refusal_returns_no_actions_without_repair(fake_openai):
+    fake_openai.chat_outputs = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "refusal": "Cannot safely help with that request.",
+                    }
+                }
+            ]
+        }
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+    planner = LLMPlanner(settings=settings)
+
+    actions = planner.plan(
+        task="unsafe request",
+        capabilities={"robots": {"arm_1": {"capabilities": [{"name": "observe"}]}}},
+        world={"state": {}, "observation": Observation(summary="")},
+    )
+
+    assert actions == []
+    assert planner.last_refusal_reason == "Cannot safely help with that request."
+    assert len(fake_openai.instances[0].calls) == 1

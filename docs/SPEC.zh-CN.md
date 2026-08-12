@@ -2,7 +2,7 @@
 
 > 本文合并了原 optimization-spec（安全不变量）、plan-f（当前目标）与 traceability-matrix（账本），原件已删除、git 历史可查。历史过程见 `REFACTORING.zh-CN.md`。
 > **维护规则**：每轮 session 收尾更新 §4 矩阵一行 → commit → push；里程碑拆分时拆行记录；状态以验收测试通过为准。
-> 最后更新：2026-08-10
+> 最后更新：2026-08-12
 
 ## 0. 安全边界（三层：宪法 / 授权策略 / 工程纪律）
 
@@ -81,6 +81,7 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | F2 | feedback 时间线 + world 视图 + JSON 树 | §2 | ✅ 2026-07-07 完成：feedback/action approval/refusal_reason 时间线可读，world objects 表格化，capabilities/config/integration 轻量可读；raw JSON 改懒加载树兜底。提交 `58a75b0`。2026-07-08 补 `docs/current-architecture-audit.html` 静态审计阅读页，展示 `docs/current-architecture-audit.md` 内容 |
 | F2.5 | State Overview 产品化收口 | §2/F2 后续收口 | ✅ 2026-07-08 完成：新增 `frontend/src/viewmodels/` formatter 层；Overview 首屏用 AntD Card/Statistic/Table/Descriptions/Tag/List 展示 system/robots/capabilities/environment/world objects；`RawDebug` 仅折叠展示 unknown/raw/backend private 字段。follow-up：非 RawDebug 的 params/schema/raw 展示统一为 Overview capability 风格的轻量摘要；RawDebug 也改为 AntD Collapse/Tree，移除 `react18-json-view` 依赖与 `json-view` chunk |
 | F3 | context_builder 解耦 | §2 | ✅ 2026-07-07 完成 `9cbb540`：统一 chat reply/proposal/tool_loop 与 planner payload；2026-07-10 contextual planner path 补 SAFETY、feedback、previous AgentOutput，feedback 按事件数/字符预算裁剪并保留近期结构化摘要 |
+| F3.1a | context_builder Unicode 序列化与预算口径 | `PLAYBOOK` F3.1a | ✅ 2026-08-12 完成：wire JSON 与 `_stable_json_len()` 统一为 `ensure_ascii=False` 字符口径；四路原始消息、world/capabilities/feedback 中文临界预算均有定点回归，既有四份 golden 零变更。证据：context `16 passed`；调用链矩阵 `57 passed`；Python full `562 passed, 1 warning`。未改 payload 字段/顺序、prompt caching 或 SAFETY 通道 |
 | F4 | 期望-比对-回灌 | §2 | ✅ 2026-07-07 完成 expected 确定性比对；2026-07-10 materializer 将 verification 映射为 checking/passed/failed/skipped，Gate reject 时跳过 PhysicalAction/Verification，AgentRuntime 等 required `expectation_check` 后才判完整完成 |
 | VNext-0 | Proposal application layer + typed metadata + execution boundary + execution_mode | §2/VNext | ✅ 2026-07-10 本轮完成：主要 task/action 入口复用 `ProposalService` 与统一 planner factory；metadata 增加 v1 typed view/correlation 且不能伪造审批；Chat 的旧自动推进参数曾降为兼容 no-op，并已在 R4 完整删除；driver coding 改静态校验；robot 显式区分 simulation/hardware，默认 hardware，hardware 按默认 SAFETY 策略要求审批。**尚不包含统一 Agent loop** |
 | VNext-1 | AgentOutput + trusted PlanCompiler + assurance task DAG | `agent-architecture-vnext.zh-CN.md` | ✅ 2026-07-10 本轮完成：每个 Action 编译出唯一 mandatory、watch-owned Gate；Approval?/PhysicalAction/Verification? 形成无环依赖；advisory SafetyIntent 进入 schema/prompt；ProposalService、API、MCP、AgentRuntime、Chat draft/tool loop 与 ChatPlan 已接线，定向测试覆盖图不变量与伪造防护 |

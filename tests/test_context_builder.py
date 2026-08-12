@@ -68,6 +68,59 @@ def test_context_builder_matches_golden_snapshot(tmp_path, purpose):
     assert _snapshot(bundle) == _read_golden(f"{purpose}.json")
 
 
+@pytest.mark.parametrize("purpose", ["reply", "proposal", "planner", "tool_loop"])
+def test_context_builder_serializes_unicode_without_ascii_escaping(tmp_path, purpose):
+    store = _seed_store(tmp_path)
+
+    bundle = build_context(store, "检查车轮状态", purpose=purpose)
+
+    wire_content = bundle.messages[1]["content"]
+    assert wire_content == json.dumps(bundle.payload, ensure_ascii=False)
+    assert "检查车轮状态" in wire_content
+    assert "\\u68c0" not in wire_content
+    assert json.loads(wire_content) == bundle.payload
+
+
+@pytest.mark.parametrize("field", ["world", "capabilities", "feedback"])
+def test_context_builder_uses_unescaped_unicode_length_for_budgets(tmp_path, field):
+    store = _seed_store(tmp_path)
+    documents = {
+        "world": {
+            "summary": "车轮状态" * 80,
+            "state": {"robots": {"car_1": {"status": "台架待命"}}},
+        },
+        "capabilities": {
+            "robots": {
+                "car_1": {
+                    "kind": "小车",
+                    "capabilities": [
+                        {"name": "观察", "description": "检查车轮状态" * 80}
+                    ],
+                }
+            }
+        },
+        "feedback": {
+            "latest": {"message": "车轮保持架空" * 80},
+            "history": [{"message": "车轮保持架空" * 80}],
+        },
+    }
+    document = documents[field]
+    native_length = len(json.dumps(document, ensure_ascii=False, sort_keys=True))
+    escaped_length = len(json.dumps(document, ensure_ascii=True, sort_keys=True))
+    assert native_length < escaped_length
+    budget = ContextBudget(**{f"{field}_max_chars": native_length})
+
+    payload = build_context(
+        store,
+        "检查上下文预算",
+        purpose="proposal",
+        budget=budget,
+        **{field: document},
+    ).payload
+
+    assert payload[field] == document
+
+
 def test_context_builder_is_read_only(tmp_path):
     store = _seed_store(tmp_path)
     before = _state_snapshot(store)
@@ -184,7 +237,7 @@ def test_context_builder_bounds_structured_feedback_history(tmp_path):
 
     assert len(payload["feedback"]["history"]) <= 10
     assert payload["feedback"]["history"][-1]["action_id"] == "act_079"
-    assert len(json.dumps(payload["feedback"], ensure_ascii=True)) <= 3300
+    assert len(json.dumps(payload["feedback"], ensure_ascii=False, sort_keys=True)) <= 3300
 
 
 def _seed_store(tmp_path):

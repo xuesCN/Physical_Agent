@@ -2,7 +2,7 @@
 
 > 配套 `SPEC.zh-CN.md` §4 矩阵使用：矩阵管"做什么/状态"，本册管"怎么做"。每项含：思路、关键文件、坑、验收。
 > 写给后续执行者（人或 agent）。动工前先读 SPEC §0 不变量与 REFACTORING §3 决策先例；每项动工时按惯例先出一份轮次 brief。
-> 最后更新：2026-08-10
+> 最后更新：2026-08-12
 
 ---
 
@@ -68,6 +68,16 @@
 **思路**：新建 `agent/context_builder.py`：`build_context(store, message, *, purpose: Literal["reply","proposal","tool_loop"], budget: ContextBudget) -> ContextBundle`（含 system 文案与 payload）。`ContextBudget` dataclass 收拢：recent_messages=12、summary 阈值 24、memory_top_n=20、world_max_chars、每 note 截断长度、max_tokens。替换 `chat_runtime.py` 三处重复（约 500/800/945 行区域）与 `llm_planner.py` 一处。world 超预算时降级：objects 仅留 id/location/status，raw 丢弃；memory 按 `importance DESC, created_at DESC` 取 top-N（B4a 字段终于用上）。
 **坑**：三处 system 文案有故意的措辞差异（reply vs proposal）——用 purpose 参数化，别硬统一；先写 golden-file 快照测试锁住现有 payload 再动手，重构后 diff 应只有预期变化。
 **验收**：golden 测试通过；chat/planner/tool_loop 行为回归全绿；魔法数字 grep 不再散落。
+
+## F3.1a context_builder Unicode 序列化与预算口径
+
+**思路**：把 `context_builder` 发给 provider 的 user JSON 与 `_stable_json_len()` 的预算估算统一为未转义 Unicode 的 JSON 字符口径；两处必须同轮修改，避免 wire 与预算再次分叉。保持 payload 字段集合、字段顺序和已有摘要算法不变。
+
+**关键文件**：`physical_agent/agent/context_builder.py`、`tests/test_context_builder.py`。
+
+**坑**：现有 `tests/golden/context_builder/*.json` 会先把 user content 解析成对象，本修复不应机械重写四份 golden；应直接断言原始 wire 保留中文且没有 `\\uXXXX`，并构造“原生 JSON 未超限、ASCII 转义会超限”的中文 world/capabilities/feedback 边界用例。token 数依赖 tokenizer，本条只承诺一致的 JSON 字符预算。
+
+**验收**：四路消息中的中文保持原文；中文在未转义 JSON 字符长度未超预算时不触发摘要；ASCII workspace 行为与 payload 形状不变；context builder 专项和全量 `pytest` 通过。
 
 ## F4 期望-比对-回灌
 

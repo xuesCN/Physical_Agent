@@ -34,6 +34,7 @@
 | F2.5-raw-debug-antd | RawDebug 改为 AntD 原生 Collapse/Tree，移除 react18-json-view | 本轮提交 |
 | Audit-doc-html | current architecture audit 静态 HTML 阅读页 | 本轮提交 |
 | F3 | context_builder 解耦：reply/proposal/planner/tool_loop 上下文统一 | `9cbb540` |
+| F3.1a | context_builder Unicode wire 与预算统一：中文不再因 `ensure_ascii` 转义提前摘要 | 本轮提交；context `16 passed`、调用链矩阵 `57 passed`、Python full `562 passed, 1 warning` |
 | F4 | 期望-比对-回灌：expected 确定性比对、feedback 回灌、前端可见性 | `b5be3b7` |
 | F5.0 | `car_agent` 自包含 TCP/NDJSON driver：默认禁运动、bounded `drive_for`、Watch/SafetyGate 实机链路地基 | 本轮提交；car 专项 `52 passed`、受影响矩阵 `131 passed`、Python full `521 passed`；独立终审 Critical/Important=0 |
 | W2 | 观察并发化 + observe 频率与 tick 解耦 | `4e0f732` |
@@ -195,6 +196,12 @@ RawDebug 收口：`RawDebug` 不再接收整份 state 并显示 `Full state JSON
 ### F3：context_builder 解耦
 
 动机：chat_runtime 内 reply-only stream、chat proposal、tool_loop 三处上下文组装长期重复，LLM planner 也单独拼一套 action-plan prompt；接实机前需要把"给模型看什么"变成可测、只读、可预算的单点。过程：新增 `physical_agent/agent/context_builder.py`，定义 `ContextBudget` 与 `ContextBundle`，`build_context()` 统一 reply/proposal/tool_loop/planner 四路 payload，`build_planner_context()` 服务 direct `LLMPlanner` 调用；planner 没有复用 chat proposal，而是保留独立 `purpose="planner"` 与结构化 action plan system 文案。`ContextBudget` 收拢 recent messages、memory top-N、world/capabilities 字符预算、note 截断与各路 max_tokens；world/capabilities 超预算时降级为稳定摘要，memory 改按 `importance DESC, created_at DESC` 注入并保留 upload/untrusted 标记。验证：新增 context_builder golden snapshot 覆盖四路 system/payload，read-only 测试禁止 write/append/claim/approve/reject 等副作用；chat/planner/tool_loop/retrieval 回归通过，安全边界测试仍证明请求侧不加载 driver、不调用 `driver.execute`。
+
+### F3.1a：Unicode wire 与预算口径统一
+
+审计发现 `context_builder` 的实际 user JSON 与 `_stable_json_len()` 都使用 `ensure_ascii=True`：中文在发给 provider 前被写成 `\\uXXXX`，并按同一膨胀后的字符串长度过早触发 world/capabilities/feedback 摘要。修复将两条路径收敛到同一 `_serialize_json()` helper，wire 继续保留既有字段顺序，稳定长度测量继续只为确定性使用 `sort_keys=True`；没有改 payload 结构、摘要算法、prompt 或 caching。
+
+测试职责刻意分离：既有四份 golden 继续比较 JSON 解析后的 payload，因此保持零 diff；新增四路 raw wire 断言锁定中文原文与 round-trip，另以 world/capabilities/feedback 三种中文文档锁住“未转义字符长度恰好在预算内时保留全文”。专项 `16 passed`，chat/tool-loop/retrieval 调用链矩阵 `57 passed`，Python full `562 passed, 1 warning`。本轮只承诺序列化字符预算一致，不将其表述为 tokenizer 级 token 等价。
 
 ### F4：期望-比对-回灌
 

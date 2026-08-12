@@ -149,7 +149,7 @@ def _bundle(
         payload=payload,
         messages=[
             {"role": "system", "content": system},
-            {"role": "user", "content": json.dumps(payload, ensure_ascii=True)},
+            {"role": "user", "content": _serialize_json(payload)},
         ],
         max_tokens=max_tokens,
         temperature=temperature,
@@ -425,7 +425,11 @@ def _summarize_mapping(value: Any, *, fields: tuple[str, ...]) -> dict[str, dict
 
 
 def _stable_json_len(value: Any) -> int:
-    return len(json.dumps(value, ensure_ascii=True, sort_keys=True))
+    return len(_serialize_json(value, sort_keys=True))
+
+
+def _serialize_json(value: Any, *, sort_keys: bool = False) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=sort_keys)
 
 
 def _system_content(purpose: ContextPurpose, *, has_retrieved_context: bool) -> str:

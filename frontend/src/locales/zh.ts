@@ -45,7 +45,7 @@ export const zh = {
     showTour: "重新显示引导",
     dangerZone: "危险区",
     resetTitle: "工作区重置",
-    resetDescription: "清空 world、actions、memory、chat 和上传内容，并恢复默认 SAFETY。physical-agent.yaml 和 LLM 设置会保留；若还要恢复默认配置，请运行 `physical-agent setup --force`。",
+    resetDescription: "清空 world、actions、memory、chat 和上传内容。SAFETY 硬规则会恢复为默认值，同时保留 Agent Guidance；physical-agent.yaml 和 LLM 设置不变。若还要恢复默认配置，请运行 `physical-agent setup --force`。",
     resetConfirmTitle: "重置整个工作区？",
     resetConfirmDescription: "World、actions、memory、chat 和上传内容会被清空。此操作不可撤销。",
     resetOk: "重置工作区",

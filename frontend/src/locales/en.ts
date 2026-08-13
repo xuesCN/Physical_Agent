@@ -40,7 +40,7 @@ export const en = {
     showTour: "Show tour again",
     dangerZone: "Danger zone",
     resetTitle: "Workspace reset",
-    resetDescription: "Clears world, actions, memory, chat, and uploads, and restores SAFETY to defaults. physical-agent.yaml and LLM settings are kept. To restore the default config too, run `physical-agent setup --force`.",
+    resetDescription: "Clears world, actions, memory, chat, and uploads. SAFETY hard Rules are restored to defaults while Agent Guidance is preserved. physical-agent.yaml and LLM settings are kept. To restore the default config too, run `physical-agent setup --force`.",
     resetConfirmTitle: "Reset the entire workspace?",
     resetConfirmDescription: "World, actions, memory, chat, and uploads will be cleared. This cannot be undone.",
     resetOk: "Reset workspace",

@@ -1,1 +1,7 @@
+# Normalise all text to LF in the repository, regardless of each
+# contributor's core.autocrlf. Without this the same working tree looks
+# fully dirty to any git that runs with autocrlf unset (Linux CI, container
+# or agent sandboxes mounting this folder).
+* text=auto
+
 physical_agent/dashboard/dist/** -whitespace

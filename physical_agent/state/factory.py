@@ -34,7 +34,10 @@ def open_state_store(
     if backend == "markdown":
         raise ValueError(RETIRED_MARKDOWN_BACKEND_GUIDANCE)
     if backend == "sqlite":
-        return SqliteStateStore(config.workspace_path(root))
+        return SqliteStateStore(
+            config.workspace_path(root),
+            safety_template_path=root / "SAFETY.template.md",
+        )
     raise ValueError(
         f"Unsupported workspace backend `{config.workspace.backend}`. "
         "Supported backend: sqlite."

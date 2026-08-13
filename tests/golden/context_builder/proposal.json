@@ -148,17 +148,37 @@
         },
         "running_summary": "Earlier summary with stale unsafe_execute mention.",
         "safety": {
+          "guidance": {
+            "authority": "advisory_context_only",
+            "digest": "5442a6266041e8eb4384fd5f5c56287f5ce72a95388897639f70f860e3836fad",
+            "included_json_chars": 75,
+            "may_authorize_execution": false,
+            "may_override_hard_policy": false,
+            "original_json_chars": 75,
+            "present": true,
+            "section": "Agent Guidance",
+            "status": "complete",
+            "text": "Keep the robot on its supervised test fixture and obey live safety state.",
+            "truncated": false,
+            "warning": null
+          },
+          "hard": {
+            "authority": "watch_safety_gate",
+            "digest": "7ba858beaf2edc251e8b0432729920c5969f36bef39ae07aee0b4bc21c41b586",
+            "revision": 1,
+            "rules": {
+              "allow_autonomous_execution": true,
+              "forbid_duplicate_action_ids": true,
+              "max_action_timeout_s": 30,
+              "require_human_approval_for_real_hardware": true
+            }
+          },
           "metadata": {
             "owner": "human",
             "revision": 1,
             "schema": "physical-agent/safety/v1"
           },
-          "rules": {
-            "allow_autonomous_execution": true,
-            "forbid_duplicate_action_ids": true,
-            "max_action_timeout_s": 30,
-            "require_human_approval_for_real_hardware": true
-          }
+          "policy_identity_digest": "555c7c8731f71a9dee049d4f55462c01750d43fa963adee4a612c204a68d68e6"
         },
         "world": {
           "metadata": {

@@ -459,6 +459,154 @@ def test_failed_dependency_terminalizes_downstream_action_in_same_step(tmp_path)
     assert downstream_tasks["physical_action"].status == "skipped"
 
 
+def test_watch_hardware_action_requires_agent_guidance_before_gate(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data["robots"]["arm_1"]["execution_mode"] = "hardware"
+    data["watch"]["halt_on_shutdown"] = False
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    store.append_pending_action(
+        Action(id="act_hardware_without_guidance", robot="arm_1", capability="observe")
+    )
+    store.approve_action("act_hardware_without_guidance")
+    execute_calls = []
+
+    async def fail_execute(action):
+        execute_calls.append(action.id)
+        raise AssertionError("hardware action must be rejected before driver.execute")
+
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "execute", fail_execute)
+    try:
+        assert asyncio.run(runtime.step(setup=False)) == 0
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert execute_calls == []
+    assert [item.id for item in store.read_actions()["cancelled"]] == [
+        "act_hardware_without_guidance"
+    ]
+    events = _feedback_events(store, "safety_policy_preflight")
+    assert events[-1]["code"] == "safety.guidance.missing"
+    assert _feedback_events(store, "safety_gate") == []
+
+
+def test_watch_simulation_action_keeps_legacy_compatibility_without_guidance(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    store.append_pending_action(
+        Action(id="act_simulation_without_guidance", robot="arm_1", capability="observe")
+    )
+    try:
+        assert asyncio.run(runtime.step(setup=False)) == 1
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert [item.id for item in store.read_actions()["completed"]] == [
+        "act_simulation_without_guidance"
+    ]
+    assert _feedback_events(store, "safety_policy_preflight") == []
+
+
+@pytest.mark.parametrize("mutation", ["revision", "guidance_digest", "malformed"])
+def test_watch_policy_drift_cancels_only_same_proposal_without_halt(
+    tmp_path,
+    monkeypatch,
+    mutation,
+):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_watch_config(config_path, halt_on_shutdown=False)
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    original_safety_text = store.file("safety").read_text(encoding="utf-8")
+    proposal_id = "proposal_policy_drift"
+
+    def correlated(action_id):
+        return Action(
+            id=action_id,
+            robot="arm_1",
+            capability="observe",
+            metadata={
+                "correlation": {
+                    "session_id": "workspace",
+                    "proposal_id": proposal_id,
+                }
+            },
+        )
+
+    store.write_actions(
+        [
+            correlated("act_drift_first"),
+            correlated("act_drift_second"),
+            correlated("act_drift_third"),
+            Action(id="act_other_proposal", robot="arm_1", capability="observe"),
+        ],
+        [],
+        [],
+    )
+    original_execute = runtime.loaded_drivers["arm_1"].driver.execute
+    execute_calls = []
+    halt_calls = []
+
+    async def mutate_policy_after_first(action):
+        execute_calls.append(action.id)
+        result = await original_execute(action)
+        if len(execute_calls) == 1:
+            if mutation == "revision":
+                store.write_safety(store.read_safety()["rules"])
+            elif mutation == "guidance_digest":
+                text = store.file("safety").read_text(encoding="utf-8")
+                store.file("safety").write_text(
+                    text + "\n## Agent Guidance\n\nPolicy changed without a revision bump.\n",
+                    encoding="utf-8",
+                )
+            else:
+                store.file("safety").write_text("not a safety policy\n", encoding="utf-8")
+        return result
+
+    async def halt():
+        halt_calls.append("halt")
+
+    monkeypatch.setattr(
+        runtime.loaded_drivers["arm_1"].driver,
+        "execute",
+        mutate_policy_after_first,
+    )
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "halt", halt)
+    try:
+        assert asyncio.run(runtime.step(setup=False)) == 1
+        assert halt_calls == []
+    finally:
+        if mutation == "malformed":
+            store.file("safety").write_text(original_safety_text, encoding="utf-8")
+        asyncio.run(runtime.shutdown())
+
+    assert execute_calls == ["act_drift_first"]
+    actions = store.read_actions()
+    assert [item.id for item in actions["completed"]] == ["act_drift_first"]
+    assert {item.id for item in actions["cancelled"]} == {
+        "act_drift_second",
+        "act_drift_third",
+    }
+    assert [item.id for item in actions["pending"]] == ["act_other_proposal"]
+    events = _feedback_events(store, "safety_policy_preflight")
+    assert {event["action_id"] for event in events} == {
+        "act_drift_second",
+        "act_drift_third",
+    }
+    expected_code = (
+        "safety.policy.invalidated" if mutation == "malformed" else "safety.policy.changed"
+    )
+    assert {event["code"] for event in events} == {expected_code}
+    assert all(event["result"]["baseline"] for event in events)
+    assert all(event["result"]["cancelled_action_ids"] for event in events)
+
+
 def test_update_world_observes_robots_concurrently(tmp_path, monkeypatch):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     _write_config_backend(config_path, "sqlite")

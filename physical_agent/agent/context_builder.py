@@ -11,9 +11,33 @@ from physical_agent.protocol.chat_summary import (
 )
 from physical_agent.protocol.schemas import ChatMessage
 from physical_agent.state import StateStore
+from physical_agent.state.safety_policy import (
+    MAX_AGENT_GUIDANCE_CHARS,
+    guidance_json_chars,
+)
 
 
 ContextPurpose = Literal["reply", "proposal", "planner", "tool_loop"]
+ACTION_CONTEXT_PURPOSES = frozenset({"proposal", "planner", "tool_loop"})
+
+
+class SafetyGuidanceContextError(RuntimeError):
+    """Fail closed before an action-producing context reaches an LLM or tool loop."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        purpose: ContextPurpose,
+        max_chars: int | None = None,
+        actual_chars: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.purpose = purpose
+        self.max_chars = max_chars
+        self.actual_chars = actual_chars
 
 
 @dataclass(frozen=True)
@@ -26,6 +50,7 @@ class ContextBudget:
     capabilities_max_chars: int = 12000
     feedback_max_events: int = 24
     feedback_max_chars: int = 12000
+    safety_guidance_max_chars: int = MAX_AGENT_GUIDANCE_CHARS
     max_tokens: int | None = None
     reply_max_tokens: int = 1000
     proposal_max_tokens: int = 1500
@@ -123,7 +148,12 @@ def build_planner_context(
         "world": _budgeted_world(world, budget),
         "execution_contract": _execution_contract(),
         "feedback": _budgeted_feedback(feedback or {}, budget),
-        "safety": _json_safe(safety or {}),
+        "safety": _budgeted_safety_context(
+            safety or {},
+            purpose=purpose,
+            capabilities=capabilities,
+            budget=budget,
+        ),
         "previous_agent_output": _agent_output_summary(previous_agent_output),
     }
     return _bundle(
@@ -171,6 +201,9 @@ def _workspace_context_payload(
 ) -> dict[str, Any]:
     chat_messages = _chat_messages(chat.get("messages", []))
     memory_doc = memory if memory is not None else store.read_memory()
+    capabilities_doc = (
+        capabilities if capabilities is not None else store.read_capabilities()
+    )
     payload = {
         "latest_user_message": message,
         "running_summary": str(chat.get("running_summary") or ""),
@@ -184,7 +217,7 @@ def _workspace_context_payload(
         "memory": _top_memory_notes(memory_doc.get("notes", []), budget=budget),
         "context_policy": _context_policy(purpose),
         "capabilities": _budgeted_capabilities(
-            capabilities if capabilities is not None else store.read_capabilities(),
+            capabilities_doc,
             budget,
         ),
         "world": _budgeted_world(
@@ -195,7 +228,12 @@ def _workspace_context_payload(
             feedback if feedback is not None else store.read_feedback(),
             budget,
         ),
-        "safety": _json_safe(store.read_safety()),
+        "safety": _budgeted_safety_context(
+            store.read_safety(),
+            purpose=purpose,
+            capabilities=capabilities_doc,
+            budget=budget,
+        ),
         "execution_contract": _execution_contract(),
     }
     if retrieved_context is not None:
@@ -275,6 +313,7 @@ def _budgeted_capabilities(value: dict[str, Any], budget: ContextBudget) -> Any:
             capabilities = robot.get("capabilities", [])
             summarized["robots"][robot_id] = {
                 "kind": robot.get("kind"),
+                "execution_mode": robot.get("execution_mode"),
                 "status": robot.get("status"),
                 "requires_approval": robot.get("requires_approval"),
                 "capabilities": _summarize_capabilities(capabilities),
@@ -300,6 +339,9 @@ def _summarize_capabilities(capabilities: Any) -> list[dict[str, Any]]:
                 "required": params_schema.get("required", []),
                 "properties": sorted((params_schema.get("properties") or {}).keys()),
             }
+        constraints = capability.get("constraints")
+        if isinstance(constraints, dict) and "bounds" in constraints:
+            item["constraints"] = {"bounds": _json_safe(constraints["bounds"])}
         items.append(item)
     return sorted(items, key=lambda item: str(item.get("name") or ""))
 
@@ -316,7 +358,18 @@ def _budgeted_world(value: dict[str, Any], budget: ContextBudget) -> Any:
         "state": {
             "robots": _summarize_mapping(
                 state.get("robots", {}) if isinstance(state, dict) else {},
-                fields=("status", "location", "pose"),
+                fields=(
+                    "status",
+                    "location",
+                    "pose",
+                    "tof_available",
+                    "tof_valid",
+                    "tof_mm",
+                    "moving",
+                    "motor_cmd",
+                    "bench_only",
+                    "watchdog_tripped",
+                ),
             ),
             "objects": _summarize_mapping(
                 state.get("objects", {}) if isinstance(state, dict) else {},
@@ -331,7 +384,18 @@ def _budgeted_world(value: dict[str, Any], budget: ContextBudget) -> Any:
             "summary": observation.get("summary"),
             "robots": _summarize_mapping(
                 observation.get("robots", {}),
-                fields=("status", "location", "pose"),
+                fields=(
+                    "status",
+                    "location",
+                    "pose",
+                    "tof_available",
+                    "tof_valid",
+                    "tof_mm",
+                    "moving",
+                    "motor_cmd",
+                    "bench_only",
+                    "watchdog_tripped",
+                ),
             ),
             "objects": _summarize_mapping(
                 observation.get("objects", {}),
@@ -422,6 +486,132 @@ def _summarize_mapping(value: Any, *, fields: tuple[str, ...]) -> dict[str, dict
                 entry[field] = item[field]
         summarized[str(item_id)] = entry
     return summarized
+
+
+def _budgeted_safety_context(
+    value: Any,
+    *,
+    purpose: ContextPurpose,
+    capabilities: dict[str, Any],
+    budget: ContextBudget,
+) -> dict[str, Any]:
+    """Project the public SAFETY snapshot into isolated hard/guidance channels."""
+
+    safe = _json_safe(value)
+    if not isinstance(safe, dict):
+        safe = {}
+    metadata = safe.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    nested_hard = safe.get("hard")
+    nested_hard = nested_hard if isinstance(nested_hard, dict) else {}
+
+    rules = nested_hard.get("rules", safe.get("rules", {}))
+    hard_revision = nested_hard.get("revision", metadata.get("revision"))
+    hard_digest = nested_hard.get(
+        "digest",
+        safe.get("hard_policy_digest", safe.get("policy_digest")),
+    )
+    guidance_value = safe.get("agent_guidance")
+    guidance = guidance_value if isinstance(guidance_value, str) else ""
+    guidance_present = bool(guidance.strip())
+    guidance_chars = guidance_json_chars(guidance)
+    guidance_limit = max(0, budget.safety_guidance_max_chars)
+    guidance_over_budget = guidance_chars > guidance_limit
+    hardware = _has_hardware_profile(capabilities)
+
+    if purpose in ACTION_CONTEXT_PURPOSES and hardware:
+        if not guidance_present:
+            raise SafetyGuidanceContextError(
+                "Agent Guidance is required before producing hardware action intents.",
+                code="safety.guidance.missing",
+                purpose=purpose,
+                max_chars=guidance_limit,
+                actual_chars=guidance_chars,
+            )
+        if guidance_over_budget:
+            raise SafetyGuidanceContextError(
+                "Agent Guidance exceeds the action-context safety budget.",
+                code="safety.guidance.budget_exceeded",
+                purpose=purpose,
+                max_chars=guidance_limit,
+                actual_chars=guidance_chars,
+            )
+
+    truncated = guidance_over_budget
+    included_guidance = (
+        _truncate_json_string(guidance, guidance_limit)
+        if guidance_over_budget
+        else guidance
+    )
+    status = "complete"
+    warning = None
+    if not guidance_present:
+        status = "missing"
+        warning = "safety.guidance.missing_simulation_only"
+    elif truncated:
+        status = "truncated"
+        warning = "safety.guidance.truncated_for_context_budget"
+
+    return {
+        "metadata": metadata,
+        "hard": {
+            "revision": hard_revision,
+            "rules": _json_safe(rules),
+            "digest": hard_digest,
+            "authority": "watch_safety_gate",
+        },
+        "guidance": {
+            "section": "Agent Guidance",
+            "text": included_guidance,
+            "digest": safe.get("guidance_digest"),
+            "status": status,
+            "present": guidance_present,
+            "truncated": truncated,
+            "original_json_chars": guidance_chars,
+            "included_json_chars": guidance_json_chars(included_guidance),
+            "authority": "advisory_context_only",
+            "may_authorize_execution": False,
+            "may_override_hard_policy": False,
+            "warning": warning,
+        },
+        "policy_identity_digest": safe.get(
+            "policy_identity_digest",
+            safe.get("identity_digest"),
+        ),
+    }
+
+
+def _has_hardware_profile(capabilities: Any) -> bool:
+    safe = _json_safe(capabilities)
+    if not isinstance(safe, dict):
+        return True
+    robots = safe.get("robots")
+    if not isinstance(robots, dict) or not robots:
+        return True
+    for profile in robots.values():
+        if not isinstance(profile, dict):
+            return True
+        if profile.get("execution_mode") != "simulation":
+            return True
+    return False
+
+
+def _truncate_json_string(value: str, max_chars: int) -> str:
+    if guidance_json_chars(value) <= max_chars:
+        return value
+    suffix = "..."
+    if guidance_json_chars(suffix) > max_chars:
+        suffix = ""
+    low = 0
+    high = len(value)
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        candidate = value[:midpoint] + suffix
+        if guidance_json_chars(candidate) <= max_chars:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return value[:low] + suffix
 
 
 def _stable_json_len(value: Any) -> int:

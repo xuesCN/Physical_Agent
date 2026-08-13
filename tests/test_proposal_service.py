@@ -3,9 +3,15 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from physical_agent.agent.context_builder import (
+    ContextBudget,
+    SafetyGuidanceContextError,
+)
+from physical_agent.agent.llm_planner import LLMPlanner
 from physical_agent.application.proposals import ProposalService
 from physical_agent.agent.planner import Planner
 from physical_agent.config import write_default_config
+from physical_agent.llm import OpenAICompatibleSettings
 from physical_agent.protocol.actions import (
     ACTION_METADATA_SCHEMA,
     parse_action_metadata,
@@ -288,6 +294,60 @@ def test_contextual_planner_receives_safety_feedback_and_previous_output(tmp_pat
     assert planner.context["previous_agent_output"]["proposal_id"] == (
         previous.correlation.proposal_id
     )
+
+
+def test_proposal_service_guidance_overflow_stops_before_provider_and_append(
+    tmp_path, monkeypatch
+):
+    _, store = _store_with_observe_capability(tmp_path)
+    robots = store.read_capabilities()["robots"]
+    robots["arm_1"]["execution_mode"] = "hardware"
+    store.write_capabilities(robots)
+    safety_path = store.file("safety")
+    current = safety_path.read_text(encoding="utf-8")
+    base = current.split("\n## Agent Guidance\n", 1)[0].rstrip()
+    safety_path.write_text(
+        base + "\n\n## Agent Guidance\n\n" + ("bench only " * 20) + "\n",
+        encoding="utf-8",
+    )
+
+    planner = LLMPlanner(
+        settings=OpenAICompatibleSettings(
+            api_key="test-key",
+            base_url="http://project.test/v1",
+            model="test-model",
+        ),
+        context_budget=ContextBudget(safety_guidance_max_chars=48),
+    )
+
+    class FakeClient:
+        structured_calls = 0
+
+        def structured_json(self, messages, **kwargs):
+            self.structured_calls += 1
+            raise AssertionError("provider must not be called")
+
+    fake_client = FakeClient()
+    planner.client = fake_client
+    append_calls = 0
+
+    def fail_append(actions):
+        nonlocal append_calls
+        append_calls += 1
+        raise AssertionError("pending actions must not be appended")
+
+    monkeypatch.setattr(store, "append_pending_actions", fail_append)
+
+    with pytest.raises(SafetyGuidanceContextError) as caught:
+        ProposalService(store, planner).submit_task(
+            "look around",
+            proposed_by="test",
+        )
+
+    assert caught.value.code == "safety.guidance.budget_exceeded"
+    assert fake_client.structured_calls == 0
+    assert append_calls == 0
+    assert store.read_actions()["pending"] == []
 
 
 def test_state_store_append_is_also_an_approval_authority_boundary(tmp_path):

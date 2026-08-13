@@ -8,6 +8,11 @@ from typing import Any
 from physical_agent.config import DEFAULT_CONFIG_NAME, load_config
 from physical_agent.drivers.loader import load_driver
 from physical_agent.state import open_state_store
+from physical_agent.state.safety_policy import (
+    MAX_AGENT_GUIDANCE_CHARS,
+    SafetyPolicySnapshot,
+    guidance_json_chars,
+)
 
 
 @dataclass(frozen=True)
@@ -59,16 +64,63 @@ def run_doctor(config_path: str | Path = DEFAULT_CONFIG_NAME) -> list[DoctorChec
         )
     )
 
+    safety_snapshot: SafetyPolicySnapshot | None = None
     if workspace.exists():
         for name in workspace.filenames:
             try:
                 if name == "log":
                     workspace.validate_log_mirror()
+                elif name == "safety":
+                    safety_snapshot = workspace.read_safety_snapshot()
                 else:
                     getattr(workspace, f"read_{name}")()
                 checks.append(DoctorCheck(f"workspace:{name}", True, "Parsed successfully."))
             except Exception as exc:
                 checks.append(DoctorCheck(f"workspace:{name}", False, str(exc)))
+
+        if safety_snapshot is not None:
+            hardware_robots = sorted(
+                robot_id
+                for robot_id, robot_config in config.robots.items()
+                if robot_config.execution_mode == "hardware"
+            )
+            guidance = safety_snapshot.agent_guidance
+            if guidance_json_chars(guidance) > MAX_AGENT_GUIDANCE_CHARS:
+                checks.append(
+                    DoctorCheck(
+                        "workspace:safety-guidance",
+                        False,
+                        "Agent Guidance exceeds the shared action-channel budget: "
+                        f"{guidance_json_chars(guidance)} > {MAX_AGENT_GUIDANCE_CHARS} "
+                        "JSON characters.",
+                    )
+                )
+            elif guidance is None and hardware_robots:
+                checks.append(
+                    DoctorCheck(
+                        "workspace:safety-guidance",
+                        False,
+                        "Hardware robots require non-empty `## Agent Guidance`: "
+                        f"{', '.join(hardware_robots)}.",
+                    )
+                )
+            elif guidance is None:
+                checks.append(
+                    DoctorCheck(
+                        "workspace:safety-guidance",
+                        True,
+                        "WARNING: `## Agent Guidance` is missing; all configured "
+                        "robots are simulation-only, so compatibility mode remains available.",
+                    )
+                )
+            else:
+                checks.append(
+                    DoctorCheck(
+                        "workspace:safety-guidance",
+                        True,
+                        "Agent Guidance is present and within the shared action-channel budget.",
+                    )
+                )
 
     for robot_id, robot_config in config.robots.items():
         try:

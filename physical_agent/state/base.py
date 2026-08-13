@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, Observation
+from physical_agent.state.safety_policy import HardSafetyPolicy, SafetyPolicySnapshot
 
 
 @runtime_checkable
@@ -77,7 +78,10 @@ class StateStore(Protocol):
         *,
         claim_owner: str = "watch",
         blocked_robot_ids: set[str] | None = None,
+        hard_policy: HardSafetyPolicy | None = None,
     ) -> Action | None: ...
+
+    def cancel_pending_actions_by_proposal(self, proposal_id: str) -> list[Action]: ...
 
     def recover_stale_actions(
         self,
@@ -133,6 +137,8 @@ class StateStore(Protocol):
     def write_safety(self, rules: dict[str, Any] | None = None) -> None: ...
 
     def read_safety(self) -> dict[str, Any]: ...
+
+    def read_safety_snapshot(self) -> SafetyPolicySnapshot: ...
 
     def write_chat(
         self,

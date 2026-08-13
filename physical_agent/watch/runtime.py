@@ -21,6 +21,12 @@ from physical_agent.protocol.expectations import evaluate_expected, normalize_ex
 from physical_agent.protocol.agent_output import safety_gate_task_id
 from physical_agent.protocol.schemas import Action, ActionResult, Observation, RobotRuntimeProfile
 from physical_agent.state import StateStore, open_state_store
+from physical_agent.state.safety_policy import (
+    MAX_AGENT_GUIDANCE_CHARS,
+    SafetyPolicyError,
+    SafetyPolicySnapshot,
+    guidance_json_chars,
+)
 from physical_agent.watch.safety import SafetyDecision, SafetyGate
 
 
@@ -240,14 +246,15 @@ class WatchRuntime:
         workspace = self._workspace()
         workspace.recover_stale_actions(ACTION_LEASE_SECONDS)
         actions_doc = workspace.read_actions()
-        safety_rules = workspace.read_safety()["rules"]
+        baseline_policy = workspace.read_safety_snapshot()
         executed_count = 0
         await self._reject_impossible_dependency_actions(
             actions_doc,
-            safety_rules=safety_rules,
+            safety_policy=baseline_policy,
         )
         actions_doc = workspace.read_actions()
         initial_pending_count = len(actions_doc["pending"])
+        policy_changed = False
 
         for _ in range(initial_pending_count):
             # One step may execute many queued actions. Renew between actions
@@ -259,11 +266,60 @@ class WatchRuntime:
             action = workspace.claim_next_ready_action(
                 claim_owner=self._watch_lease_owner,
                 blocked_robot_ids=blocked_robot_ids,
+                hard_policy=baseline_policy.hard,
             )
             if action is None:
                 break
             self.last_step_stats["processed"] += 1
             self.last_step_stats["state_changed"] = True
+            try:
+                current_policy = workspace.read_safety_snapshot()
+            except SafetyPolicyError as exc:
+                await self._reject_claimed_for_policy(
+                    action,
+                    code="safety.policy.invalidated",
+                    message=(
+                        "SAFETY.md became unavailable or invalid after this watch "
+                        f"step began: {exc}"
+                    ),
+                    baseline=baseline_policy,
+                    current=None,
+                    policy_error=exc,
+                    cancel_proposal=True,
+                )
+                policy_changed = True
+                break
+            if current_policy.identity_digest != baseline_policy.identity_digest:
+                await self._reject_claimed_for_policy(
+                    action,
+                    code="safety.policy.changed",
+                    message=(
+                        "SAFETY.md changed after this watch step began; refusing "
+                        "the remainder of the affected proposal."
+                    ),
+                    baseline=baseline_policy,
+                    current=current_policy,
+                    cancel_proposal=True,
+                )
+                policy_changed = True
+                break
+
+            guidance_rejection = _hardware_guidance_rejection(
+                action,
+                profiles=self.profiles,
+                policy=current_policy,
+            )
+            if guidance_rejection is not None:
+                code, message = guidance_rejection
+                await self._reject_claimed_for_policy(
+                    action,
+                    code=code,
+                    message=message,
+                    baseline=baseline_policy,
+                    current=current_policy,
+                    cancel_proposal=False,
+                )
+                continue
             latest_actions = workspace.read_actions()
             completed_ids = {item.id for item in latest_actions["completed"]}
             executed_ids = {
@@ -276,7 +332,7 @@ class WatchRuntime:
                     executed_ids.add(str(action_id))
             gate = SafetyGate(
                 robots=self.profiles,
-                safety_rules=safety_rules,
+                hard_policy=current_policy.hard,
                 completed_action_ids=completed_ids,
                 executed_action_ids=executed_ids,
                 default_action_timeout_s=(
@@ -288,7 +344,7 @@ class WatchRuntime:
             decision = gate.validate(action)
             self._require_watch_lease("before recording a SafetyGate decision")
             self.last_step_stats["gate_decisions"] += 1
-            self._record_safety_gate_decision(action, decision, safety_rules)
+            self._record_safety_gate_decision(action, decision, current_policy)
             if not decision.ok:
                 result = ActionResult(status="failed", message=decision.message)
                 self._finalize_claimed_action(action, status="cancelled")
@@ -384,10 +440,11 @@ class WatchRuntime:
                 raise
             await self._record_expectation_check(action, world)
 
-        await self._reject_impossible_dependency_actions(
-            workspace.read_actions(),
-            safety_rules=safety_rules,
-        )
+        if not policy_changed:
+            await self._reject_impossible_dependency_actions(
+                workspace.read_actions(),
+                safety_policy=baseline_policy,
+            )
         if executed_count == 0 and observe_when_idle:
             self._require_watch_lease("before idle observation")
             await self.update_world()
@@ -489,7 +546,7 @@ class WatchRuntime:
         self,
         actions_doc: dict[str, Any],
         *,
-        safety_rules: dict[str, Any],
+        safety_policy: SafetyPolicySnapshot,
     ) -> None:
         pending = list(actions_doc.get("pending") or [])
         if not pending:
@@ -526,7 +583,7 @@ class WatchRuntime:
         for action in rejected:
             gate = SafetyGate(
                 robots=self.profiles,
-                safety_rules=safety_rules,
+                hard_policy=safety_policy.hard,
                 completed_action_ids=completed_ids,
                 executed_action_ids=set(),
                 default_action_timeout_s=(
@@ -547,7 +604,7 @@ class WatchRuntime:
             self.last_step_stats["processed"] += 1
             self.last_step_stats["gate_decisions"] += 1
             self.last_step_stats["state_changed"] = True
-            self._record_safety_gate_decision(action, decision, safety_rules)
+            self._record_safety_gate_decision(action, decision, safety_policy)
             self._workspace().mark_action_cancelled(action)
             result = ActionResult(status="failed", message=decision.message)
             await self._record_action_result(action, result)
@@ -560,7 +617,7 @@ class WatchRuntime:
         self,
         action: Action,
         decision: SafetyDecision,
-        safety_rules: dict[str, Any],
+        safety_policy: SafetyPolicySnapshot,
     ) -> None:
         metadata = action.metadata if isinstance(action.metadata, dict) else {}
         correlation = metadata.get("correlation")
@@ -589,7 +646,10 @@ class WatchRuntime:
             "message": decision.message,
             "checks": checks,
             "action_digest": _stable_digest(action.model_dump(mode="json")),
-            "policy_digest": _stable_digest(safety_rules),
+            "policy_revision": safety_policy.hard.revision,
+            "policy_digest": _sha256_digest(safety_policy.hard.digest),
+            "guidance_digest": _sha256_digest(safety_policy.guidance_digest),
+            "policy_identity_digest": _sha256_digest(safety_policy.identity_digest),
             "result": {
                 "decision": decision.outcome,
                 "code": decision.code,
@@ -600,6 +660,99 @@ class WatchRuntime:
         self._record_feedback_event(
             latest,
             f"Safety gate for `{action.id}` {status}: {decision.message}",
+        )
+
+    async def _reject_claimed_for_policy(
+        self,
+        action: Action,
+        *,
+        code: str,
+        message: str,
+        baseline: SafetyPolicySnapshot,
+        current: SafetyPolicySnapshot | None,
+        policy_error: SafetyPolicyError | None = None,
+        cancel_proposal: bool,
+    ) -> None:
+        self._finalize_claimed_action(action, status="cancelled")
+        proposal_id = _proposal_id(action)
+        cancelled_siblings: list[Action] = []
+        if cancel_proposal and proposal_id is not None:
+            cancelled_siblings = self._workspace().cancel_pending_actions_by_proposal(
+                proposal_id
+            )
+        affected = [action, *cancelled_siblings]
+        self.last_step_stats["processed"] += len(cancelled_siblings)
+        self.last_step_stats["state_changed"] = True
+        for rejected_action in affected:
+            self._record_policy_preflight_rejection(
+                rejected_action,
+                code=code,
+                message=message,
+                baseline=baseline,
+                current=current,
+                policy_error=policy_error,
+                cancelled_action_ids=[item.id for item in affected],
+            )
+            result = ActionResult(
+                status="failed",
+                message=message,
+                result={"error_type": "SafetyPolicyError", "code": code},
+            )
+            await self._record_action_result(rejected_action, result)
+            await self._record_expectation_skipped(
+                rejected_action,
+                f"SAFETY policy preflight rejected action before execution: {message}",
+            )
+
+    def _record_policy_preflight_rejection(
+        self,
+        action: Action,
+        *,
+        code: str,
+        message: str,
+        baseline: SafetyPolicySnapshot,
+        current: SafetyPolicySnapshot | None,
+        policy_error: SafetyPolicyError | None,
+        cancelled_action_ids: list[str],
+    ) -> None:
+        latest = {
+            "event": "safety_policy_preflight",
+            "action_id": action.id,
+            "proposal_id": _proposal_id(action),
+            "status": "rejected",
+            "decision": "deny",
+            "code": code,
+            "actor": "watch",
+            "owner": "watch",
+            "executor_id": self._watch_lease_owner,
+            "policy_source": "SAFETY.md",
+            "robot": action.robot,
+            "capability": action.capability,
+            "message": message,
+            "action_digest": _stable_digest(action.model_dump(mode="json")),
+            "policy_revision": baseline.hard.revision,
+            "policy_digest": _sha256_digest(baseline.hard.digest),
+            "guidance_digest": _sha256_digest(baseline.guidance_digest),
+            "policy_identity_digest": _sha256_digest(baseline.identity_digest),
+            "result": {
+                "decision": "deny",
+                "code": code,
+                "cancelled_action_ids": cancelled_action_ids,
+                "baseline": _policy_identity_payload(baseline),
+                "current": (
+                    _policy_identity_payload(current) if current is not None else None
+                ),
+                "policy_error": (
+                    {"code": policy_error.code, "message": str(policy_error)}
+                    if policy_error is not None
+                    else None
+                ),
+            },
+            "artifacts": [],
+        }
+        self._record_feedback_event(
+            latest,
+            f"SAFETY policy preflight for `{action.id}` rejected: {message}",
         )
 
     async def _record_expectation_check(self, action: Action, world: Observation) -> None:
@@ -1093,6 +1246,51 @@ def _stable_digest(value: Any) -> str:
         sort_keys=True,
     ).encode("utf-8")
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+def _sha256_digest(value: str) -> str:
+    return value if value.startswith("sha256:") else f"sha256:{value}"
+
+
+def _proposal_id(action: Action) -> str | None:
+    metadata = action.metadata if isinstance(action.metadata, dict) else {}
+    correlation = metadata.get("correlation")
+    if not isinstance(correlation, dict) or not correlation.get("proposal_id"):
+        return None
+    return str(correlation["proposal_id"])
+
+
+def _policy_identity_payload(policy: SafetyPolicySnapshot) -> dict[str, Any]:
+    return {
+        "revision": policy.hard.revision,
+        "policy_digest": _sha256_digest(policy.hard.digest),
+        "guidance_digest": _sha256_digest(policy.guidance_digest),
+        "policy_identity_digest": _sha256_digest(policy.identity_digest),
+    }
+
+
+def _hardware_guidance_rejection(
+    action: Action,
+    *,
+    profiles: dict[str, RobotRuntimeProfile],
+    policy: SafetyPolicySnapshot,
+) -> tuple[str, str] | None:
+    profile = profiles.get(action.robot)
+    if profile is None or profile.execution_mode != "hardware":
+        return None
+    if policy.agent_guidance is None:
+        return (
+            "safety.guidance.missing",
+            "Hardware execution requires non-empty `## Agent Guidance` in SAFETY.md.",
+        )
+    actual_chars = guidance_json_chars(policy.agent_guidance)
+    if actual_chars > MAX_AGENT_GUIDANCE_CHARS:
+        return (
+            "safety.guidance.budget_exceeded",
+            "Hardware execution requires Agent Guidance within the configured "
+            f"{MAX_AGENT_GUIDANCE_CHARS}-character safety budget; got {actual_chars}.",
+        )
+    return None
 
 
 def _transport_action_failure_result(exc: Exception) -> ActionResult:

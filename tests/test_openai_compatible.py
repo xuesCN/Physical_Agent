@@ -7,6 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 import physical_agent.llm.openai_compatible as openai_compatible
+from physical_agent.agent.context_builder import (
+    ContextBudget,
+    SafetyGuidanceContextError,
+)
 from physical_agent.agent.llm_planner import LLMPlanner
 from physical_agent.env import load_dotenv
 from physical_agent.llm import (
@@ -1605,6 +1609,7 @@ def test_llm_planner_parses_actions_from_chat_completion(fake_openai):
         capabilities={
             "robots": {
                 "arm_1": {
+                    "execution_mode": "simulation",
                     "capabilities": [
                         {"name": "pick"},
                         {"name": "place"},
@@ -1654,7 +1659,14 @@ def test_llm_planner_parses_actions_from_responses_api(fake_openai):
     planner = LLMPlanner(settings=settings)
     actions = planner.plan(
         task="look around",
-        capabilities={"robots": {"arm_1": {"capabilities": [{"name": "observe"}]}}},
+        capabilities={
+            "robots": {
+                "arm_1": {
+                    "execution_mode": "simulation",
+                    "capabilities": [{"name": "observe"}],
+                }
+            }
+        },
         world={"state": {}, "observation": Observation(summary="")},
     )
 
@@ -1707,7 +1719,14 @@ def test_llm_planner_repairs_unknown_action_field_once(fake_openai):
 
     actions = LLMPlanner(settings=settings).plan(
         task="look around",
-        capabilities={"robots": {"arm_1": {"capabilities": [{"name": "observe"}]}}},
+        capabilities={
+            "robots": {
+                "arm_1": {
+                    "execution_mode": "simulation",
+                    "capabilities": [{"name": "observe"}],
+                }
+            }
+        },
         world={"state": {}, "observation": Observation(summary="")},
     )
 
@@ -1744,10 +1763,116 @@ def test_llm_planner_provider_refusal_returns_no_actions_without_repair(fake_ope
 
     actions = planner.plan(
         task="unsafe request",
-        capabilities={"robots": {"arm_1": {"capabilities": [{"name": "observe"}]}}},
+        capabilities={
+            "robots": {
+                "arm_1": {
+                    "execution_mode": "simulation",
+                    "capabilities": [{"name": "observe"}],
+                }
+            }
+        },
         world={"state": {}, "observation": Observation(summary="")},
     )
 
     assert actions == []
     assert planner.last_refusal_reason == "Cannot safely help with that request."
     assert len(fake_openai.instances[0].calls) == 1
+
+
+def test_llm_planner_live_context_injects_isolated_agent_guidance():
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+    captured: dict[str, object] = {}
+
+    class CapturingClient:
+        def structured_json(self, messages, **kwargs):
+            captured["messages"] = messages
+            return {"actions": []}
+
+    planner = LLMPlanner(settings=settings)
+    planner.client = CapturingClient()
+    actions = planner.plan_with_context(
+        task="inspect the car",
+        capabilities={
+            "robots": {
+                "car_1": {
+                    "execution_mode": "hardware",
+                    "capabilities": [{"name": "observe"}],
+                }
+            }
+        },
+        world={},
+        safety=_safety_projection("Keep the wheels suspended over the bench."),
+    )
+
+    assert actions == []
+    messages = captured["messages"]
+    payload = json.loads(messages[1]["content"])
+    assert payload["safety"]["hard"]["rules"]["forbid_duplicate_action_ids"] is True
+    assert payload["safety"]["guidance"]["text"] == (
+        "Keep the wheels suspended over the bench."
+    )
+    assert payload["safety"]["guidance"]["may_authorize_execution"] is False
+
+
+def test_llm_planner_rejects_hardware_guidance_over_budget_before_provider_call():
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    class ExplodingClient:
+        calls = 0
+
+        def structured_json(self, messages, **kwargs):
+            self.calls += 1
+            raise AssertionError("provider must not be called")
+
+    planner = LLMPlanner(
+        settings=settings,
+        context_budget=ContextBudget(safety_guidance_max_chars=48),
+    )
+    client = ExplodingClient()
+    planner.client = client
+
+    with pytest.raises(SafetyGuidanceContextError) as caught:
+        planner.plan_with_context(
+            task="move",
+            capabilities={
+                "robots": {
+                    "car_1": {
+                        "execution_mode": "hardware",
+                        "capabilities": [{"name": "drive_for"}],
+                    }
+                }
+            },
+            world={},
+            safety=_safety_projection("bench only " * 20),
+        )
+
+    assert caught.value.code == "safety.guidance.budget_exceeded"
+    assert client.calls == 0
+
+
+def _safety_projection(agent_guidance: str | None) -> dict[str, object]:
+    return {
+        "metadata": {
+            "schema": "physical-agent/safety/v1",
+            "owner": "human",
+            "revision": 1,
+        },
+        "rules": {
+            "allow_autonomous_execution": True,
+            "forbid_duplicate_action_ids": True,
+            "max_action_timeout_s": 30,
+            "require_human_approval_for_real_hardware": True,
+        },
+        "agent_guidance": agent_guidance,
+        "hard_policy_digest": "hard-digest",
+        "guidance_digest": "guidance-digest",
+        "policy_identity_digest": "identity-digest",
+    }

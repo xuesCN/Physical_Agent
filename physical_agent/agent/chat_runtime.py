@@ -10,7 +10,10 @@ from pydantic import Field
 
 from physical_agent.agent.code_runtime import CodeSkillRuntime
 from physical_agent.agent.code_router import CodeIntentRouter
-from physical_agent.agent.context_builder import build_context
+from physical_agent.agent.context_builder import (
+    SafetyGuidanceContextError,
+    build_context,
+)
 from physical_agent.agent.driver_coder import DriverCodingAgent
 from physical_agent.agent.llm_contracts import CHAT_RESPONSE_SCHEMA, ChatLLMResponse
 from physical_agent.agent.onboarding import HardwareIntegrationAssistant
@@ -233,6 +236,8 @@ class ChatRuntime:
             except ProviderRefusalError as exc:
                 response = _provider_refusal_payload(exc.refusal)
             except Exception as exc:
+                if isinstance(exc, SafetyGuidanceContextError):
+                    raise
                 if isinstance(exc, StructuredOutputError):
                     self._persist_nonstream_error(workspace, exc, mode=mode)
                     raise
@@ -442,6 +447,8 @@ class ChatRuntime:
                         yield {"type": "delta", "delta": delta}
                 except Exception as exc:
                     if isinstance(exc, _ChatStreamAborted):
+                        raise
+                    if isinstance(exc, SafetyGuidanceContextError):
                         raise
                     if isinstance(exc, StructuredOutputError):
                         raise
@@ -1784,12 +1791,19 @@ def _provider_refusal_payload(refusal: str) -> dict[str, Any]:
 
 
 def _chat_error_message(error: Exception) -> str:
+    if isinstance(error, SafetyGuidanceContextError):
+        return str(error)
     if isinstance(error, StructuredOutputError):
         return "The model returned an invalid structured response; no action was created."
     return str(error)
 
 
 def _chat_error_details(error: Exception) -> dict[str, Any]:
+    if isinstance(error, SafetyGuidanceContextError):
+        return {
+            "code": error.code,
+            "reason": error.code,
+        }
     if not isinstance(error, StructuredOutputError):
         return {}
     return {

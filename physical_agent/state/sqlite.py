@@ -22,6 +22,7 @@ from physical_agent.protocol.retrieval import (
 )
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, Observation
 from physical_agent.state.audit import export_audit_documents
+from physical_agent.state.safety_policy import HardSafetyPolicy, SafetyPolicySnapshot
 from physical_agent.state.sidecars import StateSidecars
 
 
@@ -136,17 +137,42 @@ LOGICAL_DOCUMENT_FILENAMES = {
 class SqliteStateStore:
     filenames = LOGICAL_DOCUMENT_FILENAMES
 
-    def __init__(self, path: str | Path):
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        safety_template_path: str | Path | None = None,
+    ):
         self.path = Path(path).resolve()
         self.artifacts_path = self.path / "artifacts"
         self.uploads_path = self.path / "uploads"
         self.db_path = self.path / "state.db"
-        self._sidecars = StateSidecars(self.path)
+        self._sidecars = StateSidecars(
+            self.path,
+            safety_template_path=safety_template_path,
+        )
 
     def file(self, name: str) -> Path:
         return self.path / self.filenames[name]
 
     def initialize(self, *, overwrite: bool = False) -> None:
+        database_preexisting = self._database_files_exist()
+        preserved_safety: SafetyPolicySnapshot | None = None
+        if database_preexisting:
+            # Validate the file truth before schema maintenance or destructive
+            # reset. Existing workspaces must never self-heal a missing or
+            # malformed SAFETY policy.
+            preserved_safety = self.read_safety_snapshot()
+        else:
+            # SAFETY creation is allowed only while establishing a fresh
+            # workspace. Validate/copy the optional project template before
+            # creating state.db so a bad template cannot strand a database
+            # without its policy source.
+            self._sidecars.initialize(
+                overwrite=overwrite,
+                create_safety_if_missing=True,
+            )
+
         self.path.mkdir(parents=True, exist_ok=True)
         self.artifacts_path.mkdir(parents=True, exist_ok=True)
         self.uploads_path.mkdir(parents=True, exist_ok=True)
@@ -157,7 +183,12 @@ class SqliteStateStore:
             self._create_schema(conn)
             self._ensure_default_documents(conn)
 
-        self._sidecars.initialize(overwrite=overwrite)
+        if database_preexisting:
+            self._sidecars.initialize(
+                overwrite=overwrite,
+                create_safety_if_missing=False,
+                preserved_safety=preserved_safety,
+            )
 
     def exists(self) -> bool:
         if not self.path.exists() or not self.db_path.exists() or not self.file("safety").exists():
@@ -532,6 +563,7 @@ class SqliteStateStore:
         *,
         claim_owner: str = DEFAULT_CLAIM_OWNER,
         blocked_robot_ids: set[str] | None = None,
+        hard_policy: HardSafetyPolicy | None = None,
     ) -> Action | None:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -551,7 +583,11 @@ class SqliteStateStore:
                 return None
 
             capabilities = self._read_document_conn(conn, "capabilities")
-            safety_rules = self.read_safety().get("rules", {})
+            safety_rules = (
+                dict(hard_policy.rules)
+                if hard_policy is not None
+                else self.read_safety().get("rules", {})
+            )
             completed_action_ids = {
                 str(item["id"])
                 for item in conn.execute(
@@ -640,6 +676,61 @@ class SqliteStateStore:
                 revision,
             )
             return action
+
+    def cancel_pending_actions_by_proposal(self, proposal_id: str) -> list[Action]:
+        normalized_proposal_id = str(proposal_id).strip()
+        if not normalized_proposal_id:
+            raise ValueError("proposal_id must not be blank")
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT id, robot, capability, params, reason, depends_on, metadata
+                FROM actions
+                WHERE status = 'pending'
+                ORDER BY seq, id
+                """
+            ).fetchall()
+            matched: list[Action] = []
+            for row in rows:
+                action = _action_from_row(row)
+                correlation = (
+                    action.metadata.get("correlation")
+                    if isinstance(action.metadata, dict)
+                    else None
+                )
+                persisted_proposal_id = (
+                    str(correlation.get("proposal_id")).strip()
+                    if isinstance(correlation, dict) and correlation.get("proposal_id")
+                    else ""
+                )
+                if persisted_proposal_id == normalized_proposal_id:
+                    matched.append(action)
+
+            if not matched:
+                return []
+
+            timestamp = _now()
+            conn.executemany(
+                """
+                UPDATE actions
+                SET status = 'cancelled',
+                    claimed_at = NULL,
+                    claim_owner = NULL,
+                    updated_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                [(timestamp, action.id) for action in matched],
+            )
+            revision = self._next_revision_conn(conn, "actions")
+            self._upsert_document_conn(
+                conn,
+                "actions",
+                {"metadata": self._metadata("actions", revision)},
+                revision,
+            )
+            return matched
 
     def recover_stale_actions(
         self,
@@ -814,9 +905,10 @@ class SqliteStateStore:
         self._sidecars.write_safety(rules)
 
     def read_safety(self) -> dict[str, Any]:
-        if not self.file("safety").exists():
-            self.write_safety()
         return self._sidecars.read_safety()
+
+    def read_safety_snapshot(self) -> SafetyPolicySnapshot:
+        return self._sidecars.read_safety_snapshot()
 
     def write_chat(
         self,
@@ -1495,13 +1587,14 @@ class SqliteStateStore:
         timestamp = _now()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            capabilities = self._read_document_conn(conn, "capabilities")
-            safety_rules = self.read_safety().get("rules", {})
-            parsed = _with_backend_approval_metadata(
-                parsed,
-                capabilities=capabilities,
-                safety_rules=safety_rules,
-            )
+            if claim_owner is None:
+                capabilities = self._read_document_conn(conn, "capabilities")
+                safety_rules = self.read_safety().get("rules", {})
+                parsed = _with_backend_approval_metadata(
+                    parsed,
+                    capabilities=capabilities,
+                    safety_rules=safety_rules,
+                )
             existing = conn.execute(
                 "SELECT seq, created_at, status, claim_owner FROM actions WHERE id = ?",
                 (parsed.id,),

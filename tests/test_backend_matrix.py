@@ -88,6 +88,33 @@ def test_default_init_setup_and_state_check_use_sqlite_with_safety_file(tmp_path
         assert "Audit export writable: yes" in check.output
 
 
+def test_cli_force_initialize_restores_hard_rules_but_preserves_guidance(tmp_path):
+    config_path = tmp_path / "physical-agent.yaml"
+    runner = CliRunner()
+    initial = runner.invoke(cli_module.app, ["init", "--config", str(config_path)])
+    assert initial.exit_code == 0, initial.output
+    store = open_state_store(config_path=config_path)
+    guidance = "Preserve this operator-authored safety guidance across CLI reset."
+    store.file("safety").write_text(
+        store.file("safety").read_text(encoding="utf-8").rstrip()
+        + f"\n\n## Agent Guidance\n\n{guidance}\n",
+        encoding="utf-8",
+    )
+    store.write_safety({"allow_autonomous_execution": False})
+    before = store.read_safety_snapshot()
+
+    reset = runner.invoke(
+        cli_module.app,
+        ["init", "--force", "--config", str(config_path)],
+    )
+
+    assert reset.exit_code == 0, reset.output
+    after = open_state_store(config_path=config_path).read_safety_snapshot()
+    assert after.hard.revision == before.hard.revision + 1
+    assert after.hard.rules["allow_autonomous_execution"] is True
+    assert after.agent_guidance == guidance
+
+
 def test_load_config_rejects_legacy_markdown_workspace_when_backend_omitted(tmp_path):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))

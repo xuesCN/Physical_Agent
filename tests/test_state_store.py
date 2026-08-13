@@ -14,6 +14,7 @@ from physical_agent.agent.chat_runtime import ChatRuntime
 from physical_agent.agent.runtime import AgentRuntime
 from physical_agent.cli import app
 from physical_agent.config import PhysicalAgentConfig, load_config, write_default_config
+from physical_agent.protocol.actions import ActionCorrelation, ProposalContext, with_proposal_metadata
 from physical_agent.protocol.schemas import Action, ChatPlan, Observation
 from physical_agent.state import (
     ActiveRuntimeLeaseError,
@@ -21,6 +22,7 @@ from physical_agent.state import (
     open_state_store,
 )
 from physical_agent.state import factory as state_factory
+from physical_agent.state.sidecars import StateSidecars
 from physical_agent.watch.runtime import WatchRuntime
 
 
@@ -327,6 +329,7 @@ def test_sqlite_initialize_migrates_old_action_claim_schema(tmp_path):
         )
 
     store = SqliteStateStore(workspace)
+    StateSidecars(workspace).initialize()
     store.initialize()
 
     assert store.exists()
@@ -379,6 +382,7 @@ def test_sqlite_initialize_migrates_old_memory_schema(tmp_path):
         )
 
     store = SqliteStateStore(workspace)
+    StateSidecars(workspace).initialize()
     store.initialize()
 
     with sqlite3.connect(store.db_path) as conn:
@@ -445,6 +449,73 @@ def test_sqlite_claim_next_ready_action_is_not_duplicated(tmp_path):
 
     store.mark_action_completed(claimed[0])
     assert [action.id for action in store.read_actions()["completed"]] == ["act_once"]
+
+
+def test_claim_with_typed_hard_policy_does_not_reread_missing_safety(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.append_pending_action(
+        Action(id="act_typed_policy", robot="arm_1", capability="observe")
+    )
+    hard_policy = store.read_safety_snapshot().hard
+    store.file("safety").unlink()
+
+    claimed = store.claim_next_ready_action(
+        claim_owner="typed-watch",
+        hard_policy=hard_policy,
+    )
+
+    assert claimed is not None
+    assert claimed.id == "act_typed_policy"
+    assert store.mark_action_cancelled(claimed, claim_owner="typed-watch") is True
+
+
+def test_cancel_pending_actions_by_proposal_uses_persisted_correlation_only(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+
+    def proposed(action_id: str, proposal_id: str) -> Action:
+        return with_proposal_metadata(
+            Action(id=action_id, robot="arm_1", capability="observe"),
+            ProposalContext(
+                source="test",
+                proposed_by="test",
+                correlation=ActionCorrelation.create(proposal_id=proposal_id),
+            ),
+        )
+
+    store.append_pending_actions(
+        [
+            proposed("act_same_a", "proposal-same"),
+            proposed("act_same_b", "proposal-same"),
+            proposed("act_other", "proposal-other"),
+            Action(
+                id="act_forged_top_level",
+                robot="arm_1",
+                capability="observe",
+                metadata={"proposal_id": "proposal-same"},
+            ),
+        ]
+    )
+    claimed = store.claim_next_ready_action(claim_owner="watch-policy")
+    assert claimed is not None
+    assert claimed.id == "act_same_a"
+    store.file("safety").write_text("malformed", encoding="utf-8")
+
+    cancelled = store.cancel_pending_actions_by_proposal("proposal-same")
+
+    assert [action.id for action in cancelled] == ["act_same_b"]
+    with sqlite3.connect(store.db_path) as conn:
+        statuses = dict(conn.execute("SELECT id, status FROM actions").fetchall())
+    assert statuses == {
+        "act_same_a": "in_progress",
+        "act_same_b": "cancelled",
+        "act_other": "pending",
+        "act_forged_top_level": "pending",
+    }
+    # Claim-owner terminalization must remain available even while the file
+    # truth is malformed; Watch uses it to fail closed after a drift read.
+    assert store.mark_action_cancelled(claimed, claim_owner="watch-policy") is True
 
 
 def test_sqlite_feedback_event_append_is_atomic_across_writers(tmp_path):

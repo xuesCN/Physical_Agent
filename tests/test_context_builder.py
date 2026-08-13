@@ -8,7 +8,9 @@ import pytest
 
 from physical_agent.agent.context_builder import (
     ContextBudget,
+    SafetyGuidanceContextError,
     build_context,
+    build_planner_context,
 )
 from physical_agent.config import write_default_config
 from physical_agent.protocol.schemas import Observation
@@ -119,6 +121,167 @@ def test_context_builder_uses_unescaped_unicode_length_for_budgets(tmp_path, fie
     ).payload
 
     assert payload[field] == document
+
+
+@pytest.mark.parametrize("purpose", ["reply", "proposal", "planner", "tool_loop"])
+def test_context_builder_separates_hard_safety_from_agent_guidance(tmp_path, purpose):
+    store = _seed_store(tmp_path)
+    _write_safety_with_guidance(store, "Keep the wheels suspended above the bench.")
+
+    payload = build_context(store, "inspect safely", purpose=purpose).payload
+
+    assert set(payload["safety"]) == {
+        "metadata",
+        "hard",
+        "guidance",
+        "policy_identity_digest",
+    }
+    assert payload["safety"]["hard"]["rules"]["forbid_duplicate_action_ids"] is True
+    assert payload["safety"]["hard"]["authority"] == "watch_safety_gate"
+    assert payload["safety"]["guidance"]["text"].startswith("Keep the wheels")
+    assert payload["safety"]["guidance"]["authority"] == "advisory_context_only"
+    assert payload["safety"]["guidance"]["may_authorize_execution"] is False
+    assert payload["safety"]["guidance"]["may_override_hard_policy"] is False
+
+
+@pytest.mark.parametrize("purpose", ["proposal", "planner", "tool_loop"])
+def test_hardware_action_context_rejects_guidance_over_budget(tmp_path, purpose):
+    store = _seed_store(tmp_path)
+    _write_safety_with_guidance(store, "bench only " * 40)
+    budget = ContextBudget(safety_guidance_max_chars=80)
+
+    with pytest.raises(SafetyGuidanceContextError) as caught:
+        build_context(store, "move", purpose=purpose, budget=budget)
+
+    assert caught.value.code == "safety.guidance.budget_exceeded"
+    assert caught.value.purpose == purpose
+
+
+def test_reply_truncates_guidance_with_explicit_marker(tmp_path):
+    store = _seed_store(tmp_path)
+    _write_safety_with_guidance(store, "bench only " * 40)
+
+    payload = build_context(
+        store,
+        "explain safety",
+        purpose="reply",
+        budget=ContextBudget(safety_guidance_max_chars=80),
+    ).payload
+
+    guidance = payload["safety"]["guidance"]
+    assert guidance["truncated"] is True
+    assert guidance["status"] == "truncated"
+    assert guidance["warning"] == "safety.guidance.truncated_for_context_budget"
+    assert guidance["original_json_chars"] > guidance["included_json_chars"]
+    assert guidance["included_json_chars"] <= 80
+
+
+def test_simulation_action_context_marks_missing_guidance_without_rejecting():
+    capabilities = {
+        "robots": {
+            "sim_1": {
+                "execution_mode": "simulation",
+                "capabilities": [{"name": "observe"}],
+            }
+        }
+    }
+    bundle = build_planner_context(
+        "look around",
+        capabilities=capabilities,
+        world={},
+        safety={"metadata": {"revision": 1}, "rules": {}},
+    )
+
+    guidance = bundle.payload["safety"]["guidance"]
+    assert guidance["status"] == "missing"
+    assert guidance["warning"] == "safety.guidance.missing_simulation_only"
+
+
+@pytest.mark.parametrize("profile", [{}, {"execution_mode": "unknown"}])
+def test_missing_or_unknown_execution_mode_defaults_to_hardware_fail_closed(profile):
+    with pytest.raises(SafetyGuidanceContextError) as caught:
+        build_planner_context(
+            "move",
+            capabilities={"robots": {"robot_1": profile}},
+            world={},
+            safety={"metadata": {"revision": 1}, "rules": {}},
+        )
+
+    assert caught.value.code == "safety.guidance.missing"
+
+
+def test_context_summaries_keep_hardware_safety_evidence(tmp_path):
+    store = _seed_store(tmp_path)
+    _write_safety_with_guidance(store, "Bench only.")
+    capabilities = {
+        "robots": {
+            "car_1": {
+                "kind": "car",
+                "execution_mode": "hardware",
+                "status": "connected",
+                "requires_approval": True,
+                "capabilities": [
+                    {
+                        "name": "drive_for",
+                        "description": "drive" + ("x" * 500),
+                        "constraints": {
+                            "bounds": {"speed": [-12, 12], "duration_ms": [1, 180]}
+                        },
+                        "params_schema": {
+                            "type": "object",
+                            "required": ["speed", "duration_ms"],
+                            "properties": {"speed": {}, "duration_ms": {}},
+                        },
+                    }
+                ],
+            }
+        }
+    }
+    robot_state = {
+        "status": "moving",
+        "tof_available": True,
+        "tof_valid": False,
+        "tof_mm": 0,
+        "moving": True,
+        "motor_cmd": 12,
+        "bench_only": True,
+        "watchdog_tripped": False,
+        "raw_noise": "x" * 500,
+    }
+    world = {
+        "summary": "car state",
+        "state": {"robots": {"car_1": robot_state}},
+        "observation": {"robots": {"car_1": robot_state}},
+    }
+
+    payload = build_context(
+        store,
+        "inspect",
+        purpose="proposal",
+        budget=ContextBudget(world_max_chars=120, capabilities_max_chars=120),
+        capabilities=capabilities,
+        world=world,
+    ).payload
+
+    summarized_capability = payload["capabilities"]["robots"]["car_1"]
+    assert summarized_capability["execution_mode"] == "hardware"
+    assert summarized_capability["capabilities"][0]["constraints"]["bounds"] == {
+        "speed": [-12, 12],
+        "duration_ms": [1, 180],
+    }
+    for branch in ("state", "observation"):
+        summarized_robot = payload["world"][branch]["robots"]["car_1"]
+        assert summarized_robot == {
+            "id": "car_1",
+            "status": "moving",
+            "tof_available": True,
+            "tof_valid": False,
+            "tof_mm": 0,
+            "moving": True,
+            "motor_cmd": 12,
+            "bench_only": True,
+            "watchdog_tripped": False,
+        }
 
 
 def test_context_builder_is_read_only(tmp_path):
@@ -342,7 +505,21 @@ def _seed_store(tmp_path):
             },
         ]
     )
+    _write_safety_with_guidance(
+        store,
+        "Keep the robot on its supervised test fixture and obey live safety state.",
+    )
     return store
+
+
+def _write_safety_with_guidance(store, guidance: str) -> None:
+    path = store.file("safety")
+    current = path.read_text(encoding="utf-8")
+    base = current.split("\n## Agent Guidance\n", 1)[0].rstrip()
+    path.write_text(
+        base + f"\n\n## Agent Guidance\n\n{guidance.strip()}\n",
+        encoding="utf-8",
+    )
 
 
 def _snapshot(bundle) -> dict[str, Any]:

@@ -1398,7 +1398,8 @@ class ApiController:
             "ok": True,
             "message": (
                 "Workspace has been reset: world, actions, memory, chat, and uploads "
-                "are cleared; SAFETY is restored to defaults. "
+                "are cleared; SAFETY hard Rules are restored to defaults while "
+                "Agent Guidance is preserved. "
                 "physical-agent.yaml is untouched. "
                 "Capabilities will be republished the next time watch runs."
             ),

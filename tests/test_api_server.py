@@ -52,6 +52,7 @@ def _prepare_store(config_path: Path):
             "arm_1": {
                 "kind": "arm",
                 "driver": "mock_arm",
+                "execution_mode": "simulation",
                 "status": "connected",
                 "capabilities": [
                     {
@@ -1711,6 +1712,13 @@ def test_api_workspace_reset_clears_state_without_watch(tmp_path, monkeypatch):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     store = _prepare_store(config_path)
     store.append_chat_message("user", "hello before reset")
+    guidance = "Keep both test wheels raised and keep a physical power cutoff available."
+    store.file("safety").write_text(
+        store.file("safety").read_text(encoding="utf-8").rstrip()
+        + f"\n\n## Agent Guidance\n\n{guidance}\n",
+        encoding="utf-8",
+    )
+    safety_before = store.read_safety_snapshot()
     client = TestClient(create_app(config_path))
     client.post(
         "/api/actions/propose",
@@ -1735,10 +1743,16 @@ def test_api_workspace_reset_clears_state_without_watch(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["ok"] is True
+    assert "hard Rules" in response.json()["message"]
+    assert "Agent Guidance is preserved" in response.json()["message"]
     fresh = open_state_store(config_path=config_path)
     assert fresh.exists()
     assert fresh.read_chat()["messages"] == []
     assert fresh.read_actions()["pending"] == []
+    safety_after = fresh.read_safety_snapshot()
+    assert safety_after.hard.revision == safety_before.hard.revision + 1
+    assert safety_after.agent_guidance == guidance
+    assert safety_after.hard.rules["allow_autonomous_execution"] is True
     # Config file must survive a workspace reset.
     assert config_path.exists()
     assert "arm_1" in config_path.read_text(encoding="utf-8")

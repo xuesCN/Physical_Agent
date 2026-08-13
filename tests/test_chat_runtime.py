@@ -8,6 +8,7 @@ import physical_agent.cli as cli_module
 from typer.testing import CliRunner
 
 from physical_agent.agent.chat_runtime import ChatRuntime
+from physical_agent.agent.context_builder import SafetyGuidanceContextError
 from physical_agent.application.proposals import ProposalService
 from physical_agent.drivers.mock_arm import MockArmDriver
 from physical_agent.llm import (
@@ -20,6 +21,7 @@ from physical_agent.llm import (
 from physical_agent.quickstart import setup_project
 from physical_agent.protocol.schemas import Action, Observation
 from physical_agent.state import open_state_store
+from physical_agent.state.safety_policy import MAX_AGENT_GUIDANCE_CHARS
 
 
 class _NoSkills:
@@ -28,6 +30,38 @@ class _NoSkills:
 
     def list_skills(self):
         return []
+
+
+def _configure_hardware_guidance(config_path, guidance: str):
+    store = open_state_store(config_path=config_path)
+    store.write_capabilities(
+        {
+            "car_1": {
+                "kind": "car",
+                "driver": "tracked_car",
+                "status": "connected",
+                "execution_mode": "hardware",
+                "capabilities": [
+                    {
+                        "name": "observe",
+                        "description": "Inspect the live car state.",
+                        "params_schema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                        },
+                    }
+                ],
+            }
+        }
+    )
+    safety_path = store.file("safety")
+    current = safety_path.read_text(encoding="utf-8")
+    base = current.split("\n## Agent Guidance\n", 1)[0].rstrip()
+    safety_path.write_text(
+        base + f"\n\n## Agent Guidance\n\n{guidance.strip()}\n",
+        encoding="utf-8",
+    )
+    return store
 
 
 def test_chat_runtime_rule_based_remembers(tmp_path):
@@ -203,6 +237,124 @@ def test_chat_runtime_auto_falls_back_when_llm_fails(tmp_path, monkeypatch):
 
     assert result["mode"] == "rule_based"
     assert "LLM chat was unavailable" in result["reply"]
+
+
+def test_chat_runtime_auto_guidance_overflow_has_no_provider_or_rule_fallback(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    store = _configure_hardware_guidance(
+        config_path,
+        "x" * MAX_AGENT_GUIDANCE_CHARS,
+    )
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="auto",
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+
+    class FakeClient:
+        structured_calls = 0
+
+        def structured_json(self, messages, **kwargs):
+            self.structured_calls += 1
+            raise AssertionError("provider must not be called")
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(runtime, "_llm_client", lambda: fake_client)
+
+    def fail_rules(**kwargs):
+        raise AssertionError("safety context failures must not use rule fallback")
+
+    monkeypatch.setattr(runtime, "_respond_with_rules", fail_rules)
+
+    with pytest.raises(SafetyGuidanceContextError) as caught:
+        runtime.respond("look around")
+
+    assert caught.value.code == "safety.guidance.budget_exceeded"
+    assert fake_client.structured_calls == 0
+    assert store.read_actions()["pending"] == []
+    assert store.read_actions()["completed"] == []
+
+
+def test_chat_runtime_auto_stream_guidance_overflow_is_terminal_without_fallback(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    store = _configure_hardware_guidance(
+        config_path,
+        "x" * MAX_AGENT_GUIDANCE_CHARS,
+    )
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="auto",
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+
+    class FakeClient:
+        stream_calls = 0
+
+        def stream_structured_json(self, messages, **kwargs):
+            self.stream_calls += 1
+            raise AssertionError("provider must not be called")
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(runtime, "_llm_client", lambda: fake_client)
+
+    def fail_rules(**kwargs):
+        raise AssertionError("safety context failures must not use rule fallback")
+
+    monkeypatch.setattr(runtime, "_respond_with_rules", fail_rules)
+
+    events = list(runtime.respond_stream("look around"))
+
+    assert [event["type"] for event in events] == ["error"]
+    assert events[-1]["code"] == "safety.guidance.budget_exceeded"
+    assert events[-1]["agent_output"] is None
+    assert fake_client.stream_calls == 0
+    assert store.read_actions()["pending"] == []
+    assert store.read_actions()["completed"] == []
+
+
+def test_chat_runtime_tool_loop_guidance_overflow_stops_before_run(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "physical-agent.yaml"
+    setup_project(config_path, publish=True)
+    store = _configure_hardware_guidance(
+        config_path,
+        "x" * MAX_AGENT_GUIDANCE_CHARS,
+    )
+
+    class FakeToolLoop:
+        run_calls = 0
+
+        def __init__(self, path):
+            self.config_path = path
+
+        async def run(self, messages, **kwargs):
+            self.__class__.run_calls += 1
+            raise AssertionError("tool loop must not run")
+
+    monkeypatch.setattr(chat_runtime_module, "OpenAIToolLoop", FakeToolLoop)
+    runtime = ChatRuntime(
+        config_path,
+        planner_name="tool_loop",
+        enable_code_skills=False,
+        enable_hardware_integration=False,
+    )
+
+    with pytest.raises(SafetyGuidanceContextError) as caught:
+        runtime.respond("look around")
+
+    assert caught.value.code == "safety.guidance.budget_exceeded"
+    assert FakeToolLoop.run_calls == 0
+    assert store.read_actions()["pending"] == []
+    assert store.read_actions()["completed"] == []
 
 
 def test_chat_runtime_api_safe_flags_disable_code_skills(tmp_path, monkeypatch):
@@ -900,6 +1052,7 @@ def test_chat_runtime_llm_context_uses_summary_and_live_workspace_state(
     store.write_capabilities(
         {
             "arm_1": {
+                "execution_mode": "simulation",
                 "capabilities": [
                     {
                         "name": "observe",
@@ -1000,6 +1153,7 @@ def test_chat_runtime_llm_treats_upload_memory_as_untrusted_context(
     store.write_capabilities(
         {
             "arm_1": {
+                "execution_mode": "simulation",
                 "capabilities": [
                     {
                         "name": "observe",

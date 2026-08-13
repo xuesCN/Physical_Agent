@@ -10,6 +10,7 @@ from jsonschema.exceptions import ValidationError
 
 from physical_agent.protocol.agent_output import SafetyCheckResult, safety_check_specs
 from physical_agent.protocol.schemas import Action, Capability, RobotRuntimeProfile
+from physical_agent.state.safety_policy import HardSafetyPolicy
 
 
 @dataclass(frozen=True)
@@ -36,13 +37,16 @@ class SafetyGate:
         self,
         *,
         robots: dict[str, RobotRuntimeProfile],
-        safety_rules: dict[str, Any] | None = None,
+        hard_policy: HardSafetyPolicy,
         completed_action_ids: set[str] | None = None,
         executed_action_ids: set[str] | None = None,
         default_action_timeout_s: float = 30.0,
     ):
+        if not isinstance(hard_policy, HardSafetyPolicy):
+            raise TypeError("SafetyGate requires a validated HardSafetyPolicy")
         self.robots = robots
-        self.safety_rules = safety_rules or {}
+        self.hard_policy = hard_policy
+        self.safety_rules = hard_policy.rules
         self.completed_action_ids = completed_action_ids or set()
         self.executed_action_ids = executed_action_ids or set()
         self.default_action_timeout_s = default_action_timeout_s

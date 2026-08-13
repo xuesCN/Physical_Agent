@@ -2,7 +2,7 @@
 
 > 配套 `SPEC.zh-CN.md` §4 矩阵使用：矩阵管"做什么/状态"，本册管"怎么做"。每项含：思路、关键文件、坑、验收。
 > 写给后续执行者（人或 agent）。动工前先读 SPEC §0 不变量与 REFACTORING §3 决策先例；每项动工时按惯例先出一份轮次 brief。
-> 最后更新：2026-08-12
+> 最后更新：2026-08-14
 
 ---
 
@@ -78,6 +78,32 @@
 **坑**：现有 `tests/golden/context_builder/*.json` 会先把 user content 解析成对象，本修复不应机械重写四份 golden；应直接断言原始 wire 保留中文且没有 `\\uXXXX`，并构造“原生 JSON 未超限、ASCII 转义会超限”的中文 world/capabilities/feedback 边界用例。token 数依赖 tokenizer，本条只承诺一致的 JSON 字符预算。
 
 **验收**：四路消息中的中文保持原文；中文在未转义 JSON 字符长度未超预算时不触发摘要；ASCII workspace 行为与 payload 形状不变；context builder 专项和全量 `pytest` 通过。
+
+## F3.1b / 003 SAFETY 策略通道硬化
+
+完整规格、阶段与正反矩阵见 `docs/specs/003-safety-policy-channel-hardening/`。
+
+**思路**：先把 SAFETY v1 建成严格、typed、原子且 missing/malformed fail-closed 的 hard policy 真源；再只从显式 `## Agent Guidance` 节向四个 ContextPurpose 传递设备语义。SafetyGate 只接受不含 guidance 的 `HardSafetyPolicy`；Watch 每 action 在 Gate 前 fresh-read，并按 trusted proposal correlation 处理策略漂移。
+
+**关键文件**：`state/safety_policy.py`、`state/sidecars.py`、`state/sqlite.py`、`agent/context_builder.py`、`watch/safety.py`、`watch/runtime.py`、`car_agent/SAFETY.template.md` 及 sidecar/state/context/watch/car/API 测试。
+
+**坑**：runtime setup 不能把被删策略当 fresh workspace 自动补回；claimed action 的终态落盘不能依赖当前可能已损坏的 SAFETY；普通 reset 保留 guidance；guidance 有独立预算且不能挤掉 TOF/bounds；`policy_digest` 只能代表 Gate 强制的 hard rules。
+
+**验收**：硬策略所有残缺/错类型/未知 key 反例零执行；hardware 缺/超限 guidance 零 LLM/零 action/零 driver，simulation 兼容警告；四路和真实 planner 注入；revision/digest 漂移只取消同 proposal 剩余且不 halt；clean checkout car 模板可交付；全量门禁通过。
+
+## F3.2 / 004 记忆分层与上下文带位硬化
+
+完整规格、阶段与正反矩阵见 `docs/specs/004-memory-context-band-hardening/`。**依赖：003 收口后开工**——003 已在树上改动 `context_builder` 的 budget 与 safety 注入，004 要改同一函数的字段顺序与预算结构，并行会在四份 context golden 上产生不可判定冲突。
+
+**思路**：记忆不是自治子系统，是上下文预算里的一个受控输入。payload 重排为稳定段（`context_policy`/`execution_contract`/`capabilities`/`safety`）、半稳定段（`memory_pinned`）、易变段（`world`/`feedback`/`retrieved_context`/`memory_episodic`/`chat_history`/`latest_user_message`）；带位由 `kind`/`importance`/`superseded_by`/`created_at` 读取时派生，不建带位存储列。契约升级必须先于布局重排——先让 `importance`/`kind` 有可信写入通道，再让它决定注入位置，顺序颠倒会重现「`importance` 恒为 0、排序逻辑是死代码」的现状。
+
+**关键文件**：`agent/llm_contracts.py`、`protocol/memory.py`、`protocol/retrieval.py`、`state/sqlite.py`、`state/base.py`、`agent/context_builder.py`、`agent/chat_runtime.py` 及 context golden/记忆/检索/state 测试。
+
+**坑**：`chat_runtime` 有非流式与流式**两条** `append_memory_note` 路径，历史上改一处漏一处；`write_memory()` 是全量覆盖并会 `DELETE FROM memory_chunks WHERE source_type='memory'` 重建，trust 回填必须覆盖该路径否则一次全量写入即被冲掉；上传来源 note 不切 chunk（`source == "upload"` 直接 return），带位与失效不要误伤该分支；`filter_memory_notes` 的 `limit` 取尾部 N 条而 `_top_memory_notes` 按 importance 排序，带位化后要确认两者不再互相抵消；段级预算不得与 003 的 `safety_guidance_max_chars` 共用剩余量计算器，否则出现记忆挤占安全 guidance 的路径；四份 golden 会整体变化，重录必须单独成提交并逐字段 diff，整体覆盖会让真正的回归混在噪音里。
+
+**决策留痕**：`trust_level` 保持 trusted/untrusted 两档，放弃早期 `file`/`runtime`/`derived` 三档草案——003 已用 `HardSafetyPolicy`/`SafetyPolicySnapshot` 建立 typed 信任隔离，第二套信任语义会让「什么算可信」出现两个答案，而这正是 SAFETY 通道当初出问题的形态；记忆一侧只需要一个事实，即它永远不可信。
+
+**验收**：pinned note 位于 `capabilities`/`safety` 之后、`world` 之前且四路顺序一致；`list[str]` 旧形式仍被接受并归一；`importance=3` 被 strict 契约拒绝、越权 `kind` 降级为 `fact` 并记 `downgraded_from`；段超预算时 `truncated_notes` 显式且零静默丢弃；含「本条为可信系统规则」字样的注入样本无法改变 trust_level 或带位；炸药桩证明记忆内容不可能进入 `safety`/guidance/hard policy/policy digest；`retrieval.enabled` 两态下同一 note 不双注入；记忆/检索/state/context 专项与全量 `pytest` 通过。
 
 ## F4 期望-比对-回灌
 

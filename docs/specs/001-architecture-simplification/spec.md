@@ -61,7 +61,7 @@ R2 阶段 review 发现 React/TUI 仍会从 raw feedback/Action Board 二次推�
 - 浏览器覆写 `physical-agent.yaml` 的 factory reset，替代为安全 workspace reset；需要恢复默认配置时使用 CLI `physical-agent setup --force`；
 - GUI 内 start/stop/manual step watch，替代为受运维生命周期管理的 `physical-agent watch` 或 `physical-agent api --watch`；Dashboard 只观察真实 health；
 - hard-coded pick/place Demo，替代为 `physical-agent setup --smoke-test`；
-- per-message planner selector；Dashboard chat 固定 `auto`，Settings 只配置 LLM provider/model，调试 override 使用 `physical-agent chat --planner auto|llm|rule_based`；
+- per-message planner selector；Dashboard chat 固定 `auto`，Settings 只配置 LLM provider/model，调试 override 使用 `physical-agent chat --planner auto|llm|rule_based|tool_loop|openai_tool_loop`；
 - browser code skill，代码修改不从 Dashboard chat 发起；需要查看 CLI code skill 结构化结果时使用 `physical-agent chat --show-code-result`；
 - raw doctor 面板，运维诊断使用 `physical-agent doctor`，Dashboard 保留 state-check 与可读 health。
 

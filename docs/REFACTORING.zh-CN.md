@@ -37,6 +37,7 @@
 | F3.1a | context_builder Unicode wire 与预算统一：中文不再因 `ensure_ascii` 转义提前摘要 | 本轮提交；context `16 passed`、调用链矩阵 `57 passed`、Python full `562 passed, 1 warning` |
 | F4 | 期望-比对-回灌：expected 确定性比对、feedback 回灌、前端可见性 | `b5be3b7` |
 | F5.0 | `car_agent` 自包含 TCP/NDJSON driver：默认禁运动、bounded `drive_for`、Watch/SafetyGate 实机链路地基 | 本轮提交；car 专项 `52 passed`、受影响矩阵 `131 passed`、Python full `521 passed`；独立终审 Critical/Important=0 |
+| F5.0-真机首连 | 真机首连验收：`scripts/car_first_contact.py` 探针（复用 driver 本体）+ 手动提案→审批→SafetyGate→watch `observe` 全链路（192.168.66.12） | 本轮提交；探针 10/10、SafetyGate 10 checks passed、`inspect` 能力=observe/stop、full pytest 见 §2 |
 | W2 | 观察并发化 + observe 频率与 tick 解耦 | `4e0f732` |
 | W3 | transport 断线重连：可选 policy、fail-fast、driver reinit hook | `1d9a812`, `7762c0f` |
 | VNext-0 | ProposalService + typed metadata + 执行边界 + execution_mode 地基 | 本轮提交 |
@@ -124,6 +125,8 @@
 默认配置不含本地运动包络，因此连接前后都只发布 `observe/stop`；只有同时配置 `max_abs_speed` 与 `max_duration_ms` 且远端声明 `drive` 才发布需审批的 `drive_for`。一个 Gate-approved execute 内按绝对 deadline 与 800ms 固件 watchdog 续发：下一帧从前一发送时刻调度，慢 ACK 不叠加 refresh 延迟；是否需要尾帧也从 `sent_at + 700ms` 的保守覆盖判断，测试同时锁定 drive→drive 与最后 drive→stop 均小于 800ms。迟到 ACK 不报告 completed；clamp、有效 speed 不符、电机不可用、远端错误、超时和取消均尝试最终 stop。任何未确认 stop（包括握手基线）都会断开 transport、清空远端运动能力，防止同一批次后续 action 继续续租。`halt()` 明确停车，`disconnect()` 明确只释放旧 owner 自身连接。
 
 测试使用真实 asyncio loopback TCP server 覆盖身份/健康/能力拒绝、NDJSON 分帧与畸形 envelope、远端错误码、无包络 fail closed、慢响应 cadence、绝对 deadline、取消、停车失败失效、Watch hardware 审批和 Gate-before-execute；样例配置与双语 README 固定“默认不能动”、单 watch、可信 2.4GHz、LLM 本地设置与车轮架空流程。最终证据：car driver/example `52 passed`；loader/manifest/safety/watch/timeout 受影响矩阵 `131 passed`；Python full `521 passed, 2 warnings`（既有 Starlette TestClient deprecation 与 pytest cache 权限提示）；两轮独立终审最终 Critical=0、Important=0。尚未提供真实小车 IP 与实测安全包络，因此本轮只完成软件/协议 fake 联调，**不声称真实连接或运动已验收**。
+
+**2026-08-05 真机首连验收**：用户提供实车（DHCP 192.168.66.12、固件 `0.1.0-level0`）与最新版设备接入说明书；对照其附录核验清单逐条复查 driver 全部符合。新增 `scripts/car_first_contact.py` 首连探针——刻意复用经 loader 加载的 `CarAgentDriver` 本体而非另写协议实现，避免探针与 driver 行为分叉（rationale：探针通过=watch 同代码路径通过；只调 connect/health/observe/halt，不调 execute，不触红线）。真机结果：探针 10/10，前轮"仅真机可验证"的 4 项中身份三元组、`service_running`、stop 确认 3 项实测吻合（drive 响应结构留运动轮）；L1 全链路手动提案（`POST /api/actions/propose`，注意 Action `id` 必填）→hardware 审批→SafetyGate 10 checks passed（policy_source=SAFETY.md，双 digest 入审计）→watch 执行 `observe`→feedback completed，TOF 实测 86-99mm。**设备文档偏差记录**：固件 observe 实际返回 `enc_left/enc_right`（说明书称 Level 0 无编码器数据且右编码器与 UART 冲突），driver 仅透传 raw、不采用，不得据此做闭环。运动验收仍待轮空标定包络后另轮进行。收工全量 pytest 唯一失败是样例护栏 `test_car_agent_sample_is_hardware_mode_with_motion_disabled`（提交样例必须保持 `REPLACE_WITH_CAR_IP` 占位）——决策：真实地址分离到 gitignore 的 `car_agent/physical-agent.local.yaml`（`*.local.yaml` 模式入 .gitignore），样例恢复占位符而非放宽护栏；car 专项复跑 `52 passed`，全量其余 `520 passed`。
 
 ### A1 系列：官方 SDK 与聊天体验（重构后期补做）
 
@@ -623,6 +626,7 @@ brief §2 记的 P1：`streamMessages` 挂在 Dashboard 顶层，聊天流式输
 90. **本机根路径 Dashboard 先用 query 表达页面，不引入路由库或后端 clean-path fallback**（C6.1）：选择 `?page=<page-key>`，因为它能在不改变 FastAPI 静态托管与依赖图的前提下提供直达、刷新和 history；缺省 `/` 继续兼容 overview，显式非法 key 才 replace 归一。放弃 `/actions` 一类 clean path 与 404 页面，因为当前不是公网多路径应用，收益不足以覆盖后端 fallback、部署与测试面扩张。
 91. **流式重渲染采用 rAF 攒批 + 分层 memo，不引状态管理库、不先做全局 state 下沉**（C7）：选择 `requestAnimationFrame` 合帧（而非固定毫秒节流），配 generation 隔离陈旧回调；`MessageContent`/`MarkdownBlock` 与常驻组件 `React.memo` + 关键 handler `useCallback`，把每 token O(历史) 的 Markdown 重解析压到 O(尾块)，并让流式无关组件退出渲染。放弃方案①的"彻底版"（把 `streamMessages` 下沉进 ChatPanel/独立 store），因为现有分层已吃掉主要卡顿且改动面小可回滚；`streamMessages` 仍留在 Dashboard 顶层，Dashboard 本体每帧至多重渲染一次，若 profiling 仍显示瓶颈再下沉。保留 `idleWatchTick` SSE 去重不动。
 92. **设备专用 driver 先随硬件 bundle 交付，运动能力以本地实测包络 opt-in**（F5.0）：选择 `car_agent/` local driver + 标准库 asyncio stream，放弃在首台 Level 0 小车上提前抽象 core TCP/NDJSON transport 或 builtin registry。固件 ±60 只是技术夹限，不是实车安全值；缺任一速度/时长上限就不发布运动。未知动作结果不重放，未确认 stop 立即断连并撤销运动，fresh handshake 才能恢复。
+93. **所有者授权的 Level 0 落地试运行（一次性偏离，2026-08-05）**：项目所有者四次明确要求后，在「场地宽阔、人员在场可随时拿起小车、速度包络 ±25/单发 ≤2s、逐动作人工审批、agent 侧每次运动前核对 TOF」条件下，对 Level 0 固件做落地前进/后退试运行，偏离设备说明书 §0 与 F5.0 尾注的"仅台架"约束。已向所有者书面告知残余风险：该固件无本地避障兜底，断连时按最后指令盲跑最多 ~850ms（当日实测发生过两次 WiFi 掉线）。此偏离不构成先例：**落地常态化的重启条件仍是设备侧 Level 1（避障强制兜底）验收**；执行权唯一与 Gate-before-execute 两条宪法未受影响。
 
 ## 4. 经验教训（流程侧）
 

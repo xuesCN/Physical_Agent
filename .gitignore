@@ -12,6 +12,8 @@ workspace/
 .tmp/
 .physical-agent/
 /physical-agent.yaml
+# 实机本地配置（真实 IP/包络不入库；样例保持占位符，由 test_car_agent_example 护栏保证）
+*.local.yaml
 .env
 **/.llm.json
 frontend/node_modules/

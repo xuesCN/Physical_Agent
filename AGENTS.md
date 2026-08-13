@@ -20,8 +20,18 @@
 
 1. 全量测试通过（`pytest`；改前端则加 `tsc -b && vite build`）。
 2. 更新 SPEC §4 对应行状态；REFACTORING §1 表格追加一行，实现要点并入 §2 小节，新决策/教训补 §3/§4。
-3. **不写独立 handoff 文档**（历史上堆出过 33 份）——收工总结的家就是 REFACTORING；本轮 brief 用完即删（升级为 `specs/00X/` 的大条目除外，可在目录内留完整记录）。
-4. commit 全部改动并 push。
+3. **按改动层复核 `docs/agent-architecture-vnext.zh-CN.md`**——只复核被触发的章节，不做全文核查：
+
+   | 本轮改动涉及 | 复核 |
+   | --- | --- |
+   | `physical_agent/watch/` | vnext §4 |
+   | `physical_agent/state/` | vnext §5、§5.1 |
+   | `physical_agent/protocol/` | vnext §3 |
+   | `physical_agent/api/`，或任何改变对外 API/SSE wire 契约的改动 | vnext §7 |
+
+   一处都没触发就不复核。该文件的 frozen registry 部分（§6、§8，以及 §9 的 VNext-3A/3B2/4/5/6 子节）**不在本规则覆盖范围内**——它们记录刻意未建之物，不随代码演进，修改需经解冻流程。
+4. **不写独立 handoff 文档**（历史上堆出过 33 份）——收工总结的家就是 REFACTORING；本轮 brief 用完即删（升级为 `specs/00X/` 的大条目除外，可在目录内留完整记录）。
+5. commit 全部改动并 push。
 
 ## 文档纪律（三条约定）
 

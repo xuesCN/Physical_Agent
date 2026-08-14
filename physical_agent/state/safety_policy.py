@@ -13,8 +13,8 @@ from yaml.constructor import ConstructorError
 from yaml.nodes import MappingNode
 
 from physical_agent.protocol.markdown import (
+    FRONT_MATTER_RE,
     extract_markdown_sections,
-    parse_front_matter,
 )
 
 
@@ -142,14 +142,24 @@ def parse_safety_policy(
     source: str = "SAFETY.md",
 ) -> SafetyPolicySnapshot:
     try:
-        document = parse_front_matter(text)
+        front_matter_match = FRONT_MATTER_RE.match(text)
+        if front_matter_match is None:
+            raise ValueError(
+                "SAFETY Markdown documents must start with YAML front matter."
+            )
+        metadata = yaml.load(
+            front_matter_match.group(1),
+            Loader=_UniqueKeySafeLoader,
+        ) or {}
+        if not isinstance(metadata, dict):
+            raise ValueError("SAFETY front matter must be a YAML mapping.")
     except Exception as exc:
         raise SafetyPolicyError(
             SAFETY_POLICY_INVALID,
             f"{source} has invalid front matter: {exc}",
         ) from exc
 
-    metadata = dict(document.metadata)
+    metadata = dict(metadata)
     if metadata.get("schema") != SAFETY_SCHEMA:
         raise SafetyPolicyError(
             SAFETY_POLICY_INVALID,
@@ -167,7 +177,8 @@ def parse_safety_policy(
             f"{source} revision must be a positive integer.",
         )
 
-    rules_sections = extract_markdown_sections(document.body, "Rules", level=2)
+    body = front_matter_match.group(2)
+    rules_sections = extract_markdown_sections(body, "Rules", level=2)
     if len(rules_sections) != 1:
         raise SafetyPolicyError(
             SAFETY_POLICY_INVALID,
@@ -189,7 +200,7 @@ def parse_safety_policy(
     rules = validate_safety_rules(raw_rules, source=source)
 
     guidance_sections = extract_markdown_sections(
-        document.body,
+        body,
         "Agent Guidance",
         level=2,
     )

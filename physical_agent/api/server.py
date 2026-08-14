@@ -49,7 +49,12 @@ from physical_agent.llm import (
 )
 from physical_agent.protocol.agent_output import AgentOutput
 from physical_agent.protocol.schemas import Action, ChatPlan
-from physical_agent.state import ActiveRuntimeLeaseError, StateStore, open_state_store
+from physical_agent.state import (
+    ActiveRuntimeLeaseError,
+    SafetyPolicyError,
+    StateStore,
+    open_state_store,
+)
 from physical_agent.state.check import run_state_check, state_check_ok
 
 
@@ -662,16 +667,32 @@ class ApiController:
                 }
             )
         exists = store.exists()
+        safety_policy_valid = False
+        safety_policy_error: str | None = None
+        try:
+            store.read_safety_snapshot()
+        except SafetyPolicyError as exc:
+            safety_policy_error = str(exc)
+        else:
+            safety_policy_valid = True
+        ready = exists and safety_policy_valid
+        if ready:
+            message = "Ready."
+        elif store.path.exists() and safety_policy_error:
+            message = f"SAFETY policy is unavailable or invalid: {safety_policy_error}"
+        else:
+            message = "Workspace is not initialized."
         return self._with_executor(
             {
                 "ok": True,
-                "ready": exists,
-                "message": "Ready." if exists else "Workspace is not initialized.",
+                "ready": ready,
+                "message": message,
                 "config_path": str(self.config_path),
                 "workspace_path": str(store.path),
                 "backend": config.workspace.backend,
                 "config_exists": True,
                 "workspace_exists": exists,
+                "safety_policy_valid": safety_policy_valid,
             }
         )
 
@@ -816,7 +837,7 @@ class ApiController:
         ok = state_check_ok(result)
         return {
             "ok": ok,
-            "ready": bool(result["workspace_initialized"]),
+            "ready": ok,
             "message": "State backend is ready." if ok else "State backend needs attention.",
             **_json_safe(result),
         }

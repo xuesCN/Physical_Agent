@@ -512,7 +512,10 @@ def test_watch_simulation_action_keeps_legacy_compatibility_without_guidance(tmp
     assert _feedback_events(store, "safety_policy_preflight") == []
 
 
-@pytest.mark.parametrize("mutation", ["revision", "guidance_digest", "malformed"])
+@pytest.mark.parametrize(
+    "mutation",
+    ["revision", "hard_digest", "guidance_digest", "malformed"],
+)
 def test_watch_policy_drift_cancels_only_same_proposal_without_halt(
     tmp_path,
     monkeypatch,
@@ -524,9 +527,11 @@ def test_watch_policy_drift_cancels_only_same_proposal_without_halt(
     asyncio.run(runtime.setup())
     store = open_state_store(config_path=config_path)
     original_safety_text = store.file("safety").read_text(encoding="utf-8")
+    baseline_snapshot = store.read_safety_snapshot()
+    changed_snapshot = None
     proposal_id = "proposal_policy_drift"
 
-    def correlated(action_id):
+    def correlated(action_id, correlated_proposal_id=proposal_id):
         return Action(
             id=action_id,
             robot="arm_1",
@@ -534,7 +539,7 @@ def test_watch_policy_drift_cancels_only_same_proposal_without_halt(
             metadata={
                 "correlation": {
                     "session_id": "workspace",
-                    "proposal_id": proposal_id,
+                    "proposal_id": correlated_proposal_id,
                 }
             },
         )
@@ -544,7 +549,7 @@ def test_watch_policy_drift_cancels_only_same_proposal_without_halt(
             correlated("act_drift_first"),
             correlated("act_drift_second"),
             correlated("act_drift_third"),
-            Action(id="act_other_proposal", robot="arm_1", capability="observe"),
+            correlated("act_other_proposal", "proposal_other"),
         ],
         [],
         [],
@@ -554,11 +559,22 @@ def test_watch_policy_drift_cancels_only_same_proposal_without_halt(
     halt_calls = []
 
     async def mutate_policy_after_first(action):
+        nonlocal changed_snapshot
         execute_calls.append(action.id)
         result = await original_execute(action)
         if len(execute_calls) == 1:
             if mutation == "revision":
                 store.write_safety(store.read_safety()["rules"])
+            elif mutation == "hard_digest":
+                text = store.file("safety").read_text(encoding="utf-8")
+                store.file("safety").write_text(
+                    text.replace(
+                        "allow_autonomous_execution: true",
+                        "allow_autonomous_execution: false",
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
             elif mutation == "guidance_digest":
                 text = store.file("safety").read_text(encoding="utf-8")
                 store.file("safety").write_text(
@@ -567,6 +583,8 @@ def test_watch_policy_drift_cancels_only_same_proposal_without_halt(
                 )
             else:
                 store.file("safety").write_text("not a safety policy\n", encoding="utf-8")
+            if mutation != "malformed":
+                changed_snapshot = store.read_safety_snapshot()
         return result
 
     async def halt():
@@ -605,6 +623,91 @@ def test_watch_policy_drift_cancels_only_same_proposal_without_halt(
     assert {event["code"] for event in events} == {expected_code}
     assert all(event["result"]["baseline"] for event in events)
     assert all(event["result"]["cancelled_action_ids"] for event in events)
+    expected_baseline = {
+        "revision": baseline_snapshot.hard.revision,
+        "policy_digest": f"sha256:{baseline_snapshot.hard.digest}",
+        "guidance_digest": f"sha256:{baseline_snapshot.guidance_digest}",
+        "policy_identity_digest": f"sha256:{baseline_snapshot.identity_digest}",
+    }
+    assert all(event["result"]["baseline"] == expected_baseline for event in events)
+    assert all(event["policy_revision"] == baseline_snapshot.hard.revision for event in events)
+    assert all(
+        event["policy_digest"] == f"sha256:{baseline_snapshot.hard.digest}"
+        for event in events
+    )
+    assert all(
+        event["guidance_digest"] == f"sha256:{baseline_snapshot.guidance_digest}"
+        for event in events
+    )
+    assert all(
+        event["policy_identity_digest"]
+        == f"sha256:{baseline_snapshot.identity_digest}"
+        for event in events
+    )
+    if mutation == "malformed":
+        assert all(event["result"]["current"] is None for event in events)
+        assert all(
+            event["result"]["policy_error"]["code"] == "safety.policy.invalid"
+            for event in events
+        )
+    else:
+        assert changed_snapshot is not None
+        expected_current = {
+            "revision": changed_snapshot.hard.revision,
+            "policy_digest": f"sha256:{changed_snapshot.hard.digest}",
+            "guidance_digest": f"sha256:{changed_snapshot.guidance_digest}",
+            "policy_identity_digest": f"sha256:{changed_snapshot.identity_digest}",
+        }
+        assert all(event["result"]["current"] == expected_current for event in events)
+        assert all(event["result"]["policy_error"] is None for event in events)
+
+
+def test_watch_policy_drift_on_legacy_action_cancels_only_current_action(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_watch_config(config_path, halt_on_shutdown=False)
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    store.write_actions(
+        [
+            Action(id="act_legacy_drift", robot="arm_1", capability="observe"),
+            Action(id="act_legacy_other", robot="arm_1", capability="observe"),
+        ],
+        [],
+        [],
+    )
+    original_read = runtime.workspace.read_safety_snapshot
+    read_count = 0
+    execute_calls = []
+
+    def change_policy_on_fresh_read():
+        nonlocal read_count
+        read_count += 1
+        if read_count == 2:
+            store.write_safety(store.read_safety()["rules"])
+        return original_read()
+
+    async def fail_execute(action):
+        execute_calls.append(action.id)
+        raise AssertionError("legacy drift must reject before driver.execute")
+
+    monkeypatch.setattr(runtime.workspace, "read_safety_snapshot", change_policy_on_fresh_read)
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "execute", fail_execute)
+    try:
+        assert asyncio.run(runtime.step(setup=False)) == 0
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert execute_calls == []
+    actions = store.read_actions()
+    assert [item.id for item in actions["cancelled"]] == ["act_legacy_drift"]
+    assert [item.id for item in actions["pending"]] == ["act_legacy_other"]
+    event = _feedback_events(store, "safety_policy_preflight")[-1]
+    assert event["proposal_id"] is None
+    assert event["result"]["cancelled_action_ids"] == ["act_legacy_drift"]
 
 
 def test_update_world_observes_robots_concurrently(tmp_path, monkeypatch):

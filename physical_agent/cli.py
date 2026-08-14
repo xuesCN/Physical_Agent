@@ -113,6 +113,12 @@ def state_check(
         f"{'yes' if result['workspace_initialized'] else 'no'}"
     )
     typer.echo(
+        "SAFETY policy valid: "
+        f"{'yes' if result['safety_policy_valid'] else 'no'}"
+    )
+    if result["safety_policy_error"]:
+        typer.echo(f"SAFETY policy error: {result['safety_policy_error']}")
+    typer.echo(
         "Retrieval enabled: "
         f"{'yes' if result['retrieval_enabled'] else 'no'}"
     )

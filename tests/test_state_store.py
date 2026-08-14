@@ -518,6 +518,181 @@ def test_cancel_pending_actions_by_proposal_uses_persisted_correlation_only(tmp_
     assert store.mark_action_cancelled(claimed, claim_owner="watch-policy") is True
 
 
+def test_cancel_claimed_action_and_proposal_siblings_is_one_policy_independent_transaction(
+    tmp_path,
+):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+
+    def proposed(action_id: str, proposal_id: str) -> Action:
+        return with_proposal_metadata(
+            Action(id=action_id, robot="arm_1", capability="observe"),
+            ProposalContext(
+                source="test",
+                proposed_by="test",
+                correlation=ActionCorrelation.create(proposal_id=proposal_id),
+            ),
+        )
+
+    store.append_pending_actions(
+        [
+            proposed("act_batch_claimed", "proposal-batch"),
+            proposed("act_batch_sibling", "proposal-batch"),
+            proposed("act_other", "proposal-other"),
+        ]
+    )
+    claimed = store.claim_next_ready_action(claim_owner="watch-policy")
+    assert claimed is not None
+    store.file("safety").write_text("malformed", encoding="utf-8")
+
+    affected = store.cancel_claimed_action_and_pending_by_proposal(
+        claimed,
+        claim_owner="watch-policy",
+    )
+
+    assert [action.id for action in affected] == [
+        "act_batch_claimed",
+        "act_batch_sibling",
+    ]
+    with sqlite3.connect(store.db_path) as conn:
+        statuses = dict(conn.execute("SELECT id, status FROM actions").fetchall())
+    assert statuses == {
+        "act_batch_claimed": "cancelled",
+        "act_batch_sibling": "cancelled",
+        "act_other": "pending",
+    }
+
+
+def test_policy_batch_cancellation_uses_persisted_correlation_and_owner(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+
+    def proposed(action_id: str, proposal_id: str) -> Action:
+        return with_proposal_metadata(
+            Action(id=action_id, robot="arm_1", capability="observe"),
+            ProposalContext(
+                source="test",
+                proposed_by="test",
+                correlation=ActionCorrelation.create(proposal_id=proposal_id),
+            ),
+        )
+
+    store.append_pending_actions(
+        [
+            proposed("act_persisted_claimed", "proposal-persisted"),
+            proposed("act_persisted_sibling", "proposal-persisted"),
+            proposed("act_forged_target", "proposal-forged"),
+        ]
+    )
+    claimed = store.claim_next_ready_action(claim_owner="watch-policy")
+    assert claimed is not None
+    forged = proposed(claimed.id, "proposal-forged")
+
+    assert (
+        store.cancel_claimed_action_and_pending_by_proposal(
+            forged,
+            claim_owner="wrong-owner",
+        )
+        == []
+    )
+    with sqlite3.connect(store.db_path) as conn:
+        unchanged = dict(conn.execute("SELECT id, status FROM actions").fetchall())
+    assert unchanged == {
+        "act_persisted_claimed": "in_progress",
+        "act_persisted_sibling": "pending",
+        "act_forged_target": "pending",
+    }
+
+    affected = store.cancel_claimed_action_and_pending_by_proposal(
+        forged,
+        claim_owner="watch-policy",
+    )
+
+    assert [action.id for action in affected] == [
+        "act_persisted_claimed",
+        "act_persisted_sibling",
+    ]
+    with sqlite3.connect(store.db_path) as conn:
+        statuses = dict(conn.execute("SELECT id, status FROM actions").fetchall())
+    assert statuses == {
+        "act_persisted_claimed": "cancelled",
+        "act_persisted_sibling": "cancelled",
+        "act_forged_target": "pending",
+    }
+
+
+def test_policy_batch_cancellation_rolls_back_claimed_action_if_sibling_update_fails(
+    tmp_path,
+):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+
+    def proposed(action_id: str) -> Action:
+        return with_proposal_metadata(
+            Action(id=action_id, robot="arm_1", capability="observe"),
+            ProposalContext(
+                source="test",
+                proposed_by="test",
+                correlation=ActionCorrelation.create(proposal_id="proposal-rollback"),
+            ),
+        )
+
+    store.append_pending_actions(
+        [proposed("act_rollback_claimed"), proposed("act_rollback_sibling")]
+    )
+    claimed = store.claim_next_ready_action(claim_owner="watch-policy")
+    assert claimed is not None
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            """
+            CREATE TRIGGER fail_policy_sibling_cancel
+            BEFORE UPDATE OF status ON actions
+            WHEN OLD.id = 'act_rollback_sibling'
+                 AND OLD.status = 'pending'
+                 AND NEW.status = 'cancelled'
+            BEGIN
+                SELECT RAISE(ABORT, 'injected sibling cancellation failure');
+            END
+            """
+        )
+
+    with pytest.raises(sqlite3.IntegrityError, match="injected sibling"):
+        store.cancel_claimed_action_and_pending_by_proposal(
+            claimed,
+            claim_owner="watch-policy",
+        )
+
+    with sqlite3.connect(store.db_path) as conn:
+        statuses = dict(conn.execute("SELECT id, status FROM actions").fetchall())
+    assert statuses == {
+        "act_rollback_claimed": "in_progress",
+        "act_rollback_sibling": "pending",
+    }
+
+
+def test_policy_batch_cancellation_without_proposal_only_cancels_claimed_action(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.initialize()
+    store.append_pending_actions(
+        [
+            Action(id="act_legacy_claimed", robot="arm_1", capability="observe"),
+            Action(id="act_legacy_other", robot="arm_1", capability="observe"),
+        ]
+    )
+    claimed = store.claim_next_ready_action(claim_owner="watch-policy")
+    assert claimed is not None
+
+    affected = store.cancel_claimed_action_and_pending_by_proposal(
+        claimed,
+        claim_owner="watch-policy",
+    )
+
+    assert [action.id for action in affected] == ["act_legacy_claimed"]
+    assert [action.id for action in store.read_actions()["pending"]] == [
+        "act_legacy_other"
+    ]
+
+
 def test_sqlite_feedback_event_append_is_atomic_across_writers(tmp_path):
     store = SqliteStateStore(tmp_path / "workspace")
     store.initialize()

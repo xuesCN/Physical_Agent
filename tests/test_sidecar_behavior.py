@@ -277,6 +277,86 @@ def test_safety_policy_rejects_invalid_contract(tmp_path, text, message):
     assert exc_info.value.code == SAFETY_POLICY_INVALID
 
 
+@pytest.mark.parametrize(
+    ("key", "first", "second"),
+    [
+        ("schema", "wrong", "physical-agent/safety/v1"),
+        ("owner", "agent", "human"),
+        ("revision", "0", "1"),
+    ],
+)
+def test_safety_policy_rejects_duplicate_front_matter_keys(
+    tmp_path,
+    key,
+    first,
+    second,
+):
+    metadata = (
+        "schema: physical-agent/safety/v1\n"
+        "owner: human\n"
+        "revision: 1"
+    )
+    metadata = metadata.replace(f"{key}: {second}", f"{key}: {first}\n{key}: {second}")
+    sidecars = StateSidecars(tmp_path / "workspace")
+    sidecars.safety_path.parent.mkdir(parents=True)
+    sidecars.safety_path.write_text(_safety_text(metadata=metadata), encoding="utf-8")
+
+    with pytest.raises(SafetyPolicyError, match="duplicate key") as exc_info:
+        sidecars.read_safety_snapshot()
+
+    assert exc_info.value.code == SAFETY_POLICY_INVALID
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        (
+            _safety_text().replace("## Rules", "## Limits", 1),
+            "exactly one `## Rules`",
+        ),
+        (
+            _safety_text(
+                after_rules=(
+                    "\n\n## Rules\n\n```yaml\n"
+                    "require_human_approval_for_real_hardware: true\n"
+                    "allow_autonomous_execution: true\n"
+                    "max_action_timeout_s: 30\n"
+                    "forbid_duplicate_action_ids: true\n"
+                    "```"
+                )
+            ),
+            "exactly one `## Rules`",
+        ),
+        (
+            _safety_text(
+                after_rules=(
+                    "\n\n```yaml\n"
+                    "require_human_approval_for_real_hardware: true\n"
+                    "allow_autonomous_execution: true\n"
+                    "max_action_timeout_s: 30\n"
+                    "forbid_duplicate_action_ids: true\n"
+                    "```"
+                )
+            ),
+            "exactly one in-section YAML",
+        ),
+    ],
+)
+def test_safety_policy_rejects_missing_or_ambiguous_rules_sections(
+    tmp_path,
+    text,
+    message,
+):
+    sidecars = StateSidecars(tmp_path / "workspace")
+    sidecars.safety_path.parent.mkdir(parents=True)
+    sidecars.safety_path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(SafetyPolicyError, match=message) as exc_info:
+        sidecars.read_safety_snapshot()
+
+    assert exc_info.value.code == SAFETY_POLICY_INVALID
+
+
 def test_safety_rules_yaml_does_not_cross_into_later_section(tmp_path):
     sidecars = StateSidecars(tmp_path / "workspace")
     sidecars.safety_path.parent.mkdir(parents=True)
@@ -313,6 +393,34 @@ def test_safety_read_missing_file_fails_closed_without_creating_it(tmp_path):
 
     assert exc_info.value.code == SAFETY_POLICY_MISSING
     assert not store.file("safety").exists()
+
+
+def test_safety_read_invalid_utf8_uses_stable_policy_error(tmp_path):
+    store = SqliteStateStore(tmp_path / "workspace")
+    store.path.mkdir(parents=True)
+    store.file("safety").write_bytes(b"\xff\xfe\x00")
+
+    with pytest.raises(SafetyPolicyError) as exc_info:
+        store.read_safety_snapshot()
+
+    assert exc_info.value.code == SAFETY_POLICY_INVALID
+
+
+def test_malformed_fresh_safety_template_does_not_create_database(tmp_path):
+    config_path = write_default_config(
+        tmp_path / "physical-agent.yaml",
+        overwrite=True,
+    )
+    (tmp_path / "SAFETY.template.md").write_text(
+        "not a safety policy\n",
+        encoding="utf-8",
+    )
+    store = open_state_store(config_path=config_path)
+
+    with pytest.raises(SafetyPolicyError):
+        store.initialize()
+
+    assert not store.db_path.exists()
 
 
 def test_existing_workspace_missing_safety_is_not_repaired_by_initialize(tmp_path):
@@ -408,6 +516,23 @@ def test_safety_write_uses_same_directory_atomic_replace(tmp_path, monkeypatch):
     assert target == store.file("safety")
     assert not source.exists()
     assert store.read_safety()["rules"]["max_action_timeout_s"] == 7
+
+
+def test_safety_atomic_replace_failure_preserves_previous_file(tmp_path, monkeypatch):
+    _, store = _project(tmp_path)
+    before = store.file("safety").read_bytes()
+    from physical_agent.state import sidecars as sidecars_module
+
+    def fail_replace(_source, _target):
+        raise OSError("replace blocked")
+
+    monkeypatch.setattr(sidecars_module.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace blocked"):
+        store.write_safety({"max_action_timeout_s": 7})
+
+    assert store.file("safety").read_bytes() == before
+    assert list(store.path.glob(".SAFETY.md.*.tmp")) == []
 
 
 def test_log_sidecar_initialization_actor_timestamp_revision_and_sqlite_mirror(tmp_path):
@@ -593,6 +718,22 @@ def test_doctor_accepts_hardware_guidance_within_budget(tmp_path):
 
     assert checks["workspace:safety-guidance"].ok is True
     assert "within" in checks["workspace:safety-guidance"].message
+
+
+def test_doctor_rejects_hardware_guidance_over_shared_budget(tmp_path):
+    config_path, store = _project(tmp_path)
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["robots"]["arm_1"]["execution_mode"] = "hardware"
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    store.file("safety").write_text(
+        _safety_text(guidance="x" * 5000),
+        encoding="utf-8",
+    )
+
+    checks = {check.name: check for check in run_doctor(config_path)}
+
+    assert checks["workspace:safety-guidance"].ok is False
+    assert "exceeds" in checks["workspace:safety-guidance"].message
 
 
 def test_audit_copies_safety_file_but_reads_log_only_from_sqlite(tmp_path):

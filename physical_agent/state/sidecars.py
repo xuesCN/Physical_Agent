@@ -12,6 +12,7 @@ from physical_agent.protocol.markdown import (
 )
 from physical_agent.state.safety_policy import (
     SAFETY_OWNER,
+    SAFETY_POLICY_INVALID,
     SAFETY_POLICY_MISSING,
     SAFETY_SCHEMA,
     SafetyPolicyError,
@@ -126,6 +127,11 @@ class StateSidecars:
                 SAFETY_POLICY_MISSING,
                 f"Missing SAFETY policy file: {self.safety_path}",
             ) from exc
+        except (OSError, UnicodeError) as exc:
+            raise SafetyPolicyError(
+                SAFETY_POLICY_INVALID,
+                f"Could not read SAFETY policy file {self.safety_path}: {exc}",
+            ) from exc
         return parse_safety_policy(text, source=str(self.safety_path))
 
     def _read_safety_template(self) -> SafetyPolicySnapshot | None:
@@ -137,10 +143,14 @@ class StateSidecars:
                 SAFETY_POLICY_MISSING,
                 f"SAFETY template is not a file: {template_path}",
             )
-        return parse_safety_policy(
-            template_path.read_text(encoding="utf-8"),
-            source=str(template_path),
-        )
+        try:
+            text = template_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise SafetyPolicyError(
+                SAFETY_POLICY_INVALID,
+                f"Could not read SAFETY template {template_path}: {exc}",
+            ) from exc
+        return parse_safety_policy(text, source=str(template_path))
 
     def _write_safety_document(
         self,

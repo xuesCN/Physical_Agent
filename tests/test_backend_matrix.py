@@ -84,8 +84,32 @@ def test_default_init_setup_and_state_check_use_sqlite_with_safety_file(tmp_path
         assert "Backend role: recommended" in check.output
         assert "Source of truth:" in check.output
         assert "Workspace initialized: yes" in check.output
+        assert "SAFETY policy valid: yes" in check.output
         assert "SQLite schema complete: yes" in check.output
         assert "Audit export writable: yes" in check.output
+
+
+@pytest.mark.parametrize("failure", ["missing", "malformed"])
+def test_state_check_fails_closed_for_unavailable_safety_policy(tmp_path, failure):
+    config_path = write_default_config(
+        tmp_path / "physical-agent.yaml",
+        overwrite=True,
+    )
+    store = open_state_store(config_path=config_path)
+    store.initialize()
+    if failure == "missing":
+        store.file("safety").unlink()
+    else:
+        store.file("safety").write_text("not a safety policy\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli_module.app,
+        ["state-check", "--config", str(config_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "SAFETY policy valid: no" in result.output
+    assert "safety.policy." in result.output
 
 
 def test_cli_force_initialize_restores_hard_rules_but_preserves_guidance(tmp_path):

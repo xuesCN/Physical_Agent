@@ -673,14 +673,22 @@ class WatchRuntime:
         policy_error: SafetyPolicyError | None = None,
         cancel_proposal: bool,
     ) -> None:
-        self._finalize_claimed_action(action, status="cancelled")
-        proposal_id = _proposal_id(action)
         cancelled_siblings: list[Action] = []
-        if cancel_proposal and proposal_id is not None:
-            cancelled_siblings = self._workspace().cancel_pending_actions_by_proposal(
-                proposal_id
+        if cancel_proposal:
+            self._require_watch_lease("before invalidating a policy-drift batch")
+            affected = self._workspace().cancel_claimed_action_and_pending_by_proposal(
+                action,
+                claim_owner=self._watch_lease_owner,
             )
-        affected = [action, *cancelled_siblings]
+            if not affected:
+                raise ActionClaimLostError(
+                    f"Action `{action.id}` is no longer claimed by this Watch; "
+                    "refusing stale policy-drift terminalization."
+                )
+            cancelled_siblings = affected[1:]
+        else:
+            self._finalize_claimed_action(action, status="cancelled")
+            affected = [action]
         self.last_step_stats["processed"] += len(cancelled_siblings)
         self.last_step_stats["state_changed"] = True
         for rejected_action in affected:

@@ -732,6 +732,115 @@ class SqliteStateStore:
             )
             return matched
 
+    def cancel_claimed_action_and_pending_by_proposal(
+        self,
+        action: Action | dict[str, Any],
+        *,
+        claim_owner: str,
+    ) -> list[Action]:
+        """Atomically invalidate one claimed action and its pending proposal siblings.
+
+        An empty result means executor fencing rejected the claimed-action update.
+        The method deliberately uses only persisted action correlation and never
+        rereads SAFETY.md, which may be malformed at this point.
+        """
+
+        parsed = _coerce_action(action)
+        normalized_owner = str(claim_owner).strip()
+        if not normalized_owner:
+            raise ValueError("claim_owner must not be blank")
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            claimed_row = conn.execute(
+                """
+                SELECT id, robot, capability, params, reason, depends_on, metadata,
+                       status, claim_owner
+                FROM actions
+                WHERE id = ?
+                """,
+                (parsed.id,),
+            ).fetchone()
+            if (
+                claimed_row is None
+                or claimed_row["status"] != "in_progress"
+                or claimed_row["claim_owner"] != normalized_owner
+            ):
+                return []
+            claimed_action = _action_from_row(claimed_row)
+            claimed_correlation = (
+                claimed_action.metadata.get("correlation")
+                if isinstance(claimed_action.metadata, dict)
+                else None
+            )
+            normalized_proposal_id = (
+                str(claimed_correlation.get("proposal_id")).strip()
+                if isinstance(claimed_correlation, dict)
+                and claimed_correlation.get("proposal_id")
+                else ""
+            )
+
+            matched: list[Action] = []
+            if normalized_proposal_id:
+                rows = conn.execute(
+                    """
+                    SELECT id, robot, capability, params, reason, depends_on, metadata
+                    FROM actions
+                    WHERE status = 'pending'
+                    ORDER BY seq, id
+                    """
+                ).fetchall()
+                for row in rows:
+                    sibling = _action_from_row(row)
+                    correlation = (
+                        sibling.metadata.get("correlation")
+                        if isinstance(sibling.metadata, dict)
+                        else None
+                    )
+                    sibling_proposal_id = (
+                        str(correlation.get("proposal_id")).strip()
+                        if isinstance(correlation, dict)
+                        and correlation.get("proposal_id")
+                        else ""
+                    )
+                    if sibling_proposal_id == normalized_proposal_id:
+                        matched.append(sibling)
+
+            timestamp = _now()
+            cursor = conn.execute(
+                """
+                UPDATE actions
+                SET status = 'cancelled',
+                    claimed_at = NULL,
+                    claim_owner = ?,
+                    updated_at = ?
+                WHERE id = ? AND status = 'in_progress' AND claim_owner = ?
+                """,
+                (normalized_owner, timestamp, parsed.id, normalized_owner),
+            )
+            if cursor.rowcount != 1:
+                return []
+            if matched:
+                conn.executemany(
+                    """
+                    UPDATE actions
+                    SET status = 'cancelled',
+                        claimed_at = NULL,
+                        claim_owner = NULL,
+                        updated_at = ?
+                    WHERE id = ? AND status = 'pending'
+                    """,
+                    [(timestamp, sibling.id) for sibling in matched],
+                )
+            revision = self._next_revision_conn(conn, "actions")
+            self._upsert_document_conn(
+                conn,
+                "actions",
+                {"metadata": self._metadata("actions", revision)},
+                revision,
+            )
+            return [claimed_action, *matched]
+
     def recover_stale_actions(
         self,
         max_age_s: float,

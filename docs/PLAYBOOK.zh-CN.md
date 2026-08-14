@@ -93,7 +93,7 @@
 
 ## F3.2 / 004 记忆分层与上下文带位硬化
 
-完整规格、阶段与正反矩阵见 `docs/specs/004-memory-context-band-hardening/`。**依赖：003 收口后开工**——003 已在树上改动 `context_builder` 的 budget 与 safety 注入，004 要改同一函数的字段顺序与预算结构，并行会在四份 context golden 上产生不可判定冲突。
+完整规格、阶段与正反矩阵见 `docs/specs/004-memory-context-band-hardening/`。**依赖已满足：003 于 2026-08-14 收口**；004 仍应作为独立轮次开工，不与 003 的历史实现/closure 提交交叉修改。
 
 **思路**：记忆不是自治子系统，是上下文预算里的一个受控输入。payload 重排为稳定段（`context_policy`/`execution_contract`/`capabilities`/`safety`）、半稳定段（`memory_pinned`）、易变段（`world`/`feedback`/`retrieved_context`/`memory_episodic`/`chat_history`/`latest_user_message`）；带位由 `kind`/`importance`/`superseded_by`/`created_at` 读取时派生，不建带位存储列。契约升级必须先于布局重排——先让 `importance`/`kind` 有可信写入通道，再让它决定注入位置，顺序颠倒会重现「`importance` 恒为 0、排序逻辑是死代码」的现状。
 

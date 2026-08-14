@@ -1,7 +1,7 @@
 # 003：SAFETY 策略通道硬化
 
-状态：执行中  
-日期：2026-08-12  
+状态：已完成
+日期：2026-08-12；收口：2026-08-14
 对应账本：`SPEC.zh-CN.md` §4 `F3.1b / 003`
 
 ## 0. 目标
@@ -77,6 +77,8 @@ SafetyGate 构造函数只接受 `HardSafetyPolicy`，不接受 dict 或 `Safety
 
 Watch 在 step 开始建立 baseline，并在每条 action claim 后、Gate 前 fresh-read。比较 revision + hard digest + guidance digest：任一变化或解析失败均在 driver.execute 前拒绝当前 action，并取消同一可信 `proposal_id` 的剩余 pending actions；其他 proposal 留给下一 step 使用新 baseline。legacy 无 proposal correlation 按单 action 处理。
 
+同 proposal 的 current claimed action 与 pending siblings 必须在一个 SQLite transaction 内失效，proposal correlation 从 claimed row 的持久化 metadata 派生；事务失败整体回滚，不能留下半批。新鲜度线性化点定义为 claim 后读取的 snapshot 通过 Gate：此后该 action 视为 in-flight，文件更新从下一条 action 生效；这不是 writer/execute 共锁，也不声称能撤销已越过该点的设备命令。
+
 这一定义“批次”为一个 trusted proposal，而不是整个 watch step：一个 step 可包含多个独立 proposal，取消全部会误伤无关用户工作。
 
 策略变化使用稳定机器码，不调用 halt；halt 保留给设备异常或未知物理状态。已经在飞的前一动作无法由文件更新撤销，本条只保证其后的动作零执行。claimed action 的 terminalization 不得重新依赖当前已损坏的 SAFETY 解析。
@@ -95,7 +97,7 @@ clean-checkout 测试必须证明模板可交付、初始化后进入四个 cont
 - state/backend/reset/doctor：existing workspace 缺策略零修复；hardware 缺 guidance fail；simulation warning；reset preserve；legacy fail-closed 矩阵。
 - SafetyGate：只接受 typed hard policy；guidance 不能进入 Gate；hard digest 语义不变。
 - context：四 purpose + 真实 planner route；独立 budget；安全字段摘要保留；动作通道超限零 LLM/零 action。
-- watch：逐 action fresh-read；revision 变、digest 变、malformed 三组均零后续 execute；只取消同 proposal；不 halt；审计包含 old/new identity。
+- watch：逐 action fresh-read；revision 变、hard/guidance digest 变、malformed 均零后续 `driver.execute`；只取消同 proposal；批次失效单事务；不 halt；审计包含 old/new identity。
 - car：tracked template + clean initialization；Level 0 约束完整；不连接真机。
 - 全量 `pytest`；若修改 frontend 源码或文案，再跑 `tsc -b && vite build`。
 

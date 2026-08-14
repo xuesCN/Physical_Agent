@@ -1,7 +1,7 @@
 # 重构过程
 
 > 本文浓缩自原 33 份 session-handoff 与 22 份 brief（已删除，git 历史可查）。姊妹文档：`SPEC.zh-CN.md`（目标与待办矩阵）。
-> 范围：基线 `8fa197a` → 当前。最后更新：2026-08-10。
+> 范围：基线 `8fa197a` → 当前。最后更新：2026-08-14。
 
 ## 0. 基线与纪律
 
@@ -35,6 +35,7 @@
 | Audit-doc-html | current architecture audit 静态 HTML 阅读页 | 本轮提交 |
 | F3 | context_builder 解耦：reply/proposal/planner/tool_loop 上下文统一 | `9cbb540` |
 | F3.1a | context_builder Unicode wire 与预算统一：中文不再因 `ensure_ascii` 转义提前摘要 | 本轮提交；context `16 passed`、调用链矩阵 `57 passed`、Python full `562 passed, 1 warning` |
+| F3.1b / 003 | SAFETY strict file truth、hard/guidance typed 隔离、逐动作新鲜度与 car Level 0 模板 | `85cbad1`、`9a25d0c` + 本轮 closure；专项 `443 passed, 1 warning`、full `638 passed, 1 warning`；独立 review/提交证据见 003 tasks |
 | F4 | 期望-比对-回灌：expected 确定性比对、feedback 回灌、前端可见性 | `b5be3b7` |
 | F5.0 | `car_agent` 自包含 TCP/NDJSON driver：默认禁运动、bounded `drive_for`、Watch/SafetyGate 实机链路地基 | 本轮提交；car 专项 `52 passed`、受影响矩阵 `131 passed`、Python full `521 passed`；独立终审 Critical/Important=0 |
 | F5.0-真机首连 | 真机首连验收：`scripts/car_first_contact.py` 探针（复用 driver 本体）+ 手动提案→审批→SafetyGate→watch `observe` 全链路（192.168.66.12） | 本轮提交；探针 10/10、SafetyGate 10 checks passed、`inspect` 能力=observe/stop、full pytest 见 §2 |
@@ -205,6 +206,14 @@ RawDebug 收口：`RawDebug` 不再接收整份 state 并显示 `Full state JSON
 审计发现 `context_builder` 的实际 user JSON 与 `_stable_json_len()` 都使用 `ensure_ascii=True`：中文在发给 provider 前被写成 `\\uXXXX`，并按同一膨胀后的字符串长度过早触发 world/capabilities/feedback 摘要。修复将两条路径收敛到同一 `_serialize_json()` helper，wire 继续保留既有字段顺序，稳定长度测量继续只为确定性使用 `sort_keys=True`；没有改 payload 结构、摘要算法、prompt 或 caching。
 
 测试职责刻意分离：既有四份 golden 继续比较 JSON 解析后的 payload，因此保持零 diff；新增四路 raw wire 断言锁定中文原文与 round-trip，另以 world/capabilities/feedback 三种中文文档锁住“未转义字符长度恰好在预算内时保留全文”。专项 `16 passed`，chat/tool-loop/retrieval 调用链矩阵 `57 passed`，Python full `562 passed, 1 warning`。本轮只承诺序列化字符预算一致，不将其表述为 tokenizer 级 token 等价。
+
+### F3.1b / 003：SAFETY 策略通道硬化
+
+动机：原 sidecar 只把 `## Rules` YAML 作为 dict 读给 Gate，设备安全散文没有受控上下文通道；缺失、残缺或错类型策略也缺少一致的 strict/fail-closed 生命周期。过程：新增 SAFETY 专用 parser 与不可变 `HardSafetyPolicy`/`SafetyPolicySnapshot`，拒绝重复 front-matter/Rules key、未知 Rules key、错 schema/owner/revision/type/range、跨节或歧义 YAML，并把缺文件/不可读文件统一成稳定 policy error。普通 read 不创建文件，fresh workspace 才能验证并复制 sibling `SAFETY.template.md`；write/reset 原子替换、保留 guidance 并递增 revision，解析失败在 destructive reset 前终止。state-check 与 API health 现在实际解析策略，不能把“文件存在”误报为 ready。
+
+认知侧只从精确 `## Agent Guidance` 节向 reply/proposal/planner/tool_loop 注入 budgeted advisory 结构，hard rules/guidance/identity digest 分开；hardware 动作通道缺失或超预算在 LLM/action 前 fail closed，simulation 保持显式警告兼容。Watch 以 step baseline claim，每 action 在 Gate 前 fresh-read identity；drift/malformed 通过单 SQLite transaction 取消 current claimed 与同一持久化 proposal correlation 的 pending siblings，其他 proposal 保留，legacy 单 action 处理。Gate 只接受 typed hard policy，hostile guidance snapshot 不能传入；审计记录 old/new revision 与三类 digest，不调用 halt。tracked car 模板锁定 Level 0 轮空、人工值守、TOF 有效性与 watchdog 非急停语义，默认禁运动仍保持。
+
+收口不是直接照着旧的全树绿色勾选：独立逐项审查先发现 front matter 重复键、state-check/health 假 ready、批次取消两事务崩溃窗和 Watch 反向证据不足，再补 strict loader、readiness 反例、单事务 rollback trigger、hard/guidance/malformed/legacy 与 exact old/new audit 测试。最终专项 `443 passed, 1 warning`，Python full `638 passed, 1 warning`；独立 review、commit/push 的精确证据统一留在 `docs/specs/003-safety-policy-channel-hardening/tasks.md`。本条没有增加 TOF Gate、prompt/caching、自动 replan、真机连接或冻结能力。
 
 ### F4：期望-比对-回灌
 
@@ -627,6 +636,8 @@ brief §2 记的 P1：`streamMessages` 挂在 Dashboard 顶层，聊天流式输
 91. **流式重渲染采用 rAF 攒批 + 分层 memo，不引状态管理库、不先做全局 state 下沉**（C7）：选择 `requestAnimationFrame` 合帧（而非固定毫秒节流），配 generation 隔离陈旧回调；`MessageContent`/`MarkdownBlock` 与常驻组件 `React.memo` + 关键 handler `useCallback`，把每 token O(历史) 的 Markdown 重解析压到 O(尾块)，并让流式无关组件退出渲染。放弃方案①的"彻底版"（把 `streamMessages` 下沉进 ChatPanel/独立 store），因为现有分层已吃掉主要卡顿且改动面小可回滚；`streamMessages` 仍留在 Dashboard 顶层，Dashboard 本体每帧至多重渲染一次，若 profiling 仍显示瓶颈再下沉。保留 `idleWatchTick` SSE 去重不动。
 92. **设备专用 driver 先随硬件 bundle 交付，运动能力以本地实测包络 opt-in**（F5.0）：选择 `car_agent/` local driver + 标准库 asyncio stream，放弃在首台 Level 0 小车上提前抽象 core TCP/NDJSON transport 或 builtin registry。固件 ±60 只是技术夹限，不是实车安全值；缺任一速度/时长上限就不发布运动。未知动作结果不重放，未确认 stop 立即断连并撤销运动，fresh handshake 才能恢复。
 93. **所有者授权的 Level 0 落地试运行（一次性偏离，2026-08-05）**：项目所有者四次明确要求后，在「场地宽阔、人员在场可随时拿起小车、速度包络 ±25/单发 ≤2s、逐动作人工审批、agent 侧每次运动前核对 TOF」条件下，对 Level 0 固件做落地前进/后退试运行，偏离设备说明书 §0 与 F5.0 尾注的"仅台架"约束。已向所有者书面告知残余风险：该固件无本地避障兜底，断连时按最后指令盲跑最多 ~850ms（当日实测发生过两次 WiFi 掉线）。此偏离不构成先例：**落地常态化的重启条件仍是设备侧 Level 1（避障强制兜底）验收**；执行权唯一与 Gate-before-execute 两条宪法未受影响。
+94. **SAFETY hard rules 与 Agent Guidance 使用一份文件、两个 typed channel**（F3.1b / 003）：选择严格 `HardSafetyPolicy` 作为 Gate 唯一输入，guidance 只存在于 Snapshot/context；放弃把散文拼进 Rules dict 或 hard digest，因为那会让“模型看见”冒充“Gate 强制”。SAFETY front matter 与 Rules YAML 都拒绝重复 key，未知 Rules key 也拒绝，避免 YAML 后值覆盖和未实现规则制造虚假安全感；通用 Markdown parser 保持兼容。
+95. **策略漂移批次以 persisted proposal correlation 单事务失效，新鲜度在 fresh snapshot + Gate 处线性化**（F3.1b / 003）：current claimed 与同 proposal pending siblings 在一个 SQLite transaction 内取消并随异常整体回滚，放弃两个独立 terminal mutation。claim 后读取的 snapshot 通过 Gate 后 action 视为 in-flight，文件更新从下一 action 生效；放弃声称无 writer/execute 共锁的软件读操作能撤销已越过该点的命令，硬件 fencing 仍是独立问题。
 
 ## 4. 经验教训（流程侧）
 
@@ -674,5 +685,7 @@ brief §2 记的 P1：`streamMessages` 挂在 Dashboard 顶层，聊天流式输
 - **URL 状态不能只测点击后的地址字符串**（C6.1 的教训）：至少同时锁定 direct open、reload、Back/Forward、活动导航/内容一致、其他 query 保留，以及非法/退役 key 的 replace 归一；否则很容易得到“地址变了但视图没同步”或 history 堆积的半路由。
 - **`React.memo` 只有配稳定引用才生效，热点常藏在被 `useMemo` 依赖拖累的子渲染里**（C7 的教训）：给组件加 memo 前必须先确认它收到的 handler/props 引用稳定——Dashboard 里的普通 `function` 声明每渲染换新引用，会让下游 `useMemo`/`memo` 全部失效，单加 memo 等于白加，memo + `useCallback` 必须成套做。定位流式卡顿也别只盯 setState 频率：真正贵的是 `ChatPanel.items` `useMemo` 因不稳定依赖每 token 失效、连带整段历史重跑 markdown 解析，把每 token O(历史) 降为 O(1) 比单纯降 setState 频率收益更大。rAF 攒批则要在终止/早停路径配 cancel + settle，避免丢尾 token。
 - **组件闭包里的调度逻辑要提取成可注入依赖的模块才可测**（C7 测试的教训）：内嵌在 `handleChat` 里的 rAF 生命周期只能靠完整浏览器流程间接验证，测试要么退化成"源码里有没有 `requestAnimationFrame`"的字符串断言，要么去 mock React setter。把帧 API 做成可注入参数后，契约（每帧至多一次 flush、settle 不丢尾、cancel 后陈旧帧不得二次 flush）可以用手动帧队列直接断言，不依赖真实刷新率、计时器或绘制。补回归测试时还应做变异验证——移除"已有帧不重复排队"守卫后 burst 用例必须转红，否则测的是实现在场而非契约成立。Node 级契约测试应配独立的 Playwright config（不带 webServer），与需要真实 Chromium 和后端的 e2e 分开，避免为一个纯函数模块启动整套服务。
+- **全树绿色不是规格逐项完成证明**（F3.1b / 003 的教训）：旧 `619 passed` 仍漏掉重复 SAFETY front matter、state-check/API health 假 ready 和 Watch drift 证据语义。收口必须把每个 checkbox 映射到正反用例，再让独立 reviewer 从失败路径找“测试从未问过的问题”。
+- **同一安全批次的多条状态更新必须共享事务边界**（F3.1b / 003 的教训）：先 cancel claimed、再另事务 cancel siblings 在正常路径全绿，却能在第二步异常时留下可再次执行的半批。用 SQLite trigger 注入 sibling update 失败并断言 current 也回滚，才能证明 all-or-nothing，不应把两次原子操作误称为一个原子业务动作。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

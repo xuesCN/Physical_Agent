@@ -83,6 +83,13 @@ class StateStore(Protocol):
 
     def cancel_pending_actions_by_proposal(self, proposal_id: str) -> list[Action]: ...
 
+    def cancel_claimed_action_and_pending_by_proposal(
+        self,
+        action: Action | dict[str, Any],
+        *,
+        claim_owner: str,
+    ) -> list[Action]: ...
+
     def recover_stale_actions(
         self,
         max_age_s: float,

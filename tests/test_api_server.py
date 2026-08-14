@@ -584,6 +584,23 @@ def test_api_state_ignores_stale_gate_from_prior_claim_owner(tmp_path):
     assert "claim_owner" not in projected["actions"][0]
 
 
+@pytest.mark.parametrize("failure", ["missing", "malformed"])
+def test_api_health_fails_closed_for_unavailable_safety_policy(tmp_path, failure):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    if failure == "missing":
+        store.file("safety").unlink()
+    else:
+        store.file("safety").write_text("not a safety policy\n", encoding="utf-8")
+
+    health = ApiController(config_path).health()
+
+    assert health["ok"] is True
+    assert health["ready"] is False
+    assert health["safety_policy_valid"] is False
+    assert "SAFETY policy" in health["message"]
+
+
 def test_api_state_uses_final_claim_owner_read_to_fence_late_feedback(
     tmp_path,
     monkeypatch,

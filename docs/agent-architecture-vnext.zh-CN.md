@@ -217,12 +217,12 @@ SAFETY 策略在执行前逐动作校验新鲜度：
 
 - watch step 开始时建立 baseline snapshot，并用它的 typed `hard` 参与 claim；每领取一条 action 后、构造 Gate 前重新 `read_safety_snapshot()`；
 - 比较 `identity_digest`（覆盖 revision、hard digest 与 guidance digest）：不一致则以稳定码 `safety.policy.changed` 在 `driver.execute` 前拒绝当前 action；解析失败或文件缺失以 `safety.policy.invalidated` 同样 fail closed；
-- 这两种情况会连带取消**同一 `proposal_id`** 的剩余 pending actions，其他 proposal 留到下一 step 用新 baseline 处理；无 proposal correlation 的 legacy action 按单条处理；
+- 这两种情况会在一个 SQLite transaction 内取消 current claimed action 与**同一 `proposal_id`** 的剩余 pending actions；关联值从 claimed row 的持久化 metadata 派生，事务失败整体回滚；其他 proposal 留到下一 step 用新 baseline 处理，无 proposal correlation 的 legacy action 按单条处理；
 - hardware profile 缺 Agent Guidance 一类的逐动作拒绝只拒当前 action，不取消同批；
 - 策略拒绝走结构化 feedback 与稳定机器码，不调用 halt——halt 保留给设备异常或未知物理状态；
 - `SafetyGate` 构造函数只接受当轮 fresh snapshot 的 typed `HardSafetyPolicy`，传入 dict 或整个 snapshot 会被拒绝，Gate 模块不读取 guidance。
 
-已经在飞的前一条动作无法被文件更新撤销；本机制只保证其后的动作零执行。
+claim 后 fresh snapshot 通过 Gate 是本机制的新鲜度线性化点；越过该点的 action 视为 in-flight，无法被随后发生的文件更新撤销。这里没有把 SAFETY writer 与设备 I/O 共锁，本机制只保证下一条尚未越过该点的动作零执行。
 
 ## 5. 软件分层
 
@@ -337,6 +337,8 @@ Event 是审计和恢复载体，不能成为绕开 state transaction 或 Gate �
 - Chat draft（`lifecycle=draft`，任务全部 `not_scheduled`）。
 
 React/TUI 已直接展示 task kind、owner、status、依赖、关联 action、Gate policy source，并消费服务端 materialized output。用户无需展开 raw JSON 即可回答“现在卡在哪里、下一步由谁做、Gate 是否真的执行过”。这仍是 read projection，不代表客户端或 plan 文档成为 Gate authority。
+
+`/api/state.safety` 保留兼容 dict 投影，并公开 metadata、hard rules、Agent Guidance 与 hard/guidance/identity 三类 digest；它只是文件真源的只读投影。`/api/health` 与 `/api/state-check` 会实际 strict-parse SAFETY，文件缺失或损坏时 `ready=false`，不能仅凭文件存在或 SQLite schema 完整报告 ready。
 
 rule/LLM Chat draft 与 `ChatPlan` 已附上 `lifecycle=draft` 的 compiled `AgentOutput`；流式 chat 的 Draft 只从 SSE done/assistant metadata 的 canonical `AgentOutput` 创建。React/Web 可把它呈现为可操作卡片，TUI/CLI 只展示 structured draft。显式 tool_loop 则经 proposal-only tools 直接提交 pending，并返回 `lifecycle=submitted` 的 materialized output；它不 approve、不执行。reply 只作用户可读文本，即使包含旧 fence-like 内容也不得升级为卡片。旧 fence-only 历史消息仍可阅读，但不可再 Add；无需数据迁移层。
 

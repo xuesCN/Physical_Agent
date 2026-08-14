@@ -12,6 +12,7 @@
 - [x] 建立 spec/plan/tasks。
 - [x] SPEC §4 追加 `F3.2 / 004` 行；PLAYBOOK 追加同名条目（含决策留痕与坑清单）。
 - [ ] 确认 003 已收口并 push，方可开工。
+- [ ] 记录开工基线：003 收口后重跑全量，确认 `test_retrieval_foundation.py` 两条已由 003 修复；若仍红，先补 SAFETY + guidance 夹具再开工，不把它们算进 004 的回归。
 
 ## 阶段 1：Trust 口径
 

@@ -99,7 +99,7 @@
 
 **关键文件**：`agent/llm_contracts.py`、`protocol/memory.py`、`protocol/retrieval.py`、`state/sqlite.py`、`state/base.py`、`agent/context_builder.py`、`agent/chat_runtime.py` 及 context golden/记忆/检索/state 测试。
 
-**坑**：`chat_runtime` 有非流式与流式**两条** `append_memory_note` 路径，历史上改一处漏一处；`write_memory()` 是全量覆盖并会 `DELETE FROM memory_chunks WHERE source_type='memory'` 重建，trust 回填必须覆盖该路径否则一次全量写入即被冲掉；上传来源 note 不切 chunk（`source == "upload"` 直接 return），带位与失效不要误伤该分支；`filter_memory_notes` 的 `limit` 取尾部 N 条而 `_top_memory_notes` 按 importance 排序，带位化后要确认两者不再互相抵消；段级预算不得与 003 的 `safety_guidance_max_chars` 共用剩余量计算器，否则出现记忆挤占安全 guidance 的路径；四份 golden 会整体变化，重录必须单独成提交并逐字段 diff，整体覆盖会让真正的回归混在噪音里。
+**坑**：`chat_runtime` 有非流式与流式**两条** `append_memory_note` 路径，历史上改一处漏一处；`write_memory()` 是全量覆盖并会 `DELETE FROM memory_chunks WHERE source_type='memory'` 重建，trust 回填必须覆盖该路径否则一次全量写入即被冲掉；上传来源 note 不切 chunk（`source == "upload"` 直接 return），带位与失效不要误伤该分支；`filter_memory_notes` 的 `limit` 取尾部 N 条而 `_top_memory_notes` 按 importance 排序，带位化后要确认两者不再互相抵消；段级预算不得与 003 的 `safety_guidance_max_chars` 共用剩余量计算器，否则出现记忆挤占安全 guidance 的路径；四份 golden 会整体变化，重录必须单独成提交并逐字段 diff，整体覆盖会让真正的回归混在噪音里；**记忆测试夹具要跟上 003 的策略生命周期**——2026-08-14 在 003 未收口的树上，`test_retrieval_foundation.py` 的 memory chunk schema 迁移与 retrieval untrusted context 两条用例已被新 fail-closed 拦下（`SafetyPolicyError: Missing SAFETY policy file` / `SafetyGuidanceContextError`），成因是夹具建 workspace 时不写 SAFETY/guidance，开工前必须先归因，否则 004 第一次跑分会把这两条误读成带位重构引入的回归。
 
 **决策留痕**：`trust_level` 保持 trusted/untrusted 两档，放弃早期 `file`/`runtime`/`derived` 三档草案——003 已用 `HardSafetyPolicy`/`SafetyPolicySnapshot` 建立 typed 信任隔离，第二套信任语义会让「什么算可信」出现两个答案，而这正是 SAFETY 通道当初出问题的形态；记忆一侧只需要一个事实，即它永远不可信。
 

@@ -44,6 +44,7 @@
 - **上传 note 不切 chunk**（`_insert_memory_note_chunks_conn` 对 `source == "upload"` 直接 return），带位与失效逻辑不要误伤这条分支。
 - **`memory_chunks` 的 UNIQUE 是 `(source_type, source_id, chunk_index)`**，而 note 的 `source_id` 是含 `created_at` 的哈希——同内容不同时间写入会产生两条 chunk。本条不修这个重复（属检索去重，范围外），但 supersede 生效后要确认旧 chunk 不再被召回为「当前事实」。
 - **003 的 guidance 预算是独立配额**，段级预算实现时不要复用同一个剩余量计算器，否则会出现记忆挤占安全 guidance 的路径。
+- **记忆测试夹具必须跟上 003 的策略生命周期。** 2026-08-14 在 003 未收口的树上跑全量（`613 passed, 6 failed`），失败项里有两条属于记忆检索：`test_retrieval_foundation.py::test_sqlite_initialize_migrates_memory_chunk_schema` 抛 `SafetyPolicyError: Missing SAFETY policy file`，`::test_chat_runtime_retrieval_enabled_adds_untrusted_context_without_overrides` 抛 `SafetyGuidanceContextError: Agent Guidance is required before producing hardware action intents`。成因是这两个夹具建 workspace 时不写 SAFETY/guidance，而记忆与检索路径现在要过策略校验。**影响 004 的判断口径**：开工前这两条就是红的，若不先归因，004 的第一次跑分会把它们误读成带位重构引入的回归。新增用例必须显式准备合法 SAFETY + guidance，或声明 simulation 走兼容放行路径。
 
 ## 回滚
 

@@ -49,6 +49,14 @@ cd frontend && npm run dev          # 前端开发模式
 cd frontend && npm run build        # 重建 dist（FastAPI 托管产物）
 ```
 
+## 环境注意：Linux 沙盒执行者
+
+**仅适用于通过 Linux 沙盒挂载本仓库的 agent**（Cowork 等把 Windows 工作目录 bind-mount 进 Linux 容器的形态）。在 Windows 本机或普通 Linux checkout 上工作的执行者忽略本节。
+
+1. **不要从沙盒侧跑 git。** 挂载不允许在 `.git/` 内 unlink，`git status` 一类只读命令也会尝试刷新索引并留下无法清理的 `.git/index.lock`，随后 Windows 侧所有 `git add`/`git commit` 报 `Unable to create '.git/index.lock': File exists`。已发生过一次（2026-08-14）。需要 git 就走 Windows 侧执行；若已卡住，手动删 `.git/index.lock` 即可恢复。
+2. **沙盒看到的 diff 不是真相。** 本机 `core.autocrlf=true`，工作树是 CRLF 而 index 是 LF；沙盒 git 的 `autocrlf` 未设，会把整棵树报成「已修改」。`.gitattributes` 已声明 `* text=auto`（`75163d8`）消除该偏差，但判断改动范围前仍应确认自己看到的是真实改动，必要时用 `git diff --ignore-all-space` 交叉验证。
+3. 读写文件、跑 pytest/npm 用沙盒没问题；受影响的只有 git 与其他需要写 `.git/` 的操作。
+
 ## 红线速查
 
 - 永不在请求/提案侧代码路径调用 `driver.execute` 或加载 driver。

@@ -62,6 +62,54 @@ def _set_backend(config_path: Path, backend: str) -> None:
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
+SAFETY_GUIDANCE = (
+    "Bench use only: keep hardware restrained and treat an invalid sensor read "
+    "as unknown rather than clear."
+)
+
+
+def _write_legacy_safety(workspace: Path) -> None:
+    """Give a pre-existing workspace its own SAFETY file.
+
+    A workspace that already holds a database is never treated as fresh, so the
+    runtime refuses to recreate a missing policy instead of silently healing it.
+    Fixtures that hand-build a legacy database therefore have to ship SAFETY too.
+    """
+
+    (workspace / "SAFETY.md").write_text(
+        "---\n"
+        "schema: physical-agent/safety/v1\n"
+        "owner: human\n"
+        "revision: 1\n"
+        "---\n\n"
+        "# Safety Policy\n\n"
+        "## Rules\n\n"
+        "```yaml\n"
+        "require_human_approval_for_real_hardware: true\n"
+        "allow_autonomous_execution: true\n"
+        "max_action_timeout_s: 30\n"
+        "forbid_duplicate_action_ids: true\n"
+        "```\n\n"
+        f"## Agent Guidance\n\n{SAFETY_GUIDANCE}\n",
+        encoding="utf-8",
+    )
+
+
+def _add_agent_guidance(store) -> None:
+    """Clear the guidance precondition for hardware action contexts."""
+
+    safety_path = store.file("safety")
+    base = (
+        safety_path.read_text(encoding="utf-8")
+        .split("\n## Agent Guidance\n", 1)[0]
+        .rstrip()
+    )
+    safety_path.write_text(
+        base + f"\n\n## Agent Guidance\n\n{SAFETY_GUIDANCE}\n",
+        encoding="utf-8",
+    )
+
+
 def _set_retrieval(config_path: Path, enabled: bool) -> None:
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     data.setdefault("memory", {}).setdefault("retrieval", {})["enabled"] = enabled
@@ -105,6 +153,7 @@ def test_sqlite_initialize_migrates_memory_chunk_schema(tmp_path):
             "CREATE TABLE memory_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT, source TEXT, created_at TEXT)"
         )
 
+    _write_legacy_safety(workspace)
     store = SqliteStateStore(workspace)
     store.initialize()
 
@@ -291,6 +340,7 @@ def test_chat_runtime_retrieval_enabled_adds_untrusted_context_without_overrides
     setup_project(config_path, publish=True)
     _set_retrieval(config_path, True)
     store = open_state_store(config_path=config_path)
+    _add_agent_guidance(store)
     store.write_capabilities(
         {
             "arm_1": {

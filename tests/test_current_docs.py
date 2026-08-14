@@ -169,7 +169,15 @@ def test_current_docs_split_web_add_from_tui_cli_display_and_tool_loop_submissio
     ):
         assert fragment in english
 
-    for document in (chinese, spec_main, playbook_f1, refactoring_r8, architecture_main):
+    # vnext §0 no longer restates the main chain. The diagram and the branch
+    # paragraph were word-for-word duplicates of SPEC §1 and were deleted on
+    # 2026-08-13, leaving SPEC §1 as the single source. The section still has to
+    # point there, so the contract is delegated rather than silently dropped.
+    assert "`SPEC.zh-CN.md` §1" in architecture_main
+    assert "rule/LLM chat 主路径" in architecture_main
+    assert "output_projection" in architecture_main
+
+    for document in (chinese, spec_main, playbook_f1, refactoring_r8):
         for fragment in (
             "rule/LLM chat 主路径",
             "React/Web 显示可操作 Draft card",
@@ -345,13 +353,15 @@ def test_agent_architecture_is_current_contract_with_frozen_history() -> None:
 
     assert architecture.startswith("# Physical Agent 当前架构")
     assert "日期：2026-07-16" in architecture
-    assert "用户 Chat" in architecture
-    assert "rule/LLM action intents" in architecture
-    assert "trusted PlanCompiler" in architecture
-    assert "structured AgentOutput / ChatPlan.agent_output" in architecture
-    assert "Draft card" in architecture
-    assert "Watch SafetyGate" in architecture
-    assert "canonical feedback/read model" in architecture
+    # The main-chain diagram lives in SPEC §1 only (deduplicated 2026-08-13);
+    # this file delegates instead of maintaining a second copy that can drift.
+    assert "`SPEC.zh-CN.md` §1" in architecture
+    assert "rule/LLM chat 主路径" in architecture
+    assert "output_projection" in architecture
+    # Document identity: which sections track code, and which are deliberately
+    # frozen and therefore out of scope for routine documentation sync.
+    assert "living contract" in architecture
+    assert "frozen registry" in architecture
     assert "不是默认开发路线" in architecture
     assert "因此演进顺序必须改为" not in architecture
     assert "Assurance loop 稳定后再推进" not in architecture

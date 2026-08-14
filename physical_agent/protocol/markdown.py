@@ -91,22 +91,35 @@ def extract_markdown_sections(
     headings: list[tuple[int, int, str, int]] = []
     fence_character: str | None = None
     fence_length = 0
+    fence_depth = 0
     for index, line in enumerate(lines):
         clean_line = line.rstrip("\r\n")
         fence_match = FENCE_RE.match(clean_line)
         if fence_match is not None:
             marker = fence_match.group(1)
             marker_character = marker[0]
+            has_info = bool(fence_match.group(2).strip())
             if fence_character is None:
                 fence_character = marker_character
                 fence_length = len(marker)
-            elif (
-                marker_character == fence_character
-                and len(marker) >= fence_length
-                and not fence_match.group(2).strip()
-            ):
-                fence_character = None
-                fence_length = 0
+                fence_depth = 1
+            elif marker_character != fence_character:
+                # A different fence character inside an open fence is content.
+                pass
+            elif has_info:
+                # An info string can only ever open a fence, never close one.
+                # Inside an open fence it therefore nests rather than
+                # terminating: documents in this repository routinely embed
+                # ```yaml examples inside a ```markdown block, and treating the
+                # inner opener as a no-op would let the inner block's closer
+                # end the outer one, exposing every heading after it.
+                fence_depth += 1
+            elif len(marker) >= fence_length:
+                fence_depth -= 1
+                if fence_depth <= 0:
+                    fence_character = None
+                    fence_length = 0
+                    fence_depth = 0
             continue
         if fence_character is not None:
             continue

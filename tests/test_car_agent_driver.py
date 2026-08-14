@@ -1127,6 +1127,24 @@ def test_watch_safety_gate_rejects_out_of_bounds_car_motion_before_driver(tmp_pa
             runtime = WatchRuntime(config_path)
             try:
                 await runtime.setup()
+                # ``car_1`` runs in hardware mode, so the watch loop now refuses
+                # the action before SafetyGate unless SAFETY carries Agent
+                # Guidance.  This test is about the Gate's bounds check, so the
+                # workspace has to clear the guidance precondition first.
+                store = open_state_store(config_path=config_path)
+                safety_path = store.file("safety")
+                safety_base = (
+                    safety_path.read_text(encoding="utf-8")
+                    .split("\n## Agent Guidance\n", 1)[0]
+                    .rstrip()
+                )
+                safety_path.write_text(
+                    safety_base
+                    + "\n\n## Agent Guidance\n\n"
+                    + "Level 0 bench use only: keep the wheels off the ground and "
+                    + "stay inside the declared speed and duration envelope.\n",
+                    encoding="utf-8",
+                )
                 execute_calls = 0
                 original_execute = runtime.loaded_drivers["car_1"].driver.execute
 
@@ -1136,7 +1154,6 @@ def test_watch_safety_gate_rejects_out_of_bounds_car_motion_before_driver(tmp_pa
                     return await original_execute(action)
 
                 runtime.loaded_drivers["car_1"].driver.execute = execute_spy
-                store = open_state_store(config_path=config_path)
                 pending = store.append_pending_action(
                     Action(
                         id="act_car_out_of_bounds",

@@ -41,7 +41,17 @@
 ## 收工
 
 - [ ] 专项矩阵通过。
-- [ ] Python full `pytest` 通过；若前端变更则 build 通过。
+- [x] Python full `pytest` 通过；若前端变更则 build 通过。
+
+  2026-08-14 全量 `619 passed, 1 warning`（唯一警告是既有的 Starlette `TestClient`/`httpx` deprecation）。此前的 6 条失败已定性并修复：
+
+  | 失败 | 定性 | 处理 |
+  | --- | --- | --- |
+  | `test_car_agent_driver::test_watch_safety_gate_rejects_out_of_bounds_car_motion_before_driver` | 夹具账，非安全回归 | `car_1` 是 hardware profile，本条的 Gate 前 guidance 拒绝正是 spec §5 的设计意图（`gate_decisions` 因此为 0）。夹具补 Agent Guidance 后动作才走到 Gate 的 bounds 检查，原断言语义不变 |
+  | `test_markdown_protocol::test_extract_markdown_sections_does_not_treat_info_fence_as_closer` | 实现缺陷 | `extract_markdown_sections` 原先把已开启 fence 内的 info fence 当无操作，导致内层 ``` 关掉外层、暴露其后所有标题。改为嵌套深度计数：info fence 只能开不能关，在已开启 fence 内计为嵌套 |
+  | `test_retrieval_foundation::test_sqlite_initialize_migrates_memory_chunk_schema` | 夹具账 | 手搓 legacy DB 的 workspace 缺 SAFETY；已有 workspace 不自愈是 spec §4 的正确行为，夹具补 SAFETY 文件 |
+  | `test_retrieval_foundation::test_chat_runtime_retrieval_enabled_adds_untrusted_context_without_overrides` | 夹具账 | 同上，补 Agent Guidance 清除 hardware 动作通道前置条件 |
+  | `test_current_docs` ×2 | 文档契约随主动去重漂移 | vnext §0 的主链图与 SPEC §1 逐字重复，已于 2026-08-13 主动删除并改为引用。断言改为校验「委托到 SPEC §1」与新增的 living contract / frozen registry 身份边界，不回滚文档 |
 - [ ] 更新 SPEC 状态、REFACTORING §1/§2/§3/§4 和本 tasks 证据。
 - [ ] 独立 review 无 Critical/Important。
 - [ ] 精确 staging，排除用户已有 dirty 变更；commit 并 push。

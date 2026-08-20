@@ -289,6 +289,8 @@
 
 **验收**：八项导航顺序与 A.1 一致；页面组成逐行符合 A.2；actions 无 tab bar 且只见 feedback，state 默认 world 并可切四项；提案按页默认/记忆/按需挂载；ActionBoard 三态及待审批不可折叠均由真实 Chromium 覆盖；推理摘要用例经 `nav-chat` 仍通过；frontend build、全量 Playwright、Python full、Safety smoke、TUI、clean-wheel 与 `git diff --check` 全绿。
 
+**维护收口（2026-08-20）**：纵排文字语义断言读取 `getComputedStyle()` 的 `writing-mode`/`text-orientation`，尺寸只保留为非零与诊断信息；不得再用 CJK 字体边界框的 `height > width` 代表竖排，否则同一 CSS 会因 Windows/Ubuntu 字体回退差异产生假红。
+
 ## C6.1 Dashboard 纯前端 URL 页面状态
 
 **依据**：C6 已把导航收敛为稳定的 8 个 `PageKey`，但 `activePage` 仍是默认 `overview` 的纯 React state；刷新丢页、链接不可复用且浏览器后退离开应用。当前 Dashboard 是根路径托管的本机工具，因此选择 `?page=<page-key>`，不为 clean path 扩大 FastAPI surface。
@@ -319,3 +321,5 @@
 **坑**：测试内建 env-scrub fixture（`tests/conftest.py` 里 monkeypatch 删代理变量）比在 CI yaml 里清更治本——两处都做。
 **实现口径（2026-07-07）**：新增 `.github/workflows/ci.yml`，包含 Python 3.11/3.12 pytest、frontend `npm ci` + build、TUI `npm ci` + build/test、Playwright Chromium e2e。`frontend/playwright.config.ts` 的 webServer 命令改为 Windows/Linux 分支，先初始化 `.tmp/e2e` 临时 workspace，再启动 API，并允许 `PA_E2E_API_COMMAND` / `PA_E2E_DEV_COMMAND` 覆盖。
 **实现口径（2026-07-08）**：按“宽松但守底线”调整 CI：默认阻塞项只保留 Python safety smoke 与 frontend build；TUI 和 dashboard e2e 改为 `continue-on-error` advisory；Python 3.11/3.12 全量 pytest 矩阵改为 `workflow_dispatch` + `full=true` 手动触发；CI 策略、失败处理与本地复现写入 `docs/CI.zh-CN.md`。
+
+**维护收口（2026-08-20）**：GitHub 官方 `checkout/setup-python/setup-node` actions 统一升到 v7，frontend/TUI CI 使用 Node 24；PR Playwright 仍为阻塞门禁，触发条件与 full pytest 分层不变。

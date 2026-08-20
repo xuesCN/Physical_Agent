@@ -31,7 +31,7 @@ push 和 pull request 默认会跑：
      - watch 单步执行 smoke
 
 2. `Frontend build + packaged wheel smoke`
-   - Node 20
+   - Node 24
    - `cd frontend && npm ci`
    - `npm run build`，实际包含 `tsc -b && vite build`
    - 检查提交的 `physical_agent/dashboard/dist` 与当前源码一致
@@ -40,12 +40,14 @@ push 和 pull request 默认会跑：
      `/`、hashed assets 和 `/api/health`
 
 3. `Ink TUI contract`
-   - Node 20
+   - Node 24
    - `cd tui && npm ci`
    - 依次运行 `npm run typecheck`、`npm test`、`npm run build`
    - TUI 是 API-only 客户端；命令 parser、场景验收和请求 payload 属于跨客户端合同，失败会阻塞合入
 
 这三项失败时，一般应该先修。它们分别代表安全底线、主 GUI 可构建性和 TUI/API 合同仍一致。
+
+工作流中的 GitHub 官方 `checkout`、`setup-python`、`setup-node` actions 统一使用 v7，避免旧 action 内部 Node.js 20 runtime 被 hosted runner 强制切到 Node.js 24 的弃用警告；这里的 action runtime 与项目显式选择的 Node 24 测试运行时是两个概念，但两者保持同代可减少环境分叉。
 
 pull request 还会额外运行 `Python 3.12 full pytest (PR)`，执行完整 `python -m pytest -q`。push 继续只跑快速 smoke，避免每次分支保存都重复完整后端测试；Python 3.11 兼容性仍留在手动矩阵中验证。
 

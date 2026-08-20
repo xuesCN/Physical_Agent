@@ -401,13 +401,17 @@ test("C6 chat fills the desktop workspace and keeps the proposal rail centered",
     const chatBox = chat.getBoundingClientRect();
     const toggleBox = toggle.getBoundingClientRect();
     const textBox = text.getBoundingClientRect();
+    const textStyle = window.getComputedStyle(text);
     return {
       chatHeight: chatBox.height,
       chatBottomGap: window.innerHeight - chatBox.bottom,
       railCenterDelta: Math.abs(
         toggleBox.left + toggleBox.width / 2 - (textBox.left + textBox.width / 2),
       ),
-      railTextIsVertical: textBox.height > textBox.width,
+      railTextWidth: textBox.width,
+      railTextHeight: textBox.height,
+      railWritingMode: textStyle.writingMode,
+      railTextOrientation: textStyle.textOrientation,
       railTextInside:
         textBox.top >= toggleBox.top &&
         textBox.bottom <= toggleBox.bottom &&
@@ -420,7 +424,12 @@ test("C6 chat fills the desktop workspace and keeps the proposal rail centered",
   expect(layout.chatBottomGap).toBeGreaterThanOrEqual(10);
   expect(layout.chatBottomGap).toBeLessThanOrEqual(14);
   expect(layout.railCenterDelta).toBeLessThanOrEqual(1);
-  expect(layout.railTextIsVertical).toBeTruthy();
+  expect(layout).toMatchObject({
+    railWritingMode: "vertical-rl",
+    railTextOrientation: "upright",
+  });
+  expect(layout.railTextWidth).toBeGreaterThan(0);
+  expect(layout.railTextHeight).toBeGreaterThan(0);
   expect(layout.railTextInside).toBeTruthy();
 
   await proposalToggle.click();

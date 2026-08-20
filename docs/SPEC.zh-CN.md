@@ -123,6 +123,9 @@ P0/P1/D0/P1.5 安全边界+工具循环 · A3 上下文压缩 · B1-B3.8 状态�
 | B4-vec | 真实向量 RAG（sqlite-vec + embedding） | 延后项；原设计见 git 历史 optimization-spec §4 | ⏸ |
 | 基建 | CI（pytest 3.11/3.12 + 前端 build）；push 纪律；测试 env-scrub fixture | 流程欠账 | ✅ 当前 push 阻塞 Python safety smoke、frontend build/wheel 与 TUI；PR 额外阻塞 Python 3.12 full pytest 和真实 Chromium Playwright。Python 3.11/3.12 全量矩阵仍由 `workflow_dispatch full=true` 手动运行；细节以 `docs/CI.zh-CN.md` 为准 |
 
+| C6-layout-CI | Dashboard 纵排提案栏跨平台门禁修复 | C6 / PLAYBOOK 同名条目 | ✅ 2026-08-20：以 computed `writing-mode: vertical-rl` + `text-orientation: upright` 取代 CJK 字体边界框 `height > width`，仍保留宽高非零、居中、不越界与点击展开。Browser 1600×900、真实 Chromium `37/37`、frontend build、TUI `138/138` + typecheck/build、Python `639 passed`；未改生产 CSS、API、SQLite、watch、driver、SafetyGate 或 SAFETY.md |
+| 基建-CI-runtime | GitHub Actions 与 Node 运行时升级 | CI / `docs/CI.zh-CN.md` | ✅ 2026-08-20：官方 `checkout/setup-python/setup-node` actions 统一升到 v7，frontend/TUI CI 使用 Node 24；移除旧 action Node 20 runtime 警告，触发、阻塞策略与 Python 版本矩阵不变 |
+
 ## 5. 验证环境备注
 
 沙盒验证需：Python≥3.11（或 datetime.UTC shim）、清除代理环境变量、Linux 版 esbuild/rollup 原生二进制（与 lock 版本一致）。用户本机（Win + Py3.12）无需处理。唯一预期失败：doctor 在 Py3.10 沙盒正确拒绝版本。

@@ -1,7 +1,7 @@
 # 重构过程
 
 > 本文浓缩自原 33 份 session-handoff 与 22 份 brief（已删除，git 历史可查）。姊妹文档：`SPEC.zh-CN.md`（目标与待办矩阵）。
-> 范围：基线 `8fa197a` → 当前。最后更新：2026-08-14。
+> 范围：基线 `8fa197a` → 当前。最后更新：2026-08-20。
 
 ## 0. 基线与纪律
 
@@ -68,6 +68,7 @@
 | T4.2 | finalized assistant 块级 Markdown、嵌套列表/code 悬挂缩进与 block-local fallback | parser `3b17ec6`；renderer `7c0a239`；physical width/App `25f20c4`；review repairs `499487c`、`8d578be`、`fe0b477`；final-review shortcut/image-reference repair `f1ed6c7`。`f1ed6c7` exact-commit：TUI parser+renderer `60/60`、full `134/134`、typecheck/build exit 0；Python full `463 passed, 1 warning`；controller fresh docs+safety `24/24`、safety `27/27`；boundary/package/diff clean。最终 re-review Critical=0、Important=0、Minor=1（接受非阻塞 Terminal smoke omission）。implementation/docs exact head `6631f35b22eba6c6e57394c07fec3a26254aa686`：Push `29728361574`、draft-PR `29728365131` 均 attempt 1 completed success。旧 `d72e187`/`a89be06` CI 当时有效但已被本修复 supersede。 |
 | C6 | Dashboard 信息架构重排：8 项导航、ContextTabs 唯一归属、按页 Proposal 与审批感知 ActionBoard | 本轮提交；frontend build 通过；真实 Chromium `33/33`；Python `469 passed`；Safety `32 passed`；TUI `138/138` + typecheck/build；clean-wheel 通过；最终复审 Critical/Important/Minor=0 |
 | C6-layout | 对话页撑满可用高度，收起态提案栏居中纵排 | 本轮提交；frontend build 通过；隔离后端的真实 Chromium `34/34`；Python `469 passed`；实机 1600×900 截图复核通过 |
+| C6-layout-CI | 竖排语义改用 computed style 跨平台断言；CI actions/Node 升至 v7/24 | 本轮提交；Browser 1600×900 复核、Chromium `37/37`、frontend build、TUI `138/138` + typecheck/build、Python `639 passed`；远端 CI 待 push 后确认 |
 | C6.1 | Dashboard 纯前端 `?page=` URL 状态、直达/刷新/history 同步 | frontend build 通过（3310 modules）；隔离后端真实 Chromium `37/37`；Python `469 passed`；Safety `32 passed`；TUI `138/138` + typecheck/build；clean-wheel 与 in-app Browser 复核通过；无 FastAPI/依赖改动 |
 | C5 | Dashboard 可读性与 i18n 收口：9 组件接 `useMessages`、Running 中英混排、Raw 折叠、焦点样式 | 本轮由 Claude 接手实现、用户本机跑门禁；`tsc -b` 与 `vite build`（3310 modules）通过；真实 Chromium `37 passed`；未改后端 |
 | C7 | 流式聊天期整树重渲染收口：delta rAF 攒批 + `MessageContent`/StatusBar/SidebarNav/ProposalPanel memo + handler `useCallback` + block 级 `MarkdownBlock` memo；rAF 与分块均提取为可测模块并补契约测试 | `npm run test:unit` 15/15（batcher 5 + blocks 10）；独立复审后补旧帧代际隔离与保守 document-wide reference fallback；`tsc -b && vite build` 通过（3312 modules）；真实 Chromium 37/37；Python 469/469；未改后端 |
@@ -509,6 +510,8 @@ ProposalPanel 沿用既有桌面侧栏/窄屏 Drawer 两种容器，以版本化
 
 后续布局收口把桌面对话页主区、Chat Card body 与消息区串成一条有界 flex 高度链：卡片占满 header 以下的可用视口，长消息仍只在 `.bubble-stage` 内滚动，输入区保持可见；该规则只在 `min-width: 821px` 生效，避免覆盖既有移动端高度策略。提案栏不再让 icon 与文字共同继承 `writing-mode`，而是把箭头、编辑图标和独立的纵排文字按 column 居中。新增 Chromium 几何用例在 1600×900 下锁定卡片底部 12px 间距、文字纵向/居中/不越界及点击展开行为；隔离 `.tmp/e2e` 后端后 full `34/34`，frontend build 与 Python `469 passed` 通过。
 
+2026-08-20 PR CI 连续两次只在纵排文字 `height > width` 失败，其他 36 条 Chromium 场景通过；本机 Browser 1600×900 则得到 computed style `vertical-rl/upright`、文字框 `14×32`、居中偏差约 0 且点击展开正常。根因是测试把 CJK 字体边界框比例误当成 CSS 竖排语义。修复后用 `getComputedStyle()` 断言 `writing-mode`/`text-orientation`，仍保留宽高非零、居中、不越界与真实交互检查；full Chromium `37/37`。同轮将官方 `checkout/setup-python/setup-node` actions 升到 v7，frontend/TUI CI 运行时升到 Node 24，移除 hosted runner 的旧 Node 20 action 警告，不改变 CI 触发或阻塞策略。门禁：Browser console 0 warning/error、frontend build（3312 modules）、TUI typecheck/build + `138/138`、Python full `639 passed, 2 warnings`；未改生产 UI/CSS、API、SQLite、watch、driver、SafetyGate 或 SAFETY.md。
+
 ### C6.1：Dashboard 纯前端 URL 页面状态
 
 新增 `frontend/src/navigation.ts`，把 8 个 `PAGE_KEYS`、`PageKey`、query 解析/写入与 `popstate` 同步收口为 `usePageNavigation()`。有效 `?page=` 直接选页；缺省 `/` 保持 overview 且不主动改写；非法或已退役 key 以 `replaceState` 归一到 `?page=overview`。Sidebar 与 action 内跳转统一走 `navigatePage()`，写入时保留其他 query/hash，同页点击不制造重复 history。Hook 只同步页面选择，Dashboard 外壳、SSE、snapshot、chat stream 与按页 Proposal 偏好均不 remount。
@@ -638,6 +641,7 @@ brief §2 记的 P1：`streamMessages` 挂在 Dashboard 顶层，聊天流式输
 93. **所有者授权的 Level 0 落地试运行（一次性偏离，2026-08-05）**：项目所有者四次明确要求后，在「场地宽阔、人员在场可随时拿起小车、速度包络 ±25/单发 ≤2s、逐动作人工审批、agent 侧每次运动前核对 TOF」条件下，对 Level 0 固件做落地前进/后退试运行，偏离设备说明书 §0 与 F5.0 尾注的"仅台架"约束。已向所有者书面告知残余风险：该固件无本地避障兜底，断连时按最后指令盲跑最多 ~850ms（当日实测发生过两次 WiFi 掉线）。此偏离不构成先例：**落地常态化的重启条件仍是设备侧 Level 1（避障强制兜底）验收**；执行权唯一与 Gate-before-execute 两条宪法未受影响。
 94. **SAFETY hard rules 与 Agent Guidance 使用一份文件、两个 typed channel**（F3.1b / 003）：选择严格 `HardSafetyPolicy` 作为 Gate 唯一输入，guidance 只存在于 Snapshot/context；放弃把散文拼进 Rules dict 或 hard digest，因为那会让“模型看见”冒充“Gate 强制”。SAFETY front matter 与 Rules YAML 都拒绝重复 key，未知 Rules key 也拒绝，避免 YAML 后值覆盖和未实现规则制造虚假安全感；通用 Markdown parser 保持兼容。
 95. **策略漂移批次以 persisted proposal correlation 单事务失效，新鲜度在 fresh snapshot + Gate 处线性化**（F3.1b / 003）：current claimed 与同 proposal pending siblings 在一个 SQLite transaction 内取消并随异常整体回滚，放弃两个独立 terminal mutation。claim 后读取的 snapshot 通过 Gate 后 action 视为 in-flight，文件更新从下一 action 生效；放弃声称无 writer/execute 共锁的软件读操作能撤销已越过该点的命令，硬件 fencing 仍是独立问题。
+96. **CSS 语义验收不依赖平台字体几何**（C6-layout-CI）：竖排契约选择 computed `writing-mode: vertical-rl` + `text-orientation: upright`，同时保留尺寸非零、居中、不越界与点击展开；放弃 `height > width`，因为 CJK fallback 字体会让同一正确 CSS 在 Ubuntu hosted Chromium 上稳定假红。
 
 ## 4. 经验教训（流程侧）
 
@@ -682,6 +686,7 @@ brief §2 记的 P1：`streamMessages` 挂在 Dashboard 顶层，聊天流式输
 - **导航退役必须同时证明旧入口消失与能力在新入口可达**（C6 的教训）：只断言菜单从 9 变 8 不能证明无能力丢失；真实 Chromium 还要逐项锁住 world/safety/capabilities/robots 的新归属，并验证活动导航与可见内容一致。
 - **CSS 隐藏不等于性能收口，响应式默认值也必须服从安全信号优先级**（C6 的教训）：Proposal 收起验收必须断言组件不挂载，不能只看宽度；同时组合测试窄屏、Actions 默认展开和待审批状态，才能发现 Drawer 遮蔽审批入口的问题。安全 override 应只控制可见性、不抹掉用户偏好，条件解除后再恢复。
 - **真实 Chromium 回归不得复用正在展示的用户工作区后端**（C6 layout follow-up 的教训）：Playwright 的 `reuseExistingServer` 会接受同端口的任意健康实例；若本地正在运行真实 SQLite workspace，包含真实 API 的场景会污染 action/chat/upload 状态，待审批信号还会改变移动端预期。全量回归前必须先释放测试端口，让配置启动隔离的 `.tmp/e2e` 后端；展示服务只能在回归结束后恢复。
+- **浏览器字体边界框不是 writing-mode 契约**（C6 layout CI 的教训）：`textBox.height > textBox.width` 会把字体 fallback、hinting 与 glyph metric 差异升级成阻塞门禁；应直接断言 computed CSS 语义，并把原始宽高作为诊断证据，而不是判定真源。产品视觉仍需配 Browser/截图与可见交互，不能只把测试改绿。
 - **URL 状态不能只测点击后的地址字符串**（C6.1 的教训）：至少同时锁定 direct open、reload、Back/Forward、活动导航/内容一致、其他 query 保留，以及非法/退役 key 的 replace 归一；否则很容易得到“地址变了但视图没同步”或 history 堆积的半路由。
 - **`React.memo` 只有配稳定引用才生效，热点常藏在被 `useMemo` 依赖拖累的子渲染里**（C7 的教训）：给组件加 memo 前必须先确认它收到的 handler/props 引用稳定——Dashboard 里的普通 `function` 声明每渲染换新引用，会让下游 `useMemo`/`memo` 全部失效，单加 memo 等于白加，memo + `useCallback` 必须成套做。定位流式卡顿也别只盯 setState 频率：真正贵的是 `ChatPanel.items` `useMemo` 因不稳定依赖每 token 失效、连带整段历史重跑 markdown 解析，把每 token O(历史) 降为 O(1) 比单纯降 setState 频率收益更大。rAF 攒批则要在终止/早停路径配 cancel + settle，避免丢尾 token。
 - **组件闭包里的调度逻辑要提取成可注入依赖的模块才可测**（C7 测试的教训）：内嵌在 `handleChat` 里的 rAF 生命周期只能靠完整浏览器流程间接验证，测试要么退化成"源码里有没有 `requestAnimationFrame`"的字符串断言，要么去 mock React setter。把帧 API 做成可注入参数后，契约（每帧至多一次 flush、settle 不丢尾、cancel 后陈旧帧不得二次 flush）可以用手动帧队列直接断言，不依赖真实刷新率、计时器或绘制。补回归测试时还应做变异验证——移除"已有帧不重复排队"守卫后 burst 用例必须转红，否则测的是实现在场而非契约成立。Node 级契约测试应配独立的 Playwright config（不带 webServer），与需要真实 Chromium 和后端的 e2e 分开，避免为一个纯函数模块启动整套服务。

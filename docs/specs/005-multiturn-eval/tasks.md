@@ -28,4 +28,4 @@
 - [x] 全量 `pytest`：668 passed。
 - [x] `git diff --cached --check` clean。
 - [x] SPEC §4、PLAYBOOK、REFACTORING §1/§2/§3/§4 与本账本同步；本轮未触发 vnext 分层复核章节。
-- [ ] commit 并 push，且不纳入既有用户未跟踪文件。
+- [x] 实现提交 `7b715b4` 已 push 到 `fork/codex/agent-core-refactor`；既有三份用户未跟踪文件未纳入提交。本行由 closure 提交补记并随即 push。

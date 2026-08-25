@@ -27,6 +27,7 @@
 | W1 | 驱动调用超时保护 | `2f00615` |
 | F0 | LLM planner 启用实验 + 本地 JSONL trace + 坏任务报告 | `d39e8f6` `caa4fa0` |
 | F0.1 / 005 | MOCE 多轮 ChatRuntime eval：10 场景/20 轮诊断 + deterministic scorer hardening | 本轮提交；nonstream 离线复裁=`15 memory + 1 clarification + 2 linear dependency`；stream smoke `invalid_json` fail-closed，release baseline 未建立；system prompt 未改 |
+| F0.2 | proposal clarification + memory guidance 微调 | 本轮提交；system/schema annotation 镜像，JSON shape/validation 不变；离线 100 passed、扩展调用链 125 passed、Python full 671 passed；未调用外部 LLM |
 | B6 | 退役 MarkdownStateStore 后端 | `9072b4e` |
 | F1 | 提案卡片 + Add to Actions + action 级审批流 | `0f49a3c` |
 | F2 | 结构化信息可读化：feedback/world/capabilities + lazy JSON tree | `58a75b0` |
@@ -172,6 +173,14 @@ ChatRuntime 只把 completed turn 的摘要写入 assistant chat metadata；中�
 因此后续 prompt 候选只包括“信息不足必须零动作澄清”，以及作为辅助 guidance 的“memory 默认空、只记显式耐久事实/偏好”；memory 持久化安全仍归可信 runtime policy。dependency 先定位原始 provider、repair 与 normalization，stream parity 先于 release baseline。本轮未改 `context_builder._system_content()`，未执行 draft，也未引 LLM judge、自动 optimizer、watch/driver loader 或生产 API。改动不涉及 `physical_agent/watch/`、`state/`、`protocol/`、`api/` 或 API/SSE wire，故 AGENTS.md 的 vnext 分层复核表无章节被触发。
 
 验收：eval 专项 `29 passed`；ChatRuntime/context/protocol/state/safety/docs 受影响回归 `148 passed`；Python full `668 passed`。两轮独立 grader/实现审查后，最终 P1/P2=0；自然语言 false-execution 保持 semantic heuristic，并在报告中明确不可替代 Board/watch 结构证据。
+
+### F0.2：proposal clarification + memory guidance 微调
+
+动机：F0.1 离线复裁发现 1 个模糊请求从 world 猜 object/target，以及 15 个 turn-local 内容被写入 memory；用户随后明确要求小幅优化 system prompt 并检查 tool 描述。真实输入路径审计确认 MOCE 的 `planner_name=llm` proposal 只消费 system message、workspace payload 与 `ChatLLMResponse` schema，没有 callable tool；三个 MCP tool 仅属于独立 `tool_loop`，修改它们不会改善本 eval。
+
+过程：只在 `context_builder._system_content("proposal")` 增加两段 guidance：显式指代仍可由 chat history/live world 落地，但 action-critical object/destination/goal/required parameter 缺失或歧义时必须零动作并问一个简洁问题；`memory` 示例与默认值改为空，只允许用户明确要求保存的跨任务耐久 fact/preference。当前请求/草案/world、当前轮澄清纠正/取消审批拒绝事件和执行状态不得持久化，安全绕过/推断内容始终不得持久化；文案同时明确满足允许条件时可写 concise notes，并以“始终人工审批”锁定正向契约，避免把默认空误解成永远空。`ChatLLMResponse.actions/memory` 的 JSON Schema description 镜像同一规则；provider schema annotation 随之变化，但字段、type、required 与本地 Pydantic validation 契约不变。只更新 proposal golden 与语义锚点测试，未修改冻结 eval、dependency、repair/normalization、stream、runtime memory policy、MCP tool_loop、Action Board、watch/driver/SafetyGate/SAFETY。
+
+验证：context/contract/chat/eval 100 passed；openai/tool/MCP/API 扩展调用链 125 passed；Python full 671 passed（1 条既有 Starlette 弃用警告）；`git diff --check` clean。独立只读审查确认 wording 保留显式指代、覆盖现有 clarification/memory 失败、未误碰 dependency；review 发现的“memory 可能永远空”和“当前轮事件禁项过宽”两项 P2 已通过显式允许说明、事件限定及耐久人工审批偏好正向契约关闭。未调用外部 LLM，因此这些证据只证明 guidance 已进入实际 provider 输入，不证明模型分数提升；冻结 suite v1 没有合法耐久记忆 live 正例，允许分支留待独立 suite v2/live 验证，不修改 v1 追分。改动未触发 `physical_agent/watch/`、`state/`、`protocol/`、`api/` 或 API/SSE wire，故 AGENTS.md 的 vnext 分层复核表无章节被触发。
 
 ### B6：退役 MarkdownStateStore 后端
 
@@ -654,6 +663,7 @@ brief §2 记的 P1：`streamMessages` 挂在 Dashboard 顶层，聊天流式输
 95. **策略漂移批次以 persisted proposal correlation 单事务失效，新鲜度在 fresh snapshot + Gate 处线性化**（F3.1b / 003）：current claimed 与同 proposal pending siblings 在一个 SQLite transaction 内取消并随异常整体回滚，放弃两个独立 terminal mutation。claim 后读取的 snapshot 通过 Gate 后 action 视为 in-flight，文件更新从下一 action 生效；放弃声称无 writer/execute 共锁的软件读操作能撤销已越过该点的命令，硬件 fencing 仍是独立问题。
 96. **CSS 语义验收不依赖平台字体几何**（C6-layout-CI）：竖排契约选择 computed `writing-mode: vertical-rl` + `text-orientation: upright`，同时保留尺寸非零、居中、不越界与点击展开；放弃 `height > width`，因为 CJK fallback 字体会让同一正确 CSS 在 Ubuntu hosted Chromium 上稳定假红。
 97. **多轮 eval 先分 transport 有效性、确定性合同与行为归因**（F0.1 / 005）：正式 stream 批次只要有 structured infra failure 就不能进入 prompt 质量分母；nonstream repair 对照只能定位，不得冒充 release baseline。首轮真实运行发生在 grader hardening 前，因此保留为 pre-freeze 诊断证据，不伪装成当前 suite 自动分；独立审查后一次性修正 exact-sequence 假红、目标参数与 causal dependency，并以 SHA 锁定首个提交版本。后续不得改 holdout 追分。
+98. **只让已归因且与 transport/dependency 解耦的静态 guidance 先行**（F0.2）：用户显式重启后，选择先改已证实的 clarification/memory system + schema annotation，放弃同轮修改 dependency、stream 或 runtime memory enforcement，避免一个 diff 混入多种根因。该偏离只改变 F0.1 的建议实施顺序，不取消 stream release baseline 与 dependency 来源诊断的前置条件；离线契约测试也不得表述为真实模型改善。
 
 ## 4. 经验教训（流程侧）
 
@@ -666,6 +676,7 @@ brief §2 记的 P1：`streamMessages` 挂在 Dashboard 顶层，聊天流式输
 - **自动场景通过率不是未经归因的模型分数**（F0.1 的教训）：本轮 1/10 经加固 grader 复裁为 15 个 memory policy failure、1 个澄清 failure 和 2 个真实 linear dependency failure；旧 exact-sequence 的 2 个假红已移除。既有 192/192 通用结构/安全 checks 全绿，但其 dependency 只证明引用更早 action。报告必须同时给原始自动分、transport 有效性和加固后归因，不能用一个百分比驱动 prompt 堆规则。
 - **“依赖合法”至少分语法拓扑与任务因果两层**（F0.1 的教训）：`depends_on` 只引用更早 action 能防未知/后向引用，却不能证明 `move→pick→move→place` 的每个物理前提已串起；场景 grader 必须核对所需因果边。合法的安全中间动作也不能用 exact capability 列表误杀，应枚举受参数约束的合法 variants，而不是放宽成任意 subsequence。
 - **流式可见 reply 不等于尾部 JSON 已成立**（F0.1 的教训）：reply 字段可以先增量显示，后续 actions/memory 尾部仍可能 `invalid_json`；eval 应保存脱敏的 code/reason/attempts，并在 infra turn 继续核对 Board/canonical facts，原始 provider 正文只留 ignored trace。
+- **优化模型指导前先追真实 provider 输入路径**（F0.2）：MOCE proposal 路径消费 system message 与 `ChatLLMResponse` schema，没有 callable tool；因此同步 system/schema annotation，不能修改无关 MCP tool 文案后声称 eval 已优化。静态契约测试只证明指导被发送，不证明真实模型得分提升。
 - **结构化 streaming 的降级边界必须按“是否已产出 byte”定义**（R5）：按异常类型无条件重试会把一次 turn 偷换成两次不一致决策；producer 测试必须同时断言 early delta、midstream abort、close 和零 draft persistence。
 - **provider 成功只代表传输完成，不代表结构化结果可用**（A1.1b 的教训）：format fallback 与 validation repair 必须分开观测；本地失败记录 attempt/code/issues，测试同时锁住修复耗尽、公开错误脱敏与零 Draft/Action。
 - **后端退役要同时保迁移旁路与清 UI 口径**（B6 的教训）：删除 factory 分支不够，CLI 迁移、state-check、前端说明、e2e mock、操作手册和旧 handoff 都可能继续暴露退役后端。

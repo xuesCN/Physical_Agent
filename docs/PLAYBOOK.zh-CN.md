@@ -2,7 +2,7 @@
 
 > 配套 `SPEC.zh-CN.md` §4 矩阵使用：矩阵管"做什么/状态"，本册管"怎么做"。每项含：思路、关键文件、坑、验收。
 > 写给后续执行者（人或 agent）。动工前先读 SPEC §0 不变量与 REFACTORING §3 决策先例；每项动工时按惯例先出一份轮次 brief。
-> 最后更新：2026-08-14
+> 最后更新：2026-08-25
 
 ---
 
@@ -50,7 +50,21 @@
 
 **验收**：十个 dev/holdout/adversarial 多轮场景可复跑；hard check 任一失败显式判红；请求侧始终零 pending/completed/cancelled；真实 baseline 有脱敏逐轮结果和唯一主因归类；专项/full pytest 与 `git diff --check` 通过。本轮不改 prompt、不新增 runtime API、不执行 draft。
 
-**2026-08-25 结果**：真实 `stream` smoke 的动作轮次在本地结构校验报 `llm_output_invalid/invalid_json`，正确 fail-closed，不能算 prompt baseline；同 model/prompt/context 的 `nonstream` 20 轮诊断批次有效。原始自动 1/10 场景、5/20 轮不能当模型总分。独立审查加固 grader 后，离线复裁为 15 个瞬时 memory 持久化、1 个模糊请求擅自猜测、2 个 approval 线性因果链失败（每轮缺 2 条边）；旧 exact `[pick, place]` 的 2 个假红已移除。既有 192/192 通用结构/安全 checks 通过，但旧 dependency 只证明引用较早 action。当前 suite SHA=`c767ba5dbbf9070f1e647531d688b68704a83efdd28035a9e23878b4fbe564cd`；prompt 保持未改。下一轮先处理 stream parity 与 dependency 来源，再把澄清和 memory guidance 分层验证，不能只靠 prompt 承担持久化安全。
+**2026-08-25 结果**：真实 `stream` smoke 的动作轮次在本地结构校验报 `llm_output_invalid/invalid_json`，正确 fail-closed，不能算 prompt baseline；同 model/prompt/context 的 `nonstream` 20 轮诊断批次有效。原始自动 1/10 场景、5/20 轮不能当模型总分。独立审查加固 grader 后，离线复裁为 15 个瞬时 memory 持久化、1 个模糊请求擅自猜测、2 个 approval 线性因果链失败（每轮缺 2 条边）；旧 exact `[pick, place]` 的 2 个假红已移除。既有 192/192 通用结构/安全 checks 通过，但旧 dependency 只证明引用较早 action。当前 suite SHA=`c767ba5dbbf9070f1e647531d688b68704a83efdd28035a9e23878b4fbe564cd`；F0.1 收口时 prompt 保持未改。用户随后显式重启 F0.2，只让与 stream/dependency 来源解耦的 clarification/memory 静态 guidance 先行；stream parity 仍是 release baseline 前置，dependency 仍先查 provider/repair/normalization，memory 安全仍不能只靠 prompt。
+
+## F0.2 system prompt / structured-output guidance 微调
+
+**重启与取舍**：2026-08-25 用户在 F0.1 结果后明确要求小幅优化 system prompt 与已有 tool 描述。只提前处理与 stream/dependency 根因无关、且已有确定性失败证据的 clarification/memory guidance；真实 provider 重跑仍须新的外部调用授权。dependency 暂不改 prompt/schema/tool 描述，先保留 F0.1 的来源诊断顺序。
+
+**思路**：在 `context_builder._system_content()` 的 proposal 路径明确：显式指代可结合 chat history/live world 落地，但动作关键 object/destination/goal/required parameter 缺失或歧义时不得仅凭 world 有一个貌似合理候选就猜测，必须 `actions=[]` 并用一句问题澄清；`memory` 默认 `[]`，只在用户明确要求记住且内容是跨任务耐久事实/偏好时写入。当前请求/计划/world 快照、当前轮澄清/纠正/取消/审批/拒绝事件和执行状态不得持久化，安全绕过指令及推断内容则始终不得持久化；“始终人工审批”这类显式耐久偏好仍是允许正例。同样的约束写入 `ChatLLMResponse.actions/memory` schema description；不修改字段、type、required 或本地 validation。
+
+**关键文件**：`physical_agent/agent/context_builder.py`、`physical_agent/agent/llm_contracts.py`、`tests/test_context_builder.py`、`tests/test_llm_contracts.py` 与 proposal context golden。
+
+**坑**：prompt/schema description 不是可信 enforcement；不得因此删除 ChatRuntime/StateStore 边界或把 memory 当安全真源。不要修改冻结 eval 场景来迎合文案，不要把 stream `invalid_json` 或 dependency 缺边算作 prompt 已修复。MOCE 的 LLM proposal 路径只接收 messages + `ChatLLMResponse` schema，没有 callable tool；三个 MCP tool 只属于独立 `tool_loop`，不得把它们的文案变化伪称为本 eval 优化。
+
+**验收**：离线契约测试锁定 proposal system 与 `ChatLLMResponse.actions/memory` description 的澄清门槛、memory 默认/允许/禁止条件；四份 golden 中只有 proposal system 文案变化；相关 context/contract/chat/eval 回归与全量 `pytest` 通过。不得调用外部 LLM、不得写 Action Board 实例、不得触及 watch/driver/SafetyGate/SAFETY 文件真源。
+
+**2026-08-25 结果**：proposal prompt 将原示例 `memory:["..."]` 改为 `memory:[]`，并增加零动作澄清及耐久记忆白名单；同时明确满足白名单时可写 concise notes，正向契约锁定“始终人工审批”这类耐久偏好不会被默认空误伤。`ChatLLMResponse.actions/memory` 的 provider-visible description 镜像同一 guidance，JSON 字段/type/required 与本地 validation 不变。路径审计确认本 eval 没有 callable tool，三个 MCP tool 只属于独立 `tool_loop`，因此未做无关 tool description 修改。四份 context golden 中仅 proposal 变化；context/contract/chat/eval 100 passed，openai/tool/MCP/API 扩展调用链 125 passed，Python full 671 passed（1 条既有 Starlette 弃用警告）。本轮未调用外部 LLM，只证明 guidance 被送入真实 proposal 输入；冻结 suite v1 没有合法耐久记忆 live 正例，真实模型允许分支与整体提升仍待后续独立验证，不回改冻结 v1。
 
 ## B6 退役 markdown 后端（已完成，维护约束）
 

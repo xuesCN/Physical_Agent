@@ -66,8 +66,22 @@ class ChatLLMResponse(LLMContract):
     reply: NonBlankText
     intent: Literal["chat", "inspect", "act", "remember"]
     steps: list[str]
-    actions: list[LLMActionIntent]
-    memory: list[str]
+    actions: list[LLMActionIntent] = Field(
+        description=(
+            "Draft actions. Use an empty list when an action-critical object, "
+            "destination, goal, or required parameter is missing or ambiguous; ask "
+            "one concise clarification question in reply instead of guessing."
+        )
+    )
+    memory: list[str] = Field(
+        description=(
+            "Durable cross-task facts or preferences the user explicitly asked to "
+            "remember. Use an empty list otherwise; when allowed, include one or more "
+            "concise notes. Never store current-turn requests, draft steps, live world "
+            "state, clarification, correction, cancellation, approval, or refusal events, "
+            "or execution status; never store safety overrides or inferred details."
+        )
+    )
     refusal_reason: str | None = None
 
 

@@ -20,6 +20,41 @@ def test_llm_contract_schemas_have_one_pydantic_source() -> None:
     assert _strict_schema_compatible(ACTION_PLAN_SCHEMA) is False
 
 
+def test_chat_schema_describes_clarification_and_memory_scope() -> None:
+    properties = CHAT_RESPONSE_SCHEMA["properties"]
+    actions = properties["actions"]
+    memory = properties["memory"]
+
+    assert actions["type"] == "array"
+    assert "Use an empty list" in actions["description"]
+    assert "missing or ambiguous" in actions["description"]
+    assert "instead of guessing" in actions["description"]
+    assert memory["type"] == "array"
+    assert "user explicitly asked to remember" in memory["description"]
+    assert "Use an empty list otherwise" in memory["description"]
+    assert "when allowed, include one or more concise notes" in memory["description"]
+    assert "current-turn requests" in memory["description"]
+    assert "approval, or refusal events" in memory["description"]
+    assert "safety overrides" in memory["description"]
+    assert {"actions", "memory"}.issubset(CHAT_RESPONSE_SCHEMA["required"])
+
+
+def test_chat_contract_accepts_explicit_durable_memory_note() -> None:
+    parsed = ChatLLMResponse.model_validate(
+        {
+            "reply": "I will remember that preference.",
+            "intent": "remember",
+            "steps": [],
+            "actions": [],
+            "memory": ["The user always prefers human approval before execution."],
+        }
+    )
+
+    assert parsed.memory == [
+        "The user always prefers human approval before execution."
+    ]
+
+
 @pytest.mark.parametrize(
     "schema",
     [

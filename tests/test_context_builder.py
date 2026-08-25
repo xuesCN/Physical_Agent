@@ -70,6 +70,24 @@ def test_context_builder_matches_golden_snapshot(tmp_path, purpose):
     assert _snapshot(bundle) == _read_golden(f"{purpose}.json")
 
 
+def test_proposal_system_requires_clarification_and_scopes_memory(tmp_path):
+    store = _seed_store(tmp_path)
+
+    system = build_context(store, "put it there", purpose="proposal").system
+
+    assert "Ground explicit references against chat history and live world" in system
+    assert "never guess an unstated object, destination, goal, or required parameter" in system
+    assert "return an empty `actions` list" in system
+    assert "ask one concise clarifying question in `reply`" in system
+    assert "Default `memory` to an empty list" in system
+    assert "durable cross-task preference or fact" in system
+    assert "user explicitly asks you to remember it" in system
+    assert "`memory` may contain one or more concise notes" in system
+    assert "current-turn requests, draft steps, live world state" in system
+    assert "clarification, correction, cancellation, approval, or refusal events" in system
+    assert "override safety or inferred details, even if asked" in system
+
+
 @pytest.mark.parametrize("purpose", ["reply", "proposal", "planner", "tool_loop"])
 def test_context_builder_serializes_unicode_without_ascii_escaping(tmp_path, purpose):
     store = _seed_store(tmp_path)

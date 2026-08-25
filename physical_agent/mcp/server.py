@@ -3,9 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from physical_agent.config import DEFAULT_CONFIG_NAME
+from physical_agent.application.plan_compiler import task_graph_steps
+from physical_agent.application.output_projection import project_chat_plan
+from physical_agent.application.proposals import ProposalService
+from physical_agent.agent.planner_factory import create_planner
+from physical_agent.config import DEFAULT_CONFIG_NAME, load_config
+from physical_agent.protocol.actions import SAFETY_INTENT_JSON_SCHEMA
 from physical_agent.protocol.expectations import EXPECTED_JSON_SCHEMA
-from physical_agent.protocol.schemas import Action
+from physical_agent.protocol.schemas import Action, ChatPlan
 from physical_agent.state import StateStore, open_state_store
 
 
@@ -21,37 +26,35 @@ class PhysicalAgentMCP:
         self.config_path = Path(config_path).resolve()
 
     async def submit_task(self, task: str) -> dict[str, Any]:
-        from physical_agent.agent.runtime import AgentRuntime
-
-        runtime = AgentRuntime(self.config_path)
-        await runtime.setup()
-        workspace = runtime._workspace()
-        workspace.write_task(task, owner="human")
-
-        capabilities = workspace.read_capabilities()
-        world = workspace.read_world()
-        if not capabilities.get("robots"):
-            message = "No capabilities are available yet. Start `physical-agent watch` first."
-            workspace.append_log(message, actor="mcp")
-            return {"ok": False, "message": message, "actions": []}
-
-        planner = runtime._resolve_planner()
-        actions = planner.plan(task=task, capabilities=capabilities, world=world)
-        if not actions:
-            message = "No action could be planned for this task."
-            workspace.append_log(message, actor="mcp")
-            return {"ok": False, "message": message, "actions": []}
-
-        actions = runtime._renumber_actions(actions, workspace)
-        for action in actions:
-            workspace.append_pending_action(
-                _with_proposal_metadata(
-                    action,
-                    source="planner",
-                    proposed_by="mcp",
-                    original_task=task,
-                )
-            )
+        config = load_config(self.config_path)
+        workspace = open_state_store(config, base_dir=self.config_path.parent)
+        if not workspace.exists():
+            workspace.initialize()
+        proposal = ProposalService(
+            workspace,
+            planner_factory=lambda: create_planner(
+                config,
+                base_dir=self.config_path.parent,
+            ),
+        ).submit_task(
+            task,
+            proposed_by="mcp",
+        )
+        agent_output = proposal.agent_output
+        actions = agent_output.actions
+        self._write_agent_plan(workspace, task, agent_output)
+        if not proposal.ok:
+            workspace.append_log(proposal.message, actor="mcp")
+            return {
+                "ok": False,
+                "message": proposal.message,
+                "agent_output": agent_output.model_dump(
+                    mode="json", by_alias=True
+                ),
+                "refusal_reason": proposal.refusal_reason,
+                "proposal_status": proposal.status,
+                "proposal_id": proposal.correlation.proposal_id,
+            }
         workspace.append_log(
             f"MCP submitted task `{task}` as {len(actions)} pending action(s): "
             + ", ".join(f"`{action.id}`" for action in actions),
@@ -59,18 +62,32 @@ class PhysicalAgentMCP:
         )
         return {
             "ok": True,
-            "message": "Actions proposed in the action board; watch must validate before execution.",
-            "actions": actions,
+            "message": proposal.message,
+            "agent_output": agent_output.model_dump(
+                mode="json", by_alias=True
+            ),
             "feedback": [],
+            "proposal_status": proposal.status,
+            "proposal_id": proposal.correlation.proposal_id,
         }
 
     def get_state(self) -> dict[str, Any]:
         workspace = self._workspace()
+        actions = workspace.read_actions()
+        feedback = workspace.read_feedback()
+        claim_owners = workspace.read_action_claim_owners()
         return {
             "capabilities": workspace.read_capabilities(),
             "world": workspace.read_world(),
-            "actions": workspace.read_actions(),
-            "feedback": workspace.read_feedback(),
+            "actions": actions,
+            "feedback": feedback,
+            "safety": workspace.read_safety(),
+            "plan": project_chat_plan(
+                workspace.read_plan(),
+                actions=actions,
+                feedback=feedback,
+                claim_owners=claim_owners,
+            ),
         }
 
     def list_robots(self) -> dict[str, Any]:
@@ -85,26 +102,31 @@ class PhysicalAgentMCP:
         """
 
         workspace = self._workspace()
-        parsed = _with_proposal_metadata(
-            Action.model_validate(action),
-            source="mcp",
-            proposed_by="mcp",
-        )
-        workspace.append_pending_action(parsed)
+        try:
+            proposal = ProposalService(workspace).propose_action_result(
+                Action.model_validate(action),
+                source="mcp",
+                proposed_by="mcp",
+            )
+        except ValueError as exc:
+            return {
+                "ok": False,
+                "message": f"Invalid action proposal: {exc}",
+                "error": "invalid_proposal",
+            }
+        agent_output = proposal.agent_output
+        parsed = agent_output.actions[0]
+        self._write_agent_plan(workspace, parsed.reason or parsed.id, agent_output)
         workspace.append_log(
             f"MCP proposed action `{parsed.id}`.",
             actor="mcp",
         )
         return {
             "ok": True,
-            "message": "Action proposed in the action board; watch must validate before execution.",
+            "message": proposal.message,
             "action_id": parsed.id,
+            "agent_output": agent_output.model_dump(mode="json", by_alias=True),
         }
-
-    def run_action(self, action: dict[str, Any]) -> dict[str, Any]:
-        """Backward-compatible alias for propose_action."""
-
-        return self.propose_action(action)
 
     def tool_specs(self) -> list[dict[str, Any]]:
         """Return safe tool specs for agent frameworks.
@@ -153,6 +175,7 @@ class PhysicalAgentMCP:
                             "additionalProperties": True,
                             "properties": {
                                 "expected": EXPECTED_JSON_SCHEMA,
+                                "safety_intent": SAFETY_INTENT_JSON_SCHEMA,
                             },
                         },
                     },
@@ -178,22 +201,21 @@ class PhysicalAgentMCP:
     def _workspace(self) -> StateStore:
         return open_state_store(config_path=self.config_path)
 
-
-def _with_proposal_metadata(
-    action: Action,
-    *,
-    source: str,
-    proposed_by: str,
-    original_task: str | None = None,
-) -> Action:
-    data = action.model_dump(mode="json")
-    metadata = dict(data.get("metadata") or {})
-    metadata.setdefault("source", source)
-    metadata.setdefault("proposed_by", proposed_by)
-    if original_task:
-        metadata.setdefault("original_task", original_task)
-    if action.reason:
-        metadata.setdefault("planner_reason", action.reason)
-    data["metadata"] = metadata
-    return Action.model_validate(data)
-
+    @staticmethod
+    def _write_agent_plan(
+        workspace: StateStore,
+        summary: str,
+        agent_output: Any,
+    ) -> None:
+        workspace.write_plan(
+            ChatPlan(
+                status=(
+                    "proposed_actions" if agent_output.actions else "answered"
+                ),
+                intent="act" if agent_output.actions else "task",
+                summary=summary,
+                steps=task_graph_steps(agent_output),
+                needs_watch=bool(agent_output.actions),
+                agent_output=agent_output,
+            )
+        )

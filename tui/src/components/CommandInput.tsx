@@ -1,6 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import TextInput from "ink-text-input";
+import { THEME } from "../theme.js";
 
 interface CommandInputProps {
   value: string;
@@ -11,8 +12,13 @@ interface CommandInputProps {
 
 export function CommandInput({ value, onChange, onSubmit, disabled = false }: CommandInputProps) {
   return (
-    <Box paddingX={1}>
-      <Text color="green">&gt; </Text>
+    <Box
+      marginX={1}
+      paddingX={1}
+      borderStyle="round"
+      borderColor={disabled ? THEME.muted : THEME.brandAccent}
+    >
+      <Text color={disabled ? THEME.muted : THEME.brandAccent}>› </Text>
       <TextInput
         value={value}
         onChange={onChange}

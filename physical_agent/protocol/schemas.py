@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, PlainSerializer
+
+if TYPE_CHECKING:
+    from physical_agent.protocol.agent_output import AgentOutput
 
 
 class StrictModel(BaseModel):
@@ -64,6 +67,7 @@ class RobotRuntimeProfile(StrictModel):
     robot_id: str
     kind: str
     driver: str
+    execution_mode: Literal["simulation", "hardware"] = "hardware"
     status: str = "disconnected"
     capabilities: list[Capability] = Field(default_factory=list)
     requires_approval: bool = False
@@ -76,6 +80,8 @@ class DriverEntrypoint(StrictModel):
 
 class DriverRobotInfo(StrictModel):
     kind: str
+    # Describes adapter support only. It must never be used to infer whether
+    # the current runtime is connected to a simulator or real hardware.
     supports_simulation: bool = True
 
 
@@ -150,5 +156,11 @@ class ChatPlan(StrictModel):
     intent: str = ""
     summary: str = ""
     steps: list[str] = Field(default_factory=list)
-    actions: list[Action] = Field(default_factory=list)
     needs_watch: bool = False
+    agent_output: Annotated[
+        "AgentOutput",
+        AfterValidator(
+            lambda value: value.model_dump(mode="json", by_alias=True)
+        ),
+        PlainSerializer(lambda value: value),
+    ] | None = None

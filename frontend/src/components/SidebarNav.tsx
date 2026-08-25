@@ -4,35 +4,24 @@ import {
   DatabaseOutlined,
   DeploymentUnitOutlined,
   GlobalOutlined,
-  RobotOutlined,
-  SafetyCertificateOutlined,
+  MessageOutlined,
   SettingOutlined,
   ThunderboltOutlined
 } from "@ant-design/icons";
 import { Layout, Menu, Typography } from "antd";
 import type { MenuProps } from "antd";
+import { memo } from "react";
 import type { ReactNode } from "react";
 import type { Messages } from "../locales";
-
-export type PageKey =
-  | "overview"
-  | "actions"
-  | "world"
-  | "robots"
-  | "hardware"
-  | "memory"
-  | "safety"
-  | "events"
-  | "settings";
+import type { PageKey } from "../navigation";
 
 export const PAGE_LABELS: Record<PageKey, string> = {
+  chat: "Chat",
   overview: "Overview",
   actions: "Actions",
-  world: "World",
-  robots: "Robots",
+  state: "State",
   hardware: "Hardware",
   memory: "Memory",
-  safety: "Safety",
   events: "Events",
   settings: "Settings"
 };
@@ -48,6 +37,11 @@ function navIcon(key: PageKey, icon: ReactNode) {
 function navItems(labels: Messages["nav"]): MenuProps["items"] {
   return [
     {
+      key: "chat",
+      icon: navIcon("chat", <MessageOutlined />),
+      label: navLabel("chat", labels)
+    },
+    {
       key: "overview",
       icon: navIcon("overview", <DashboardOutlined />),
       label: navLabel("overview", labels)
@@ -57,19 +51,17 @@ function navItems(labels: Messages["nav"]): MenuProps["items"] {
       icon: navIcon("actions", <DeploymentUnitOutlined />),
       label: navLabel("actions", labels)
     },
-    { key: "world", icon: navIcon("world", <GlobalOutlined />), label: navLabel("world", labels) },
-    { key: "robots", icon: navIcon("robots", <RobotOutlined />), label: navLabel("robots", labels) },
+    {
+      key: "state",
+      icon: navIcon("state", <GlobalOutlined />),
+      label: navLabel("state", labels)
+    },
     {
       key: "hardware",
       icon: navIcon("hardware", <ApiOutlined />),
       label: navLabel("hardware", labels)
     },
     { key: "memory", icon: navIcon("memory", <DatabaseOutlined />), label: navLabel("memory", labels) },
-    {
-      key: "safety",
-      icon: navIcon("safety", <SafetyCertificateOutlined />),
-      label: navLabel("safety", labels)
-    },
     {
       key: "events",
       icon: navIcon("events", <ThunderboltOutlined />),
@@ -91,7 +83,7 @@ interface SidebarNavProps {
   onCollapse: (collapsed: boolean) => void;
 }
 
-export function SidebarNav({
+function SidebarNavBase({
   activePage,
   collapsed,
   labels,
@@ -127,3 +119,5 @@ export function SidebarNav({
     </Layout.Sider>
   );
 }
+
+export const SidebarNav = memo(SidebarNavBase);

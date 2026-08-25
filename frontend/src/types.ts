@@ -6,6 +6,35 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+export type ExecutorMode = "waiting_for_init" | "embedded" | "external" | "none";
+
+export interface ExecutorLease {
+  active?: boolean;
+  owner?: string | null;
+  expires_at?: string | null;
+  updated_at?: string | null;
+  [key: string]: unknown;
+}
+
+export interface ExecutorError {
+  message?: string;
+  error_type?: string;
+  phase?: string;
+  [key: string]: unknown;
+}
+
+/** Read-only projection of the process that may execute physical actions. */
+export interface ExecutorProjection {
+  mode: ExecutorMode;
+  status?: string;
+  embedded_enabled?: boolean;
+  lease?: ExecutorLease | null;
+  last_error?: ExecutorError | string | null;
+  /** Compatibility marker for pre-projection servers. It is not runtime proof. */
+  legacy_watch_configured?: boolean;
+  [key: string]: unknown;
+}
+
 export interface HealthState {
   ok: boolean;
   ready: boolean;
@@ -15,6 +44,7 @@ export interface HealthState {
   workspace_path?: string;
   config_exists?: boolean;
   workspace_exists?: boolean;
+  executor?: ExecutorProjection;
 }
 
 export interface StateCheckResult {
@@ -110,6 +140,79 @@ export interface ActionApproval {
   [key: string]: unknown;
 }
 
+export type AgentOutputStatus =
+  | "draft"
+  | "waiting_approval"
+  | "waiting_execution"
+  | "executing"
+  | "completed"
+  | "failed"
+  | "refused"
+  | "unavailable";
+
+export type AgentDecision = "propose" | "reply" | "ask" | "wait" | "refuse" | "stop";
+
+export type AgentTaskKind = "approval" | "safety_gate" | "physical_action" | "verification";
+
+export type AgentTaskOwner = "human" | "watch";
+
+export type AgentTaskStatus =
+  | "not_scheduled"
+  | "requested"
+  | "waiting"
+  | "queued"
+  | "checking"
+  | "passed"
+  | "rejected"
+  | "completed"
+  | "failed"
+  | "skipped";
+
+export interface SafetyCheckSpec {
+  code: string;
+  description: string;
+  [key: string]: unknown;
+}
+
+export interface AgentTask {
+  id: string;
+  kind: AgentTaskKind;
+  owner: AgentTaskOwner;
+  status: AgentTaskStatus;
+  label: string;
+  action_id: string;
+  depends_on: string[];
+  origin: "plan_compiler";
+  mandatory: boolean;
+  policy_source?: string | null;
+  checks: SafetyCheckSpec[];
+  details: Record<string, unknown>;
+}
+
+export interface AgentOutput {
+  schema: string;
+  status: AgentOutputStatus;
+  decision: AgentDecision;
+  lifecycle: "draft" | "submitted";
+  message: string;
+  proposal_id?: string | null;
+  tasks: AgentTask[];
+  actions: ActionItem[];
+  refusal_reason?: string | null;
+}
+
+export interface AgentPlan {
+  metadata?: Record<string, unknown>;
+  status?: string;
+  intent?: string;
+  summary?: string;
+  steps?: string[];
+  needs_watch?: boolean;
+  agent_output?: AgentOutput | null;
+  plan?: AgentPlan;
+  [key: string]: unknown;
+}
+
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
@@ -150,6 +253,7 @@ export interface AgentState {
   backend?: string;
   config_path?: string;
   workspace_path?: string;
+  executor?: ExecutorProjection;
   task?: Record<string, unknown>;
   capabilities?: {
     robots?: Record<string, RobotInfo>;
@@ -158,6 +262,7 @@ export interface AgentState {
   world?: Record<string, unknown>;
   actions?: {
     pending?: ActionItem[];
+    in_progress?: ActionItem[];
     completed?: ActionItem[];
     cancelled?: ActionItem[];
   };
@@ -168,7 +273,7 @@ export interface AgentState {
     running_summary?: string;
     [key: string]: unknown;
   };
-  plan?: Record<string, unknown>;
+  plan?: AgentPlan;
   memory?: {
     notes?: Array<Record<string, unknown>>;
     [key: string]: unknown;
@@ -186,6 +291,7 @@ export interface AgentState {
 export interface RobotInfo {
   kind?: string;
   driver?: string;
+  execution_mode?: "simulation" | "hardware";
   status?: string;
   capabilities?: Array<{
     name?: string;
@@ -253,6 +359,14 @@ export interface WorkspaceResetResponse {
   message: string;
   workspace_path?: string;
   backend?: string;
+  state: AgentState;
+}
+
+export interface ProjectInitializeResponse {
+  ok: boolean;
+  message: string;
+  config_created?: boolean;
+  workspace_created?: boolean;
   state: AgentState;
 }
 
@@ -329,6 +443,7 @@ export interface IntegratePayload {
 
 export interface EffectiveRobotConfig {
   driver: string;
+  execution_mode?: "simulation" | "hardware";
   config: Record<string, unknown>;
 }
 
@@ -351,6 +466,7 @@ export interface ConfigResponse {
 export interface RegisterRobotPayload {
   robot_id: string;
   driver: string;
+  execution_mode?: "simulation" | "hardware";
   config?: Record<string, unknown>;
 }
 

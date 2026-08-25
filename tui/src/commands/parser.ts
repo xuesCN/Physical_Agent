@@ -129,11 +129,20 @@ function parseRegisterRobotCommand(payload: string, input: string): ParsedComman
     return { type: "unknown", input, message: "/register-robot JSON requires string robot_id and driver." };
   }
   const config = isRecord(parsed.config) && !Array.isArray(parsed.config) ? parsed.config : {};
+  const executionMode = parsed.execution_mode;
+  if (executionMode !== undefined && executionMode !== "simulation" && executionMode !== "hardware") {
+    return {
+      type: "unknown",
+      input,
+      message: "/register-robot execution_mode must be simulation or hardware."
+    };
+  }
   return {
     type: "registerRobot",
     payload: {
       robot_id: robotId,
       driver,
+      execution_mode: executionMode ?? "hardware",
       config
     }
   };

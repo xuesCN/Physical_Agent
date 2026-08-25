@@ -9,10 +9,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SCAN_DIRS = [
+    ROOT / "physical_agent" / "application",
     ROOT / "physical_agent" / "agent",
     ROOT / "physical_agent" / "llm",
-    ROOT / "physical_agent" / "gui",
     ROOT / "physical_agent" / "api",
+    ROOT / "physical_agent" / "mcp",
 ]
 
 ALLOWLIST_REASONS = {
@@ -22,19 +23,14 @@ ALLOWLIST_REASONS = {
         "physical_agent.drivers.templates",
     ): "Scaffold generation reuses inert driver file templates and does not load or execute hardware.",
     (
-        "physical_agent/agent/driver_coder.py",
+        "physical_agent/api/watch_service.py",
         "import",
-        "physical_agent.drivers.loader",
-    ): "LLM driver-coding validation loads a temporary candidate driver with mock config only.",
-    (
-        "physical_agent/agent/driver_coder.py",
-        "call",
-        "loaded.driver.execute",
-    ): "Validation executes a mock observe action in a temporary workspace, outside request/planning paths.",
+        "physical_agent.watch.runtime",
+    ): "The API watch service is the single lazy composition root for the explicitly enabled background watch loop.",
 }
 
 
-def test_agent_llm_gui_do_not_cross_driver_execution_boundary():
+def test_agent_llm_api_do_not_cross_execution_boundary():
     findings = []
     for directory in SCAN_DIRS:
         for path in directory.rglob("*.py"):
@@ -85,11 +81,11 @@ def _boundary_findings(path: Path) -> list[tuple[str, str, str]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if _is_driver_module(alias.name):
+                if _is_execution_module(alias.name):
                     findings.append((relative, "import", alias.name))
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
-            if _is_driver_module(module):
+            if _is_execution_module(module):
                 findings.append((relative, "import", module))
         elif isinstance(node, ast.Call):
             target = _attribute_path(node.func)
@@ -104,6 +100,12 @@ def _boundary_findings(path: Path) -> list[tuple[str, str, str]]:
 
 def _is_driver_module(module: str) -> bool:
     return module == "physical_agent.drivers" or module.startswith("physical_agent.drivers.")
+
+
+def _is_execution_module(module: str) -> bool:
+    return _is_driver_module(module) or module == "physical_agent.watch" or module.startswith(
+        "physical_agent.watch."
+    )
 
 
 def _attribute_path(node: ast.AST) -> str | None:
@@ -121,8 +123,10 @@ def _format_boundary_failure(findings: list[tuple[str, str, str]]) -> str:
     if not findings:
         return ""
     lines = [
-        "Agent/LLM/GUI/API code must not directly import physical_agent.drivers "
-        "or call driver execute/heartbeat/halt hooks.",
+        "Agent/LLM code must not import physical_agent.watch; Agent/LLM/GUI/API code "
+        "must not directly import physical_agent.drivers or call driver "
+        "execute/heartbeat/halt hooks. GUI/API watch-hosting imports require an exact "
+        "documented allowlist entry.",
         "Move execution to watch-side code or add a narrow documented allowlist entry if it is validation-only.",
         "Unexpected findings:",
     ]

@@ -1,22 +1,34 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useApp } from "ink";
+import { Box, Text, useApp, useStdout } from "ink";
+import {
+  collectActionActivityEntries,
+  createActionActivityTracker,
+  resetActionActivityTracker
+} from "./activity.js";
 import { ApiClient } from "./api/client.js";
 import { COMMAND_HELP, parseCommand } from "./commands/parser.js";
 import { ActionsPanel } from "./components/ActionsPanel.js";
 import { ChatPanel } from "./components/ChatPanel.js";
 import { CommandInput } from "./components/CommandInput.js";
 import { ConfigPanel } from "./components/ConfigPanel.js";
+import { ExecutionApprovalNotice } from "./components/ExecutionApprovalNotice.js";
 import { RobotDetailPanel } from "./components/RobotDetailPanel.js";
 import { RobotsPanel } from "./components/RobotsPanel.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { StatusPanel } from "./components/StatusPanel.js";
 import { Transcript } from "./components/Transcript.js";
 import { UploadsPanel } from "./components/UploadsPanel.js";
+import {
+  collapsedReasoningSummary,
+  reasoningSummaryFromMessage
+} from "./reasoning.js";
 import type {
   AgentState,
+  AgentOutput,
   ApiEvent,
   ChatMessage,
   ConfigResponse,
+  ExecutorProjection,
   HealthState,
   LLMSettingsResponse,
   LlmRuntimeStatus,
@@ -25,8 +37,7 @@ import type {
   RuntimeStatus,
   TranscriptEntry,
   TuiView,
-  UploadResponse,
-  WatchStatus
+  UploadResponse
 } from "./types.js";
 
 export interface TuiClient {
@@ -35,7 +46,12 @@ export interface TuiClient {
   config(): Promise<ConfigResponse>;
   llmSettings(): Promise<LLMSettingsResponse>;
   testLlmSettings(): Promise<LLMSettingsResponse>;
-  submitTask(task: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
+  submitTask(task: string): Promise<{
+    ok: boolean;
+    message: string;
+    agent_output: AgentOutput;
+    state: AgentState;
+  }>;
   approveAction(actionId: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
   rejectAction(actionId: string, reason: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
   resetWorkspace(confirm: string): Promise<{ ok: boolean; message: string; state: AgentState }>;
@@ -55,6 +71,11 @@ interface AppProps {
 export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }: AppProps) {
   const client = useMemo<TuiClient>(() => injectedClient ?? new ApiClient(apiBase), [apiBase, injectedClient]);
   const { exit } = useApp();
+  const { stdout } = useStdout();
+  const stdoutColumns = stdout.columns;
+  const terminalColumns = Number.isFinite(stdoutColumns) && stdoutColumns > 0
+    ? stdoutColumns
+    : undefined;
   const [health, setHealth] = useState<HealthState | null>(null);
   const [state, setState] = useState<AgentState | null>(null);
   const [configResponse, setConfigResponse] = useState<ConfigResponse | null>(null);
@@ -63,6 +84,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
   const [busy, setBusy] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [streamingText, setStreamingText] = useState("");
+  const [streamingThought, setStreamingThought] = useState("");
   const [transcriptEntries, setTranscriptEntries] = useState<TranscriptEntry[]>([]);
   const [activeView, setActiveView] = useState<TuiView>("chat");
   const [selectedRobotId, setSelectedRobotId] = useState<string | null>(null);
@@ -72,13 +94,14 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
   const [lastRefresh, setLastRefresh] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>("Type /help for commands. Enter text to chat.");
   const [error, setError] = useState<string | null>(null);
-  const [watchStatus, setWatchStatus] = useState<WatchStatus>("unknown");
+  const [executor, setExecutor] = useState<ExecutorProjection | null>(null);
   const [llmStatus, setLlmStatus] = useState<LlmRuntimeStatus>({
     state: "unknown",
     model: "-",
     hasApiKey: null
   });
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const actionActivityTrackerRef = useRef(createActionActivityTracker());
   const transcriptCounterRef = useRef(0);
   const seenChatKeysRef = useRef<Set<string>>(new Set());
   const pendingLocalChatRef = useRef<Array<{ role: string; content: string }>>([]);
@@ -89,11 +112,14 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
     if (!normalized) {
       return;
     }
-    pendingLocalChatRef.current.push({ role, content: normalized });
+    if (role === "user" || role === "assistant") {
+      pendingLocalChatRef.current.push({ role, content: normalized });
+    }
     const id = `local-${Date.now()}-${transcriptCounterRef.current++}`;
     setTranscriptEntries((previous) => [
       ...previous,
       {
+        kind: "chat",
         id,
         role,
         content: normalized
@@ -106,6 +132,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
       const [nextHealth, nextState] = await Promise.all([client.health(), client.state()]);
       setHealth(nextHealth);
       setState(nextState);
+      setExecutor(nextState.executor ?? nextHealth.executor ?? null);
       setConnected(true);
       setError(null);
       setLastRefresh(new Date().toLocaleTimeString());
@@ -154,7 +181,18 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
         return;
       }
 
+      const reasoningSummary = reasoningSummaryFromMessage(message);
+      if (reasoningSummary) {
+        additions.push({
+          kind: "chat",
+          id: `${key}:thought`,
+          role: "thought",
+          content: collapsedReasoningSummary(reasoningSummary),
+          created_at: message.created_at
+        });
+      }
       additions.push({
+        kind: "chat",
         id: key,
         role: message.role,
         content,
@@ -165,6 +203,14 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
       setTranscriptEntries((previous) => [...previous, ...additions]);
     }
   }, [messages]);
+
+  useEffect(() => {
+    if (!state) return;
+    const additions = collectActionActivityEntries(state, actionActivityTrackerRef.current);
+    if (additions.length > 0) {
+      setTranscriptEntries((previous) => [...previous, ...additions]);
+    }
+  }, [state]);
 
   const refreshLlmStatus = useCallback(async () => {
     setLlmStatus((previous) => ({ ...previous, state: "checking", message: undefined }));
@@ -223,9 +269,12 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
       .events((event) => {
         setConnected(true);
         setMode("sse");
-        const nextWatchStatus = watchStatusFromEvent(event);
-        if (nextWatchStatus) {
-          setWatchStatus(nextWatchStatus);
+        const nextExecutor = executorFromEvent(event);
+        if (nextExecutor) {
+          setExecutor(nextExecutor);
+        }
+        if (event.type === "workspace_reset") {
+          resetActionActivityTracker(actionActivityTrackerRef.current);
         }
         const applyResult = applyEvent(event, setState);
         if (applyResult === "summary" && shouldRefreshFullStateFromEvent(event)) {
@@ -254,7 +303,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
     mode,
     lastRefresh,
     backend: state?.backend ?? health?.backend ?? "-",
-    watch: watchStatus,
+    executor,
     llm: llmStatus,
     message: state?.message ?? health?.message ?? (error ? "API unavailable" : "Loading")
   };
@@ -331,6 +380,9 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
         setNotice(response.message);
       } else if (command.type === "reset") {
         const response = await client.resetWorkspace(command.confirm);
+        if (response.ok) {
+          resetActionActivityTracker(actionActivityTrackerRef.current);
+        }
         setState(response.state);
         setNotice(response.message);
       } else if (command.type === "chat") {
@@ -348,6 +400,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
     await runTuiChatStream(client, text, {
       setStreaming,
       setStreamingText,
+      setStreamingThought,
       setState,
       setNotice,
       appendTranscript: (role, content) => appendLocalChat(role, content)
@@ -356,7 +409,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
 
   return (
     <>
-      {activeView === "chat" ? <Transcript entries={transcriptEntries} /> : null}
+      <Transcript entries={transcriptEntries} columns={terminalColumns} />
       <Box flexDirection="column" gap={1}>
         <StatusBar status={status} busy={busy || streaming} />
         {renderActiveView({
@@ -370,6 +423,7 @@ export function App({ apiBase, pollIntervalMs, useSse, client: injectedClient }:
           lastUpload,
           transcriptEntries,
           streamingText,
+          streamingThought,
           streaming,
           error
         })}
@@ -391,6 +445,7 @@ interface ActiveViewProps {
   lastUpload: UploadResponse | null;
   transcriptEntries: TranscriptEntry[];
   streamingText: string;
+  streamingThought: string;
   streaming: boolean;
   error: string | null;
 }
@@ -432,10 +487,11 @@ function renderActiveView(props: ActiveViewProps) {
           <ChatPanel
             hasTranscript={props.transcriptEntries.length > 0}
             streamingText={props.streamingText}
+            streamingThought={props.streamingThought}
             streaming={props.streaming}
-            error={props.error}
+            error={props.error ? `API unavailable: ${props.error}` : null}
           />
-          <ActionsPanel state={props.state} error={props.error} />
+          <ExecutionApprovalNotice state={props.state} />
         </>
       );
   }
@@ -456,15 +512,42 @@ export function applyEvent(event: ApiEvent, setState: (state: AgentState) => voi
   return "ignored";
 }
 
-export function watchStatusFromEvent(event: ApiEvent): WatchStatus | null {
-  const value = event.payload?.watch_enabled;
-  if (value === true) {
-    return "enabled";
+export function executorFromEvent(event: ApiEvent): ExecutorProjection | null {
+  const direct = asExecutorProjection(event.payload?.executor);
+  if (direct) {
+    return direct;
   }
-  if (value === false) {
-    return "disabled";
+  const nestedState = event.payload?.state;
+  if (nestedState && typeof nestedState === "object") {
+    const nested = asExecutorProjection((nestedState as Record<string, unknown>).executor);
+    if (nested) {
+      return nested;
+    }
+  }
+
+  // Compatibility only. watch_enabled says how the API was configured; it
+  // does not prove a process currently owns the executor lease.
+  const legacy = event.payload?.watch_enabled;
+  if (typeof legacy === "boolean") {
+    return {
+      mode: "none",
+      status: legacy ? "unknown" : "stopped",
+      embedded_enabled: legacy,
+      legacy_watch_configured: legacy
+    };
   }
   return null;
+}
+
+function asExecutorProjection(value: unknown): ExecutorProjection | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (!["waiting_for_init", "embedded", "external", "none"].includes(String(candidate.mode))) {
+    return null;
+  }
+  return candidate as unknown as ExecutorProjection;
 }
 
 export function shouldRefreshFullStateFromEvent(event: ApiEvent): boolean {
@@ -472,13 +555,24 @@ export function shouldRefreshFullStateFromEvent(event: ApiEvent): boolean {
     return true;
   }
   if (event.type === "watch_step") {
-    return Number(event.payload?.executed ?? 0) > 0;
+    return watchStepChangedState(event);
   }
   return false;
 }
 
 export function shouldUpdateLastRefreshFromEvent(event: ApiEvent): boolean {
-  return event.type !== "watch_step" || Number(event.payload?.executed ?? 0) > 0;
+  return event.type !== "watch_step" || watchStepChangedState(event);
+}
+
+function watchStepChangedState(event: ApiEvent): boolean {
+  if (event.payload?.state_changed === true) {
+    return true;
+  }
+  const stats = event.payload?.stats;
+  if (stats && typeof stats === "object" && "state_changed" in stats) {
+    return stats.state_changed === true;
+  }
+  return Number(event.payload?.executed ?? 0) > 0;
 }
 
 export function shouldFallbackAfterSseClose(signal: AbortSignal): boolean {
@@ -496,6 +590,7 @@ export function sseErrorFallbackMessage(error: unknown): string {
 interface ChatStreamHandlers {
   setStreaming: (value: boolean) => void;
   setStreamingText: (value: string) => void;
+  setStreamingThought: (value: string) => void;
   setState: (state: AgentState) => void;
   setNotice: (message: string) => void;
   appendTranscript?: (role: string, content: string) => void;
@@ -508,7 +603,9 @@ export async function runTuiChatStream(
 ): Promise<void> {
   handlers.setStreaming(true);
   handlers.setStreamingText("");
+  handlers.setStreamingThought("");
   let content = "";
+  let reasoningSummary = "";
   try {
     await client.sendChatStream(text, (event) => {
       const payload = event.payload ?? {};
@@ -516,18 +613,30 @@ export async function runTuiChatStream(
         content += String(payload.delta ?? "");
         handlers.setStreamingText(content);
       }
+      if (event.type === "thought") {
+        reasoningSummary += String(payload.delta ?? "");
+        handlers.setStreamingThought(reasoningSummary);
+      }
       if (event.type === "done") {
+        const reply = String(payload.reply ?? content);
+        if (handlers.appendTranscript) {
+          if (reasoningSummary) {
+            handlers.appendTranscript("thought", collapsedReasoningSummary(reasoningSummary));
+          }
+          handlers.appendTranscript("assistant", reply);
+          const draft = draftOutputSummary(payload.agent_output);
+          if (draft) {
+            handlers.appendTranscript("draft", draft);
+          }
+          handlers.setStreamingText("");
+        }
         if (isFullAgentState(payload.state)) {
           handlers.setState(payload.state);
-          handlers.setStreamingText("");
-        } else {
-          const reply = String(payload.reply ?? content);
-          if (handlers.appendTranscript) {
-            handlers.appendTranscript("assistant", reply);
+          if (!handlers.appendTranscript) {
             handlers.setStreamingText("");
-          } else {
-            handlers.setStreamingText(reply);
           }
+        } else if (!handlers.appendTranscript) {
+          handlers.setStreamingText(reply);
         }
       }
       if (event.type === "error") {
@@ -539,6 +648,7 @@ export async function runTuiChatStream(
       handlers.setNotice(`Streaming chat failed. ${readError(err)}`);
     }
   } finally {
+    handlers.setStreamingThought("");
     handlers.setStreaming(false);
   }
 }
@@ -551,6 +661,37 @@ function isFullAgentState(value: unknown): value is AgentState {
     "capabilities" in value ||
     "feedback" in value
   );
+}
+
+function draftOutputSummary(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (
+    value.schema !== "physical-agent/agent-output/v1" ||
+    value.lifecycle !== "draft" ||
+    value.decision !== "propose" ||
+    !Array.isArray(value.actions)
+  ) {
+    return null;
+  }
+  const labels: string[] = [];
+  for (const action of value.actions) {
+    if (!isRecord(action)) {
+      return null;
+    }
+    const id = typeof action.id === "string" ? action.id.trim() : "";
+    const robot = typeof action.robot === "string" ? action.robot.trim() : "";
+    const capability = typeof action.capability === "string" ? action.capability.trim() : "";
+    if (!id || !robot || !capability) {
+      return null;
+    }
+    labels.push(`${id} ${robot}.${capability}`);
+  }
+  if (!labels.length) {
+    return null;
+  }
+  return `[draft output; not Action Board] ${labels.join(", ")}`;
 }
 
 function isAgentStateSummary(value: unknown): boolean {

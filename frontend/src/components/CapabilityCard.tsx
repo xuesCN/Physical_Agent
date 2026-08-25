@@ -9,6 +9,7 @@ import {
   isNonEmptyRecord,
   omitKeys
 } from "./readableFormatters";
+import { useMessages } from "../locales/context";
 
 interface CapabilitiesGridProps {
   capabilities: AgentState["capabilities"] | undefined;
@@ -23,10 +24,11 @@ const CAPABILITY_KNOWN_KEYS = [
 ];
 
 export function CapabilitiesGrid({ capabilities }: CapabilitiesGridProps) {
+  const labels = useMessages();
   const robots = capabilities?.robots ?? {};
   const entries = Object.entries(robots);
   if (!entries.length) {
-    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No capabilities" />;
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={labels.capability.noCapabilities} />;
   }
   return (
     <div className="capability-grid">
@@ -35,7 +37,7 @@ export function CapabilitiesGrid({ capabilities }: CapabilitiesGridProps) {
       ))}
       {unknownCapabilities(capabilities).length > 0 && (
         <JsonSummaryLine
-          label="Raw"
+          label={labels.capability.raw}
           value={Object.fromEntries(unknownCapabilities(capabilities))}
         />
       )}
@@ -44,6 +46,7 @@ export function CapabilitiesGrid({ capabilities }: CapabilitiesGridProps) {
 }
 
 function RobotCapabilityGroup({ robotId, robot }: { robotId: string; robot: RobotInfo }) {
+  const labels = useMessages();
   return (
     <Space direction="vertical" size={8} className="full-width">
       <Space size={6} wrap>
@@ -79,17 +82,17 @@ function RobotCapabilityGroup({ robotId, robot }: { robotId: string; robot: Robo
                   {capability.description || "No description"}
                 </Typography.Text>
                 <JsonSummaryLine
-                  label="Params"
+                  label={labels.capability.params}
                   text={compactSchemaSummary(capability.params_schema)}
                 />
                 {isNonEmptyRecord(asRecord(capability).constraints) && (
                   <JsonSummaryLine
-                    label="Constraints"
+                    label={labels.capability.constraints}
                     text={formatObjectValue(asRecord(capability).constraints)}
                   />
                 )}
                 {isNonEmptyRecord(rawFields) && (
-                  <JsonSummaryLine label="Raw" value={rawFields} />
+                  <JsonSummaryLine label={labels.capability.raw} value={rawFields} />
                 )}
               </Space>
             </Card>

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import time
+import webbrowser
 from pathlib import Path
 from typing import Any, Optional
+from urllib.error import URLError
+from urllib.request import urlopen
 
 import typer
 import yaml
@@ -15,13 +20,13 @@ from physical_agent.agent.skills import SkillRouter
 from physical_agent.config import DEFAULT_CONFIG_NAME, load_config, write_default_config
 from physical_agent.doctor import doctor_ok, run_doctor
 from physical_agent.drivers.templates import create_driver_template
-from physical_agent.gui import run_gui
 from physical_agent.ingest.files import FileIngestionError, ingest_file as ingest_local_file
 from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
+from physical_agent.protocol.agent_output import AgentOutput
+from physical_agent.protocol.schemas import Action
 from physical_agent.quickstart import setup_project
 from physical_agent.state import open_state_store
 from physical_agent.state.check import run_state_check, state_check_ok
-from physical_agent.state.sqlite import migrate_markdown_workspace_to_sqlite
 from physical_agent.watch.runtime import WatchRuntime
 
 
@@ -30,6 +35,13 @@ driver_app = typer.Typer(help="Driver utilities.")
 app.add_typer(driver_app, name="driver")
 skill_app = typer.Typer(help="Skill utilities.")
 app.add_typer(skill_app, name="skill")
+
+
+def _result_actions(result: dict[str, Any]) -> list[Action]:
+    raw_output = result.get("agent_output")
+    if raw_output is None:
+        return []
+    return AgentOutput.model_validate(raw_output).actions
 
 
 @app.command("init")
@@ -101,6 +113,12 @@ def state_check(
         f"{'yes' if result['workspace_initialized'] else 'no'}"
     )
     typer.echo(
+        "SAFETY policy valid: "
+        f"{'yes' if result['safety_policy_valid'] else 'no'}"
+    )
+    if result["safety_policy_error"]:
+        typer.echo(f"SAFETY policy error: {result['safety_policy_error']}")
+    typer.echo(
         "Retrieval enabled: "
         f"{'yes' if result['retrieval_enabled'] else 'no'}"
     )
@@ -147,8 +165,20 @@ def gui(
     host: str = typer.Option("127.0.0.1", "--host", help="Host to bind."),
     port: int = typer.Option(8765, "--port", "-p", help="Port to bind."),
     no_open: bool = typer.Option(False, "--no-open", help="Do not open the browser automatically."),
+    no_watch: bool = typer.Option(
+        False,
+        "--no-watch",
+        help="Serve the Dashboard without an embedded watch executor.",
+    ),
 ) -> None:
-    run_gui(config, host=host, port=port, open_browser=not no_open)
+    _serve_api_app(
+        config,
+        host=host,
+        port=port,
+        enable_watch=not no_watch,
+        open_browser=not no_open,
+        announce_dashboard=True,
+    )
 
 
 @app.command("api")
@@ -163,21 +193,13 @@ def api(
         help="Override the API watch loop interval in seconds.",
     ),
 ) -> None:
-    try:
-        create_app, uvicorn = _load_api_server()
-        api_app = create_app(
-            config,
-            enable_watch=watch,
-            watch_interval_s=watch_interval_s,
-        )
-    except Exception as exc:
-        from physical_agent.api.server import MissingServerDependencyError
-
-        if isinstance(exc, MissingServerDependencyError):
-            typer.echo(str(exc), err=True)
-            raise typer.Exit(code=1) from exc
-        raise
-    uvicorn.run(api_app, host=host, port=port)
+    _serve_api_app(
+        config,
+        host=host,
+        port=port,
+        enable_watch=watch,
+        watch_interval_s=watch_interval_s,
+    )
 
 
 @app.command("watch")
@@ -206,7 +228,7 @@ def run(
         return
     result = asyncio.run(runtime.run_task(task, wait_for_feedback=not no_wait))
     typer.echo(result["message"])
-    actions = result.get("actions", [])
+    actions = _result_actions(result)
     if actions:
         typer.echo("Actions:")
         for action in actions:
@@ -237,11 +259,6 @@ def chat(
         help="Chat brain: auto, llm, rule_based, tool_loop, or openai_tool_loop.",
     ),
     model: Optional[str] = typer.Option(None, "--model", help="LLM model override for --planner llm."),
-    auto_step: bool = typer.Option(
-        False,
-        "--auto-step",
-        help="Run one watch step after proposed actions are written.",
-    ),
     show_code_result: bool = typer.Option(
         False,
         "--show-code-result",
@@ -251,16 +268,15 @@ def chat(
     runtime = ChatRuntime(config, planner_name=planner, model=model)
     one_shot = message if message is not None else prompt
     if one_shot is not None:
-        result = runtime.respond(one_shot, auto_step=auto_step)
+        result = runtime.respond(one_shot)
         typer.echo(result["reply"])
         if show_code_result and result.get("code_result"):
             _echo_code_result(dict(result["code_result"]))
-        if result["actions"]:
+        actions = _result_actions(result)
+        if actions:
             typer.echo("Proposed actions:")
-            for action in result["actions"]:
-                typer.echo(f"- {action['id']}: {action['robot']}.{action['capability']}")
-        if result["executed"]:
-            typer.echo(f"Watch step executed {result['executed']} action(s).")
+            for action in actions:
+                typer.echo(f"- {action.id}: {action.robot}.{action.capability}")
         return
 
     typer.echo("Physical Agent chat mode. Ask normally; code tasks can edit files and run tests. Press Ctrl+C or submit an empty message to exit.")
@@ -269,20 +285,18 @@ def chat(
         if not text:
             return
         try:
-            result = runtime.respond(text, auto_step=auto_step)
+            result = runtime.respond(text)
         except Exception as exc:
             typer.echo(f"agent> Chat failed: {exc}")
             continue
         typer.echo(f"agent> {result['reply']}")
         if show_code_result and result.get("code_result"):
             _echo_code_result(dict(result["code_result"]), prefix="agent> ")
-        if result["actions"]:
+        actions = _result_actions(result)
+        if actions:
             typer.echo("agent> Proposed actions:")
-            for action in result["actions"]:
-                typer.echo(f"  - {action['id']}: {action['robot']}.{action['capability']}")
-        if result["executed"]:
-            typer.echo(f"agent> Watch step executed {result['executed']} action(s).")
-
+            for action in actions:
+                typer.echo(f"  - {action.id}: {action.robot}.{action.capability}")
 
 @app.command("ingest-file")
 def ingest_file_command(
@@ -402,6 +416,95 @@ def _load_api_server():
     return create_app, uvicorn
 
 
+def _serve_api_app(
+    config: Path,
+    *,
+    host: str,
+    port: int,
+    enable_watch: bool,
+    watch_interval_s: float | None = None,
+    open_browser: bool = False,
+    announce_dashboard: bool = False,
+) -> None:
+    """Run the canonical FastAPI application for both ``api`` and ``gui``."""
+
+    try:
+        create_app, uvicorn = _load_api_server()
+        api_app = create_app(
+            config,
+            enable_watch=enable_watch,
+            watch_interval_s=watch_interval_s,
+        )
+    except Exception as exc:
+        from physical_agent.api.server import MissingServerDependencyError
+
+        if isinstance(exc, MissingServerDependencyError):
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(code=1) from exc
+        raise
+
+    url = _dashboard_browser_url(host, port)
+    if open_browser:
+        _schedule_dashboard_browser(url)
+    if announce_dashboard:
+        typer.echo(f"Physical Agent Dashboard running at {url}")
+    uvicorn.run(api_app, host=host, port=port)
+
+
+def _dashboard_browser_url(bind_host: str, port: int) -> str:
+    """Map a bind address to a locally reachable browser URL."""
+
+    host = bind_host.strip()
+    unbracketed = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    if unbracketed == "0.0.0.0":
+        unbracketed = "127.0.0.1"
+    elif unbracketed == "::":
+        unbracketed = "::1"
+    if ":" in unbracketed:
+        unbracketed = f"[{unbracketed}]"
+    return f"http://{unbracketed}:{port}"
+
+
+def _schedule_dashboard_browser(url: str) -> threading.Thread:
+    """Open the Dashboard asynchronously after its health endpoint responds."""
+
+    thread = threading.Thread(
+        target=_wait_for_dashboard_and_open,
+        args=(url,),
+        name="physical-agent-dashboard-opener",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+def _wait_for_dashboard_and_open(
+    url: str,
+    *,
+    timeout_s: float = 30.0,
+    poll_interval_s: float = 0.1,
+) -> bool:
+    deadline = time.monotonic() + max(0.0, timeout_s)
+    health_url = f"{url.rstrip('/')}/api/health"
+    while True:
+        if _dashboard_health_ready(health_url):
+            webbrowser.open(url)
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(max(0.01, poll_interval_s), remaining))
+
+
+def _dashboard_health_ready(health_url: str) -> bool:
+    try:
+        with urlopen(health_url, timeout=0.5) as response:
+            status = int(getattr(response, "status", 200))
+            return 200 <= status < 300
+    except (OSError, URLError):
+        return False
+
+
 @app.command("llm-test")
 def llm_test(
     env_file: Path = typer.Option(Path(".env"), "--env-file", help="Path to .env file."),
@@ -485,51 +588,6 @@ def export_audit(
     typer.echo(f"Workspace: {result['workspace_path']}")
     typer.echo(f"Audit: {result['out_dir']}")
     typer.echo(f"Manifest: {result['manifest']}")
-
-
-@app.command("migrate-md-to-sqlite")
-def migrate_md_to_sqlite(
-    config: Path = typer.Option(Path(DEFAULT_CONFIG_NAME), "--config", "-c", help="Config path."),
-    overwrite: bool = typer.Option(
-        False,
-        "--overwrite",
-        help="Replace an existing workspace/state.db file.",
-    ),
-) -> None:
-    cfg = load_config(config, allow_retired_markdown=True)
-    workspace_path = cfg.workspace_path(config.resolve().parent)
-    try:
-        result = migrate_markdown_workspace_to_sqlite(
-            workspace_path,
-            overwrite=overwrite,
-        )
-    except FileExistsError as exc:
-        typer.echo(str(exc))
-        raise typer.Exit(code=1) from exc
-    except FileNotFoundError as exc:
-        typer.echo(str(exc))
-        raise typer.Exit(code=1) from exc
-
-    typer.echo("Migrated Markdown workspace to SQLite.")
-    typer.echo(f"Workspace: {result['workspace_path']}")
-    typer.echo(f"SQLite DB: {result['db_path']}")
-    typer.echo(
-        "Actions: "
-        f"{result['actions']['pending']} pending, "
-        f"{result['actions']['completed']} completed, "
-        f"{result['actions']['cancelled']} cancelled"
-    )
-    typer.echo(
-        f"Chat messages: {result['chat_messages']}; "
-        f"memory notes: {result['memory_notes']}; "
-        f"uploads: {result['uploads']}; "
-        f"log entries: {result['log_entries']}"
-    )
-    typer.echo(
-        "Config was not changed. To use this SQLite database, set "
-        "`workspace.backend: sqlite` in physical-agent.yaml before starting "
-        "CLI/API/GUI/watch."
-    )
 
 
 @skill_app.command("list")

@@ -7,13 +7,12 @@ export const en = {
     refresh: "Refresh"
   },
   nav: {
+    chat: "Chat",
     overview: "Overview",
     actions: "Actions",
-    world: "World",
-    robots: "Robots",
+    state: "State",
     hardware: "Hardware",
     memory: "Memory",
-    safety: "Safety",
     events: "Events",
     settings: "Settings"
   },
@@ -22,9 +21,12 @@ export const en = {
     workspace: "workspace",
     ready: "ready",
     notReady: "not ready",
-    watch: "watch",
-    enabled: "enabled",
-    off: "off",
+    executor: "executor",
+    executorWaiting: "waiting for initialization",
+    executorEmbedded: "embedded",
+    executorExternal: "external",
+    executorNone: "not running",
+    executorUnknown: "status unknown",
     sseConnected: "SSE connected",
     sseDisconnected: "SSE disconnected; polling fallback active"
   },
@@ -38,7 +40,7 @@ export const en = {
     showTour: "Show tour again",
     dangerZone: "Danger zone",
     resetTitle: "Workspace reset",
-    resetDescription: "Clears world, actions, memory, chat, and uploads, and restores SAFETY to defaults. physical-agent.yaml and LLM settings are kept.",
+    resetDescription: "Clears world, actions, memory, chat, and uploads. SAFETY hard Rules are restored to defaults while Agent Guidance is preserved. physical-agent.yaml and LLM settings are kept. To restore the default config too, run `physical-agent setup --force`.",
     resetConfirmTitle: "Reset the entire workspace?",
     resetConfirmDescription: "World, actions, memory, chat, and uploads will be cleared. This cannot be undone.",
     resetOk: "Reset workspace",
@@ -48,11 +50,29 @@ export const en = {
     plan: "Plan",
     exportAudit: "Export audit view",
     save: "Save",
-    testConnection: "Test connection"
+    testConnection: "Test connection",
+    backend: "Backend",
+    workspace: "Workspace",
+    config: "Config",
+    workspacePath: "Workspace path",
+    message: "Message",
+    task: "Task",
+    stateCheck: "State-check",
+    sourceOfTruth: "Source of truth",
+    payload: "Payload",
+    humanView: "Human view",
+    safetySource: "Safety source",
+    sqliteSchema: "SQLite schema",
+    switching: "Switching",
+    baseUrl: "Base URL",
+    apiKey: "API key",
+    model: "Model",
+    apiMode: "API mode"
   },
   actions: {
     title: "Action Board",
     pending: "Pending",
+    running: "Running",
     completed: "Completed",
     cancelled: "Cancelled",
     id: "ID",
@@ -64,6 +84,11 @@ export const en = {
     source: "Source",
     review: "Review",
     noActions: "No {status} actions",
+    noPendingActions: "No pending actions",
+    waitingApprovalOne: "{count} action waiting for your approval",
+    waitingApprovalMany: "{count} actions waiting for your approval",
+    expandBoard: "Expand Action Board",
+    collapseBoard: "Collapse Action Board",
     noParams: "No params",
     approvalUnknown: "approval unknown",
     approvalRequired: "Needs execution approval",
@@ -88,7 +113,8 @@ export const en = {
     rawDebug: "Raw Debug",
     noSafetyRules: "No safety rules",
     noRobots: "No robots",
-    noRobotsConfigured: "No robots configured"
+    noRobotsConfigured: "No robots configured",
+    noRawDebug: "No raw debug fields"
   },
   tour: {
     setupTitle: "Set up first",
@@ -106,6 +132,7 @@ export const en = {
     clearTitle: "Clear chat history?",
     clearDescription: "Actions, feedback, memory, and uploads will stay unchanged.",
     clearOk: "Clear",
+    clearChatAria: "Clear chat history",
     draft: "Draft",
     task: "Task",
     action: "Action",
@@ -115,6 +142,8 @@ export const en = {
     addToActions: "Add to Actions",
     edit: "Edit",
     noParams: "No params",
+    reasoningSummary: "Model reasoning summary",
+    reasoningDisclaimer: "For reference only; not a decision basis.",
     sseDisconnected: "SSE disconnected while chat was in progress.",
     stopped: "Chat stream stopped.",
     endedEarly: "Chat stream ended before completion.",
@@ -122,7 +151,7 @@ export const en = {
   },
   hardware: {
     proposalOnly: "Proposal-side only",
-    proposalOnlyDescription: "Generates driver files and validates them in mock mode. Watch remains the only runtime that loads drivers and touches hardware.",
+    proposalOnlyDescription: "Generates driver files and performs static manifest/Python/interface validation. Request-side code never imports, connects to, or executes the candidate driver; run dynamic conformance only through an explicit watch-side workflow.",
     source: "Source (SDK folder, repo path, or URL)",
     sourceRequired: "Source is required",
     driverName: "Driver name (optional)",
@@ -137,7 +166,12 @@ export const en = {
     registerDescription: "Appends a robots entry to physical-agent.yaml. Watch connects it after a restart; nothing touches hardware now.",
     robotId: "Robot ID",
     driver: "Driver (name or path)",
-    addToConfig: "Add to config"
+    addToConfig: "Add to config",
+    outputPath: "Output path",
+    detectedTransport: "Detected transport",
+    robotKind: "Robot kind",
+    resultTitle: "Title",
+    modelPlaceholder: "Leave blank to use configured model"
   },
   config: {
     refresh: "Refresh",
@@ -146,10 +180,78 @@ export const en = {
     watch: "Watch",
     robot: "Robot",
     driver: "Driver",
+    executionMode: "Execution mode",
     config: "Config",
     noConfig: "No config"
   },
+  initialization: {
+    title: "Workspace is not ready",
+    description: "Create the missing project config and workspace before proposing work.",
+    action: "Initialize project",
+    success: "Project initialized"
+  },
   drawer: {
-    title: "Task / Action Proposal"
+    title: "Task / Action Proposal",
+    open: "Open proposal panel",
+    collapse: "Collapse proposal panel"
+  },
+  proposal: {
+    title: "Task / Action Proposal",
+    task: "Task",
+    submitTask: "Submit Task",
+    robot: "Robot",
+    capability: "Capability",
+    actionId: "Action ID",
+    paramsJson: "Params JSON",
+    reason: "Reason",
+    dependsOn: "Depends on"
+  },
+  overview: {
+    systemStatus: "System status",
+    backend: "Backend",
+    workspace: "Workspace",
+    message: "Message",
+    robots: "Robots",
+    capabilities: "Capabilities",
+    worldObjects: "World objects",
+    workspaceBounds: "Workspace bounds",
+    noRobots: "No robots",
+    noCapabilities: "No capabilities",
+    noWorldObjects: "No world objects"
+  },
+  capability: {
+    params: "Params",
+    constraints: "Constraints",
+    raw: "Raw",
+    noCapabilities: "No capabilities"
+  },
+  world: {
+    environment: "Environment",
+    robotsInWorld: "Robots in world",
+    artifacts: "Artifacts",
+    raw: "Raw"
+  },
+  taskGraph: {
+    title: "Agent output tasks",
+    decision: "Decision",
+    noCompiledTasks: "No compiled tasks",
+    noCompiledOutput: "No compiled AgentOutput"
+  },
+  feedbackTimeline: {
+    noFeedback: "No feedback",
+    raw: "Raw"
+  },
+  events: {
+    title: "Events",
+    payload: "Payload",
+    noEvents: "No events"
+  },
+  memorySearch: {
+    title: "Memory / Search",
+    noResults: "No results"
+  },
+  upload: {
+    title: "Upload",
+    drop: "Drop text files here"
   }
 };

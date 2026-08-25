@@ -1,0 +1,65 @@
+schema: physical-agent/driver/v1
+
+name: car_agent
+version: 0.1.0
+description: Watch-side WiFi TCP/NDJSON driver for the Moce Level 0 car_agent firmware.
+
+entrypoint:
+  module: driver
+  class: CarAgentDriver
+
+robot:
+  kind: rover
+  supports_simulation: false
+
+config_schema:
+  type: object
+  required:
+    - host
+  properties:
+    host:
+      type: string
+      minLength: 1
+      description: Current DHCP address or hostname of the car.
+    port:
+      type: integer
+      minimum: 1
+      maximum: 65535
+      default: 8080
+    connect_timeout_s:
+      type: number
+      exclusiveMinimum: 0
+      maximum: 10
+      default: 2
+    request_timeout_s:
+      type: number
+      exclusiveMinimum: 0
+      maximum: 0.6
+      default: 0.5
+    refresh_interval_ms:
+      type: integer
+      minimum: 50
+      maximum: 500
+      default: 250
+    max_abs_speed:
+      type: integer
+      minimum: 1
+      maximum: 60
+      description: Bench-calibrated absolute PWM command limit; enables drive_for only when paired with max_duration_ms.
+    max_duration_ms:
+      type: integer
+      minimum: 1
+      maximum: 28000
+      description: Bench-approved per-action duration limit; enables drive_for only when paired with max_abs_speed.
+  dependentRequired:
+    max_abs_speed:
+      - max_duration_ms
+    max_duration_ms:
+      - max_abs_speed
+  additionalProperties: false
+
+dependencies:
+  python: []
+
+capability_contract:
+  source: runtime

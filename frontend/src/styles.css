@@ -16,6 +16,9 @@
   --pa-accent: #2563eb;
   --pa-accent-soft: #f8fbff;
   --pa-accent-border: #bdd3f8;
+  --pa-warning-bg: #fff7e6;
+  --pa-warning-border: #d48806;
+  --pa-warning-text: #874d00;
 }
 
 body[data-theme="dark"] {
@@ -31,6 +34,9 @@ body[data-theme="dark"] {
   --pa-accent: #60a5fa;
   --pa-accent-soft: #14253a;
   --pa-accent-border: #315a91;
+  --pa-warning-bg: #3b2a10;
+  --pa-warning-border: #d89614;
+  --pa-warning-text: #ffd591;
   color-scheme: dark;
 }
 
@@ -184,9 +190,16 @@ body {
 
 .workspace-frame {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
   gap: 12px;
   align-items: start;
+}
+
+.workspace-frame.proposal-expanded {
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
+
+.workspace-frame.proposal-collapsed {
+  grid-template-columns: minmax(0, 1fr) 38px;
 }
 
 .workspace-main,
@@ -231,6 +244,23 @@ body {
   align-items: start;
 }
 
+.agent-task-graph-card .ant-card-body {
+  overflow: hidden;
+}
+
+.agent-output-summary {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-task-row-safety > td {
+  background: var(--pa-accent-soft) !important;
+}
+
+.agent-task-row-safety > td:first-child {
+  box-shadow: inset 3px 0 0 var(--pa-accent);
+}
+
 .overview-path {
   display: block;
   max-width: 100%;
@@ -270,6 +300,56 @@ body {
   max-height: calc(100vh - 82px);
   min-width: 0;
   overflow: auto;
+}
+
+.inspector-column-collapsed {
+  overflow: hidden;
+  border: 1px solid var(--pa-border);
+  border-radius: 6px;
+  background: var(--pa-panel-bg);
+}
+
+.proposal-panel-toggle.ant-btn {
+  width: 100%;
+  color: var(--pa-muted-text);
+}
+
+.inspector-column-expanded > .proposal-panel-toggle.ant-btn {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.inspector-column-collapsed > .proposal-panel-toggle.ant-btn {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  min-height: 156px;
+  height: auto;
+  padding: 12px 0;
+  line-height: 1;
+}
+
+.inspector-column-collapsed > .proposal-panel-toggle.ant-btn .ant-btn-icon {
+  display: flex;
+  margin-inline-end: 0;
+}
+
+.proposal-rail-label {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+
+.proposal-rail-text {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  letter-spacing: 2px;
+  line-height: 1;
 }
 
 .panel {
@@ -457,6 +537,35 @@ body {
   padding: 2px 2px 12px;
 }
 
+@media (min-width: 821px) {
+  .workspace-main[data-testid="page-chat"] {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 82px);
+    min-height: 0;
+  }
+
+  .workspace-main[data-testid="page-chat"] > .chat-panel {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .workspace-main[data-testid="page-chat"] > .chat-panel > .ant-card-body {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .workspace-main[data-testid="page-chat"] .bubble-stage {
+    flex: 1 1 0;
+    height: auto;
+    min-height: 0;
+  }
+}
+
 .chat-sender {
   margin-top: 8px;
 }
@@ -507,6 +616,50 @@ body {
 .chat-message-content {
   display: grid;
   gap: 8px;
+}
+
+.action-board-body {
+  display: grid;
+  gap: 10px;
+}
+
+.action-board-approval-required {
+  border-color: var(--pa-warning-border);
+}
+
+.action-board-approval-required .ant-card-head {
+  background: var(--pa-warning-bg);
+  border-bottom-color: var(--pa-warning-border);
+}
+
+.action-board-warning-icon,
+.action-board-warning-copy.ant-typography {
+  color: var(--pa-warning-text);
+}
+
+.context-tabs-single {
+  padding-top: 12px;
+}
+
+.reasoning-summary {
+  max-width: 560px;
+  padding: 8px 10px;
+  border: 1px solid var(--pa-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--pa-panel-bg) 88%, transparent);
+}
+
+.reasoning-summary summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+  cursor: pointer;
+}
+
+.reasoning-summary-body.ant-typography {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
 }
 
 .draft-action-card {
@@ -638,7 +791,7 @@ body {
 }
 
 @media (max-width: 1360px) {
-  .workspace-frame {
+  .workspace-frame.proposal-expanded {
     grid-template-columns: minmax(0, 1fr) 340px;
   }
 }
@@ -752,4 +905,38 @@ body {
   .panel .ant-card-body {
     padding: 10px;
   }
+}
+
+/* C5: keyboard focus visibility (previously no :focus styles anywhere) */
+a:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible,
+.ant-btn:focus-visible,
+.ant-segmented-item-input:focus-visible + .ant-segmented-item-label,
+.nav-item:focus-visible,
+summary:focus-visible {
+  outline: 2px solid #378add;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* C5: history feedback badges are lower-weight than live Action Board status,
+   so they don't get misread as current pending work */
+.feedback-history-item .ant-tag {
+  opacity: 0.85;
+  font-weight: 400;
+}
+
+/* C5: raw metadata summary collapses by default; click to expand */
+.json-summary-collapsible {
+  font-size: 12px;
+}
+.json-summary-toggle {
+  cursor: pointer;
+  color: #8b8a84;
+  list-style: revert;
+  user-select: none;
+}
+.json-summary-collapsible[open] .json-summary-toggle {
+  margin-bottom: 4px;
 }

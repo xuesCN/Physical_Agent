@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 import yaml
@@ -23,7 +26,11 @@ from physical_agent.api.server import (
     create_app,
 )
 from physical_agent.config import write_default_config
-from physical_agent.llm import OpenAICompatibleError, llm_settings_path
+from physical_agent.llm import (
+    OpenAICompatibleError,
+    StructuredOutputError,
+    llm_settings_path,
+)
 from physical_agent.protocol.schemas import Observation
 from physical_agent.state import open_state_store
 
@@ -45,6 +52,7 @@ def _prepare_store(config_path: Path):
             "arm_1": {
                 "kind": "arm",
                 "driver": "mock_arm",
+                "execution_mode": "simulation",
                 "status": "connected",
                 "capabilities": [
                     {
@@ -96,6 +104,86 @@ def _sse_events(body: str) -> list[dict]:
         if data_lines:
             events.append(json.loads("\n".join(data_lines)))
     return events
+
+
+def _openapi_response_properties(schema: dict, path: str) -> dict:
+    response_schema = schema["paths"][path]["post"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
+    reference = response_schema.get("$ref")
+    if reference:
+        component_name = reference.rsplit("/", 1)[-1]
+        response_schema = schema["components"]["schemas"][component_name]
+    return response_schema.get("properties", {})
+
+
+def test_openapi_publishes_canonical_proposal_and_mutation_responses(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    schema = create_app(config_path).openapi()
+
+    for path in ("/api/actions/propose", "/api/tasks/submit", "/api/chat"):
+        properties = _openapi_response_properties(schema, path)
+        assert "agent_output" in properties
+        assert "action" not in properties
+        assert "actions" not in properties
+        assert "draft_actions" not in properties
+        assert "executed" not in properties
+
+    for path in (
+        "/api/actions/{action_id}/approve",
+        "/api/actions/{action_id}/reject",
+    ):
+        properties = _openapi_response_properties(schema, path)
+        assert "action" in properties
+        assert "agent_output" not in properties
+
+
+def test_openapi_chat_plan_agent_output_references_canonical_component(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    schema = create_app(config_path).openapi()
+
+    agent_output_schema = schema["components"]["schemas"]["ChatPlan"]["properties"][
+        "agent_output"
+    ]
+    non_null_variants = [
+        variant
+        for variant in agent_output_schema["anyOf"]
+        if variant.get("type") != "null"
+    ]
+
+    assert non_null_variants == [{"$ref": "#/components/schemas/AgentOutput"}]
+    assert '"additionalProperties": true' not in json.dumps(agent_output_schema)
+    agent_output_properties = schema["components"]["schemas"]["AgentOutput"][
+        "properties"
+    ]
+    assert "schema" in agent_output_properties
+    assert "schema_" not in agent_output_properties
+
+
+def test_chat_plan_json_schema_resolves_after_direct_schema_module_import():
+    script = """
+import json
+from physical_agent.protocol.schemas import ChatPlan
+
+schema = ChatPlan.model_json_schema()
+agent_output = schema["properties"]["agent_output"]
+non_null = [item for item in agent_output["anyOf"] if item.get("type") != "null"]
+assert non_null == [{"$ref": "#/$defs/AgentOutput"}], agent_output
+assert "AgentOutput" in schema["$defs"]
+assert "schema" in schema["$defs"]["AgentOutput"]["properties"]
+assert "schema_" not in schema["$defs"]["AgentOutput"]["properties"]
+print(json.dumps(agent_output, sort_keys=True))
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
 def test_api_cli_missing_server_extra_has_clear_message(tmp_path, monkeypatch):
@@ -185,16 +273,37 @@ def test_api_controller_contract_runs_without_fastapi(tmp_path):
             depends_on=[],
         )
     )
-    assert proposed["action"]["id"] == "act_controller_direct"
+    assert "action" not in proposed
+    assert proposed["agent_output"]["actions"][0]["id"] == "act_controller_direct"
+    assert proposed["agent_output"]["schema"] == "physical-agent/agent-output/v1"
+    assert any(
+        task["kind"] == "safety_gate"
+        for task in proposed["agent_output"]["tasks"]
+    )
 
     submitted = controller.submit_task(
         SubmitTaskRequest(task="pick the red block and place it on the tray")
     )
-    assert [item["capability"] for item in submitted["actions"]] == ["pick", "place"]
+    assert "actions" not in submitted
+    assert [
+        item["capability"] for item in submitted["agent_output"]["actions"]
+    ] == ["pick", "place"]
+    assert submitted["agent_output"]["proposal_id"] == submitted["proposal_id"]
+    persisted_output = submitted["state"]["plan"]["plan"]["agent_output"]
+    assert persisted_output["proposal_id"] is None
+    assert {action["id"] for action in persisted_output["actions"]} == {
+        "act_controller_direct",
+        "act_001",
+        "act_002",
+    }
 
     chat = controller.chat(ChatRequest(message="remember that controller memory is safe"))
-    assert chat["executed"] == 0
+    assert "executed" not in chat
     assert chat["memory"][0]["content"] == "controller memory is safe"
+    assert "actions" not in chat
+    assert "draft_actions" not in chat
+    assert "chat_contract" not in chat
+    assert "has_structured_draft" not in chat
     assert controller.state()["chat"]["messages"]
 
     reset = controller.reset_chat()
@@ -230,6 +339,393 @@ def test_api_controller_contract_runs_without_fastapi(tmp_path):
     assert board["cancelled"] == []
 
 
+def test_api_project_initialize_is_idempotent_and_does_not_load_watch(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "physical-agent.yaml"
+
+    def fail_loader():
+        raise AssertionError("project initialization must not load WatchRuntime")
+
+    monkeypatch.setattr(
+        "physical_agent.api.watch_service._load_watch_runtime_class",
+        fail_loader,
+    )
+    controller = ApiController(config_path, embedded_watch_enabled=True)
+
+    first = controller.initialize_project()
+
+    assert first["ok"] is True
+    assert first["config_created"] is True
+    assert first["workspace_created"] is True
+    assert first["state"]["ready"] is True
+    assert first["state"]["executor"]["mode"] == "embedded"
+
+    config_text = config_path.read_text(encoding="utf-8")
+    store = open_state_store(config_path=config_path)
+    store.append_memory_note("preserve this", source="test")
+
+    second = controller.initialize_project()
+
+    assert second["config_created"] is False
+    assert second["workspace_created"] is False
+    assert second["message"] == "Project is already initialized."
+    assert config_path.read_text(encoding="utf-8") == config_text
+    assert store.read_memory()["notes"][0]["content"] == "preserve this"
+
+
+def test_api_project_initialize_serializes_concurrent_requests(tmp_path):
+    config_path = tmp_path / "physical-agent.yaml"
+    controller = ApiController(config_path, embedded_watch_enabled=True)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _index: controller.initialize_project(), range(8)))
+
+    assert sum(result["config_created"] for result in results) == 1
+    assert sum(result["workspace_created"] for result in results) == 1
+    assert all(result["state"]["ready"] is True for result in results)
+
+
+def test_api_project_initialize_fails_closed_for_invalid_existing_config(tmp_path):
+    config_path = tmp_path / "physical-agent.yaml"
+    invalid = b"workspace: [not, a, mapping]\n"
+    config_path.write_bytes(invalid)
+    controller = ApiController(config_path, embedded_watch_enabled=True)
+
+    with pytest.raises(api_server_module.ApiRequestError) as exc_info:
+        controller.initialize_project()
+
+    assert exc_info.value.status_code == 400
+    assert "nothing was overwritten" in str(exc_info.value)
+    assert config_path.read_bytes() == invalid
+    assert not (tmp_path / "workspace").exists()
+
+
+def test_api_project_initialize_endpoint_does_not_load_watch(tmp_path, monkeypatch):
+    TestClient = _client_or_skip()
+    config_path = tmp_path / "physical-agent.yaml"
+
+    def fail_loader():
+        raise AssertionError("initialize request handler must not load WatchRuntime")
+
+    monkeypatch.setattr(
+        "physical_agent.api.watch_service._load_watch_runtime_class",
+        fail_loader,
+    )
+    with TestClient(create_app(config_path, enable_watch=False)) as client:
+        response = client.post("/api/project/initialize")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["config_created"] is True
+    assert body["workspace_created"] is True
+    assert body["state"]["ready"] is True
+
+
+def test_api_executor_projection_distinguishes_external_watch(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    assert store.acquire_runtime_lease(
+        "watch-executor",
+        "external-watch-owner",
+        ttl_s=30,
+    )
+
+    controller = ApiController(config_path, embedded_watch_enabled=True)
+    executor = controller.health()["executor"]
+
+    assert executor["mode"] == "external"
+    assert executor["status"] == "active"
+    assert executor["embedded_enabled"] is True
+    assert executor["lease"]["active"] is True
+    assert executor["lease"]["owner"] == "external-watch-owner"
+
+
+def test_api_task_result_uses_shared_refusal_contract(tmp_path):
+    class RefusingPlanner:
+        last_refusal_reason = "The requested capability is intentionally unavailable."
+
+        def plan(self, *, task, capabilities, world):
+            return []
+
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+    result = ApiController(config_path, planner=RefusingPlanner()).submit_task(
+        SubmitTaskRequest(task="do something unsupported")
+    )
+
+    assert result["ok"] is False
+    assert result["proposal_status"] == "refused"
+    assert result["refusal_reason"] == RefusingPlanner.last_refusal_reason
+    assert result["proposal_id"].startswith("proposal_")
+    assert result["agent_output"]["decision"] == "refuse"
+    assert result["agent_output"]["tasks"] == []
+
+
+def test_api_task_reports_unavailable_before_initializing_planner(tmp_path):
+    class PlannerMustNotRun:
+        def plan(self, *, task, capabilities, world):
+            raise AssertionError("planner must not run without live capabilities")
+
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = open_state_store(config_path=config_path)
+    store.initialize()
+    result = ApiController(config_path, planner=PlannerMustNotRun()).submit_task(
+        SubmitTaskRequest(task="look around")
+    )
+
+    assert result["ok"] is False
+    assert result["proposal_status"] == "unavailable"
+    assert "actions" not in result
+    assert result["agent_output"]["actions"] == []
+
+
+def test_api_invalid_dependency_returns_client_error_without_partial_action(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    controller = ApiController(config_path)
+
+    with pytest.raises(api_server_module.ApiRequestError) as exc_info:
+        controller.propose_action(
+            ActionProposalRequest(
+                id="act_invalid_dep",
+                robot="arm_1",
+                capability="observe",
+                depends_on=["act_missing"],
+            )
+        )
+
+    assert exc_info.value.status_code == 422
+    assert store.read_actions()["pending"] == []
+
+
+def test_api_chat_draft_dependency_requires_prerequisite_first(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    controller = ApiController(config_path)
+    dependent = ActionProposalRequest(
+        id="draft_dependent",
+        robot="arm_1",
+        capability="observe",
+        depends_on=["draft_prerequisite"],
+        metadata={"source": "chat_draft"},
+    )
+
+    with pytest.raises(api_server_module.ApiRequestError) as exc_info:
+        controller.propose_action(dependent)
+
+    assert exc_info.value.status_code == 422
+    assert store.read_actions()["pending"] == []
+
+    first = controller.propose_action(
+        ActionProposalRequest(
+            id="draft_prerequisite",
+            robot="arm_1",
+            capability="observe",
+            metadata={"source": "chat_draft"},
+        )
+    )
+    second = controller.propose_action(dependent)
+
+    assert "action" not in first
+    assert "action" not in second
+    assert first["agent_output"]["actions"][0]["id"] == "draft_prerequisite"
+    assert second["agent_output"]["actions"][0]["depends_on"] == [
+        "draft_prerequisite"
+    ]
+    assert [action.id for action in store.read_actions()["pending"]] == [
+        "draft_prerequisite",
+        "draft_dependent",
+    ]
+
+
+def test_api_state_ignores_stale_gate_from_prior_claim_owner(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    controller = ApiController(config_path)
+    controller.propose_action(
+        ActionProposalRequest(
+            id="act_api_claim",
+            robot="arm_1",
+            capability="observe",
+            params={},
+            reason="Project current claim evidence.",
+            depends_on=[],
+        )
+    )
+    stale = store.claim_next_ready_action(claim_owner="watch-old")
+    assert stale is not None
+    store.append_feedback_event(
+        {
+            "event": "safety_gate",
+            "task_id": "task:safety_gate:act_api_claim",
+            "action_id": "act_api_claim",
+            "status": "passed",
+            "decision": "allow",
+            "actor": "watch",
+            "owner": "watch",
+            "executor_id": "watch-old",
+            "mandatory": True,
+            "policy_source": "SAFETY.md",
+        }
+    )
+    assert store.recover_stale_actions(0, claim_owner="watch-old") == 1
+    successor = store.claim_next_ready_action(claim_owner="watch-successor")
+    assert successor is not None
+
+    state = controller.state()
+    projected = state["plan"]["plan"]["agent_output"]
+    gate = next(task for task in projected["tasks"] if task["kind"] == "safety_gate")
+
+    assert gate["status"] == "checking"
+    assert "projection_error" not in gate["details"]
+    assert "claim_owner" not in state["actions"]["in_progress"][0]
+    assert "claim_owner" not in projected["actions"][0]
+
+
+@pytest.mark.parametrize("failure", ["missing", "malformed"])
+def test_api_health_fails_closed_for_unavailable_safety_policy(tmp_path, failure):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    if failure == "missing":
+        store.file("safety").unlink()
+    else:
+        store.file("safety").write_text("not a safety policy\n", encoding="utf-8")
+
+    health = ApiController(config_path).health()
+
+    assert health["ok"] is True
+    assert health["ready"] is False
+    assert health["safety_policy_valid"] is False
+    assert "SAFETY policy" in health["message"]
+
+
+def test_api_state_uses_final_claim_owner_read_to_fence_late_feedback(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    controller = ApiController(config_path)
+    controller.propose_action(
+        ActionProposalRequest(
+            id="act_api_owner_race",
+            robot="arm_1",
+            capability="observe",
+            params={},
+            reason="Fence feedback with the final owner read.",
+            depends_on=[],
+        )
+    )
+    stale = store.claim_next_ready_action(claim_owner="watch-old")
+    assert stale is not None
+    store_type = type(store)
+    real_read_claim_owners = store_type.read_action_claim_owners
+    owner_snapshots: list[dict[str, str]] = []
+
+    def transition_after_stale_owner_snapshot(self):
+        owners = real_read_claim_owners(self)
+        if self.path == store.path and not owner_snapshots:
+            owner_snapshots.append(owners)
+            assert self.recover_stale_actions(0, claim_owner="watch-old") == 1
+            successor = self.claim_next_ready_action(claim_owner="watch-new")
+            assert successor is not None
+            self.append_feedback_event(
+                {
+                    "event": "safety_gate",
+                    "task_id": "task:safety_gate:act_api_owner_race",
+                    "action_id": "act_api_owner_race",
+                    "status": "passed",
+                    "decision": "allow",
+                    "actor": "watch",
+                    "owner": "watch",
+                    "executor_id": "watch-old",
+                    "mandatory": True,
+                    "policy_source": "SAFETY.md",
+                }
+            )
+        return owners
+
+    monkeypatch.setattr(
+        store_type,
+        "read_action_claim_owners",
+        transition_after_stale_owner_snapshot,
+    )
+
+    state = controller.state()
+    projected = state["plan"]["plan"]["agent_output"]
+    gate = next(task for task in projected["tasks"] if task["kind"] == "safety_gate")
+
+    assert owner_snapshots == [{"act_api_owner_race": "watch-old"}]
+    assert real_read_claim_owners(store) == {"act_api_owner_race": "watch-new"}
+    assert gate["status"] == "checking"
+    assert "last_decision" not in gate["details"]
+
+
+def test_api_state_uses_final_owner_gate_after_late_prior_owner_reject(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    controller = ApiController(config_path)
+    controller.propose_action(
+        ActionProposalRequest(
+            id="act_api_terminal_owner",
+            robot="arm_1",
+            capability="observe",
+            params={},
+            reason="Keep terminal Gate evidence bound to the final owner.",
+            depends_on=[],
+        )
+    )
+    stale = store.claim_next_ready_action(claim_owner="watch-old")
+    assert stale is not None
+    assert store.recover_stale_actions(0, claim_owner="watch-old") == 1
+    successor = store.claim_next_ready_action(claim_owner="watch-successor")
+    assert successor is not None
+    store.append_feedback_event(
+        {
+            "event": "safety_gate",
+            "task_id": "task:safety_gate:act_api_terminal_owner",
+            "action_id": "act_api_terminal_owner",
+            "status": "passed",
+            "decision": "allow",
+            "actor": "watch",
+            "owner": "watch",
+            "executor_id": "watch-successor",
+            "mandatory": True,
+            "policy_source": "SAFETY.md",
+        }
+    )
+    assert store.mark_action_completed(
+        successor,
+        claim_owner="watch-successor",
+    ) is True
+    store.append_feedback_event(
+        {
+            "event": "safety_gate",
+            "task_id": "task:safety_gate:act_api_terminal_owner",
+            "action_id": "act_api_terminal_owner",
+            "status": "rejected",
+            "decision": "deny",
+            "actor": "watch",
+            "owner": "watch",
+            "executor_id": "watch-old",
+            "mandatory": True,
+            "policy_source": "SAFETY.md",
+        }
+    )
+
+    state = controller.state()
+    projected = state["plan"]["plan"]["agent_output"]
+    gate = next(task for task in projected["tasks"] if task["kind"] == "safety_gate")
+
+    assert projected["status"] == "completed"
+    assert gate["status"] == "passed"
+    assert gate["details"]["last_decision"]["executor_id"] == "watch-successor"
+    assert "claim_owner" not in state["actions"]["completed"][0]
+    assert "claim_owner" not in projected["actions"][0]
+
+
 def test_api_endpoints_cover_state_proposals_memory_ingest_search_and_audit(tmp_path):
     TestClient = _client_or_skip()
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
@@ -258,22 +754,29 @@ def test_api_endpoints_cover_state_proposals_memory_ingest_search_and_audit(tmp_
         },
     )
     assert proposed.status_code == 200
-    assert proposed.json()["action"]["id"] == "act_api_direct"
+    assert "action" not in proposed.json()
+    assert proposed.json()["agent_output"]["actions"][0]["id"] == "act_api_direct"
 
     submitted = client.post(
         "/api/tasks/submit",
         json={"task": "pick the red block and place it on the tray"},
     )
     assert submitted.status_code == 200
-    assert [item["capability"] for item in submitted.json()["actions"]] == ["pick", "place"]
-    assert [item["id"] for item in submitted.json()["actions"]] == ["act_001", "act_002"]
-    assert submitted.json()["actions"][1]["depends_on"] == ["act_001"]
+    assert "actions" not in submitted.json()
+    output_actions = submitted.json()["agent_output"]["actions"]
+    assert [item["capability"] for item in output_actions] == ["pick", "place"]
+    assert [item["id"] for item in output_actions] == ["act_001", "act_002"]
+    assert output_actions[1]["depends_on"] == ["act_001"]
 
     chat = client.post("/api/chat", json={"message": "remember that API memory is safe"})
     assert chat.status_code == 200
-    assert chat.json()["executed"] == 0
+    assert "executed" not in chat.json()
     assert "I will remember" in chat.json()["reply"]
     assert chat.json()["memory"][0]["content"] == "API memory is safe"
+    assert "actions" not in chat.json()
+    assert "draft_actions" not in chat.json()
+    assert "chat_contract" not in chat.json()
+    assert "has_structured_draft" not in chat.json()
 
     reset = client.post("/api/chat/reset")
     assert reset.status_code == 200
@@ -353,7 +856,8 @@ def test_api_approve_reject_actions_are_idempotent_and_state_protected(tmp_path)
         },
     )
     assert proposed.status_code == 200
-    action = proposed.json()["action"]
+    assert "action" not in proposed.json()
+    action = proposed.json()["agent_output"]["actions"][0]
     assert action["metadata"]["source"] == "chat_draft"
     assert action["metadata"]["approval"]["required"] is True
     assert action["metadata"]["approval"]["status"] == "pending"
@@ -387,6 +891,73 @@ def test_api_approve_reject_actions_are_idempotent_and_state_protected(tmp_path)
     assert missing.status_code == 404
 
 
+def test_api_approve_succeeds_when_log_mirror_write_fails_after_commit(
+    tmp_path,
+    monkeypatch,
+):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    store.write_capabilities(
+        {
+            "arm_1": {
+                "kind": "arm",
+                "driver": "mock_arm",
+                "status": "connected",
+                "capabilities": [
+                    {
+                        "name": "observe",
+                        "description": "Inspect with approval.",
+                        "params_schema": {"type": "object"},
+                        "requires_approval": True,
+                    }
+                ],
+            }
+        }
+    )
+    client = TestClient(create_app(config_path), raise_server_exceptions=False)
+    proposed = client.post(
+        "/api/actions/propose",
+        json={
+            "id": "act_api_mirror_failure",
+            "robot": "arm_1",
+            "capability": "observe",
+            "params": {},
+            "reason": "Approval must survive mirror failure.",
+            "depends_on": [],
+        },
+    )
+    assert proposed.status_code == 200
+
+    log_path = store.file("log").resolve()
+    real_open = Path.open
+
+    def fail_log_write(path: Path, *args, **kwargs):
+        mode = args[0] if args else kwargs.get("mode", "r")
+        resolved = path.resolve()
+        is_log_target = resolved == log_path
+        is_log_temp = (
+            resolved.parent == log_path.parent
+            and path.name.startswith(f".{log_path.name}.")
+        )
+        if "w" in mode and (is_log_target or is_log_temp):
+            raise OSError("simulated LOG mirror write failure")
+        return real_open(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", fail_log_write)
+        approved = client.post(
+            "/api/actions/act_api_mirror_failure/approve",
+            json={"reason": "Intentional.", "actor": "gui"},
+        )
+
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["changed"] is True
+    assert approved.json()["action"]["metadata"]["approval"]["status"] == "approved"
+    pending = {action.id: action for action in store.read_actions()["pending"]}
+    assert pending["act_api_mirror_failure"].metadata["approval"]["status"] == "approved"
+
+
 def test_api_reject_pending_action_moves_to_cancelled_with_reason(tmp_path):
     TestClient = _client_or_skip()
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
@@ -410,6 +981,8 @@ def test_api_reject_pending_action_moves_to_cancelled_with_reason(tmp_path):
     )
 
     assert rejected.status_code == 200
+    assert rejected.json()["action"]["id"] == "act_reject_me"
+    assert rejected.json()["action"]["metadata"]["approval"]["status"] == "rejected"
     cancelled = rejected.json()["state"]["actions"]["cancelled"][0]
     assert cancelled["id"] == "act_reject_me"
     assert cancelled["metadata"]["approval"]["status"] == "rejected"
@@ -580,10 +1153,121 @@ def test_api_chat_uses_chat_runtime_llm_when_settings_exist(tmp_path, monkeypatc
     body = response.json()
     assert body["mode"] == "llm"
     assert body["reply"] == "LLM bridge response."
-    assert body["executed"] == 0
+    assert "executed" not in body
     messages = body["state"]["chat"]["messages"]
     assert [item["role"] for item in messages] == ["user", "assistant"]
     assert messages[0]["content"] == "hello from API"
+
+
+def test_api_chat_maps_structured_output_exhaustion_to_sanitized_502(
+    tmp_path, monkeypatch
+):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+
+    class FakeRuntime:
+        def respond(self, message):
+            raise StructuredOutputError(
+                "RAW_PROVIDER_SECRET is not allowed",
+                code="retries_exhausted",
+                retryable=False,
+                attempts=2,
+                issues=[
+                    {
+                        "path": "/intent",
+                        "code": "schema_enum",
+                        "message": "RAW_PROVIDER_SECRET",
+                    }
+                ],
+            )
+
+    monkeypatch.setattr(
+        api_server_module,
+        "_new_chat_runtime",
+        lambda config, **kwargs: FakeRuntime(),
+    )
+    client = TestClient(create_app(config_path))
+
+    response = client.post(
+        "/api/chat",
+        json={"message": "hello", "planner": "llm"},
+    )
+
+    assert response.status_code == 502
+    body = response.json()
+    assert body["details"] == {
+        "code": "llm_output_invalid",
+        "reason": "retries_exhausted",
+        "attempts": 2,
+        "issues": [{"path": "/intent", "code": "schema_enum"}],
+    }
+    assert "RAW_PROVIDER_SECRET" not in response.text
+    assert store.read_actions()["pending"] == []
+
+
+def test_api_task_structured_output_failure_creates_no_pending_action(
+    tmp_path, monkeypatch
+):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+
+    def fail_submit_task(self, task, **kwargs):
+        raise StructuredOutputError(
+            "invalid planner output",
+            code="schema_mismatch",
+            retryable=True,
+            issues=[
+                {
+                    "path": "/actions/0/robot",
+                    "code": "schema_minLength",
+                    "message": "invalid",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(
+        api_server_module.ProposalService,
+        "submit_task",
+        fail_submit_task,
+    )
+    client = TestClient(create_app(config_path))
+
+    response = client.post("/api/tasks/submit", json={"task": "look around"})
+
+    assert response.status_code == 502
+    assert response.json()["details"]["code"] == "llm_output_invalid"
+    assert response.json()["details"]["reason"] == "schema_mismatch"
+    assert store.read_actions()["pending"] == []
+
+
+def test_api_schema_programming_error_is_500_not_output_502(tmp_path, monkeypatch):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+
+    class FakeRuntime:
+        def respond(self, message):
+            raise StructuredOutputError(
+                "local schema is invalid",
+                code="schema_invalid",
+                retryable=False,
+                issues=[{"path": "/", "code": "schema_invalid", "message": "bad"}],
+            )
+
+    monkeypatch.setattr(
+        api_server_module,
+        "_new_chat_runtime",
+        lambda config, **kwargs: FakeRuntime(),
+    )
+    client = TestClient(create_app(config_path))
+
+    response = client.post("/api/chat", json={"message": "hello", "planner": "llm"})
+
+    assert response.status_code == 500
+    assert response.json()["details"]["code"] == "llm_schema_invalid"
+    assert response.json()["details"]["reason"] == "schema_invalid"
 
 
 def test_api_chat_falls_back_to_rule_based_without_llm_settings(tmp_path, monkeypatch):
@@ -608,8 +1292,8 @@ def test_api_chat_constructs_api_safe_chat_runtime(tmp_path, monkeypatch):
     calls = {}
 
     class FakeRuntime:
-        def respond(self, message, *, auto_step=False):
-            calls["respond"] = {"message": message, "auto_step": auto_step}
+        def respond(self, message):
+            calls["respond"] = {"message": message}
             return {
                 "ok": True,
                 "mode": "rule_based",
@@ -626,7 +1310,7 @@ def test_api_chat_constructs_api_safe_chat_runtime(tmp_path, monkeypatch):
     monkeypatch.setattr(api_server_module, "_new_chat_runtime", fake_new_runtime)
 
     client = TestClient(create_app(config_path))
-    response = client.post("/api/chat", json={"message": "hello", "auto_step": True})
+    response = client.post("/api/chat", json={"message": "hello"})
 
     assert response.status_code == 200
     assert calls["runtime"] == {
@@ -635,31 +1319,41 @@ def test_api_chat_constructs_api_safe_chat_runtime(tmp_path, monkeypatch):
         "enable_code_skills": False,
         "enable_hardware_integration": False,
     }
-    assert calls["respond"] == {"message": "hello", "auto_step": False}
+    assert calls["respond"] == {"message": "hello"}
 
 
-def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
+def test_api_chat_stream_sends_start_thought_delta_done_events(tmp_path, monkeypatch):
     TestClient = _client_or_skip()
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     _prepare_store(config_path)
     calls = {}
 
     class FakeRuntime:
-        def respond_stream(self, message, *, auto_step=False, **kwargs):
+        def respond_stream(self, message, **kwargs):
             calls["respond"] = {
                 "message": message,
-                "auto_step": auto_step,
                 "has_cancel_check": "cancel_check" in kwargs,
+                "has_transport_observer": "transport_observer" in kwargs,
             }
+            yield {"type": "thought", "delta": "Checked the constraints."}
             yield {"type": "delta", "delta": "hel"}
             yield {"type": "delta", "delta": "lo"}
             yield {
                 "type": "done",
                 "mode": "llm",
                 "reply": "hello",
-                "actions": [],
+                "agent_output": {
+                    "schema": "physical-agent/agent-output/v1",
+                    "status": "draft",
+                    "decision": "propose",
+                    "lifecycle": "draft",
+                    "message": "hello",
+                    "tasks": [],
+                    "actions": [{"id": "canonical_001"}],
+                },
                 "memory": [],
-                "plan": None,
+                "plan": {"status": "answered"},
+                # Deliberate legacy internal input: the public SSE payload must drop it.
                 "executed": 0,
             }
 
@@ -677,18 +1371,34 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
             "message": "hello",
             "request_id": "req-test",
             "stream_id": "stream-test",
-            "auto_step": True,
         },
     ) as response:
         assert response.status_code == 200
         events = _sse_events("".join(response.iter_text()))
 
-    assert [event["type"] for event in events] == ["start", "delta", "delta", "done"]
+    assert [event["type"] for event in events] == [
+        "start",
+        "thought",
+        "delta",
+        "delta",
+        "done",
+    ]
     assert events[0]["payload"]["stream_id"] == "stream-test"
     assert events[0]["payload"]["request_id"] == "req-test"
-    assert events[1]["payload"]["delta"] == "hel"
-    assert events[3]["payload"]["reply"] == "hello"
-    assert events[3]["payload"]["state"]["chat"]["messages"] == []
+    assert events[1]["payload"]["delta"] == "Checked the constraints."
+    assert "type" not in events[1]["payload"]
+    assert events[2]["payload"]["delta"] == "hel"
+    assert events[4]["payload"]["reply"] == "hello"
+    assert events[4]["payload"]["agent_output"]["schema"] == (
+        "physical-agent/agent-output/v1"
+    )
+    assert events[4]["payload"]["plan"] == {"status": "answered"}
+    assert "executed" not in events[4]["payload"]
+    assert "actions" not in events[4]["payload"]
+    assert "draft_actions" not in events[4]["payload"]
+    assert "chat_contract" not in events[4]["payload"]
+    assert "has_structured_draft" not in events[4]["payload"]
+    assert events[4]["payload"]["state"]["chat"]["messages"] == []
     assert calls["runtime"] == {
         "config": config_path.resolve(),
         "planner_name": "auto",
@@ -697,8 +1407,8 @@ def test_api_chat_stream_sends_start_delta_done_events(tmp_path, monkeypatch):
     }
     assert calls["respond"] == {
         "message": "hello",
-        "auto_step": False,
         "has_cancel_check": True,
+        "has_transport_observer": True,
     }
 
 
@@ -708,7 +1418,7 @@ def test_api_chat_stream_sends_sanitized_error_event(tmp_path, monkeypatch):
     _prepare_store(config_path)
 
     class FakeRuntime:
-        def respond_stream(self, message, *, auto_step=False, **kwargs):
+        def respond_stream(self, message, **kwargs):
             raise OpenAICompatibleError("Bearer sk-local-secret-7890 failed")
             yield  # pragma: no cover
 
@@ -732,6 +1442,49 @@ def test_api_chat_stream_sends_sanitized_error_event(tmp_path, monkeypatch):
     assert "sk-local-secret-7890" not in events[-1]["payload"]["message"]
 
 
+def test_api_chat_stream_sanitizes_runtime_error_event_and_preserves_code(
+    tmp_path, monkeypatch
+):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _prepare_store(config_path)
+
+    class FakeRuntime:
+        def respond_stream(self, message, **kwargs):
+            yield {
+                "type": "error",
+                "message": "Bearer sk-runtime-secret failed",
+                "code": "llm_output_invalid",
+                "reason": "schema_mismatch",
+                "attempts": 1,
+                "mode": "llm",
+                "reply": "",
+            }
+
+    monkeypatch.setattr(
+        api_server_module,
+        "_new_chat_runtime",
+        lambda config, **kwargs: FakeRuntime(),
+    )
+
+    client = TestClient(create_app(config_path))
+    with client.stream(
+        "POST",
+        "/api/chat/stream",
+        json={"message": "hello", "stream_id": "stream-runtime-error"},
+    ) as response:
+        assert response.status_code == 200
+        events = _sse_events("".join(response.iter_text()))
+
+    assert [event["type"] for event in events] == ["start", "error"]
+    payload = events[-1]["payload"]
+    assert payload["message"] == "Bearer <redacted> failed"
+    assert payload["code"] == "llm_output_invalid"
+    assert payload["reason"] == "schema_mismatch"
+    assert payload["attempts"] == 1
+    assert "sk-runtime-secret" not in json.dumps(payload)
+
+
 def test_api_chat_stream_abort_registry_stops_before_consuming_runtime(tmp_path, monkeypatch):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     _prepare_store(config_path)
@@ -739,10 +1492,15 @@ def test_api_chat_stream_abort_registry_stops_before_consuming_runtime(tmp_path,
     stream_state = controller.register_chat_stream(
         ChatRequest(message="hello", stream_id="stream-abort", request_id="req-abort")
     )
+    transport = {"closed": 0}
+    stream_state.observe_transport(
+        lambda: transport.__setitem__("closed", transport["closed"] + 1)
+    )
     assert controller.abort_chat_stream("stream-abort", reason="test") is True
+    assert transport["closed"] == 1
 
     class FakeRuntime:
-        def respond_stream(self, message, *, auto_step=False, **kwargs):
+        def respond_stream(self, message, **kwargs):
             raise AssertionError("aborted stream must not consume runtime chunks")
             yield  # pragma: no cover
 
@@ -928,12 +1686,12 @@ def test_api_requests_do_not_instantiate_watch_or_execute_driver(tmp_path, monke
     ).status_code == 200
     assert client.post(
         "/api/chat",
-        json={"message": "look around", "auto_step": True},
+        json={"message": "look around"},
     ).status_code == 200
     with client.stream(
         "POST",
         "/api/chat/stream",
-        json={"message": "look around", "auto_step": True},
+        json={"message": "look around"},
     ) as response:
         assert response.status_code == 200
         stream_event_types = [
@@ -971,6 +1729,13 @@ def test_api_workspace_reset_clears_state_without_watch(tmp_path, monkeypatch):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     store = _prepare_store(config_path)
     store.append_chat_message("user", "hello before reset")
+    guidance = "Keep both test wheels raised and keep a physical power cutoff available."
+    store.file("safety").write_text(
+        store.file("safety").read_text(encoding="utf-8").rstrip()
+        + f"\n\n## Agent Guidance\n\n{guidance}\n",
+        encoding="utf-8",
+    )
+    safety_before = store.read_safety_snapshot()
     client = TestClient(create_app(config_path))
     client.post(
         "/api/actions/propose",
@@ -995,13 +1760,38 @@ def test_api_workspace_reset_clears_state_without_watch(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["ok"] is True
+    assert "hard Rules" in response.json()["message"]
+    assert "Agent Guidance is preserved" in response.json()["message"]
     fresh = open_state_store(config_path=config_path)
     assert fresh.exists()
     assert fresh.read_chat()["messages"] == []
     assert fresh.read_actions()["pending"] == []
+    safety_after = fresh.read_safety_snapshot()
+    assert safety_after.hard.revision == safety_before.hard.revision + 1
+    assert safety_after.agent_guidance == guidance
+    assert safety_after.hard.rules["allow_autonomous_execution"] is True
     # Config file must survive a workspace reset.
     assert config_path.exists()
     assert "arm_1" in config_path.read_text(encoding="utf-8")
+
+
+def test_api_workspace_reset_refuses_live_watch_lease(tmp_path):
+    TestClient = _client_or_skip()
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    store = _prepare_store(config_path)
+    assert store.acquire_runtime_lease(
+        "watch-executor",
+        "active-watch",
+        ttl_s=30,
+    ) is True
+    client = TestClient(create_app(config_path))
+
+    response = client.post("/api/workspace/reset", json={"confirm": True})
+
+    assert response.status_code == 409
+    assert response.json()["ok"] is False
+    assert "Stop Watch first" in response.json()["message"]
+    assert store.release_runtime_lease("watch-executor", "active-watch") is True
 
 
 def test_api_integrate_generates_scaffold(tmp_path):
@@ -1069,6 +1859,7 @@ def test_api_register_robot_appends_yaml_and_keeps_existing(tmp_path):
         json={
             "robot_id": "arm_2",
             "driver": "mock_rover",
+            "execution_mode": "simulation",
             "config": {"mode": "mock"},
         },
     )
@@ -1078,7 +1869,11 @@ def test_api_register_robot_appends_yaml_and_keeps_existing(tmp_path):
     assert body["ok"] is True
     assert body["requires_watch_restart"] is True
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert data["robots"]["arm_2"] == {"driver": "mock_rover", "config": {"mode": "mock"}}
+    assert data["robots"]["arm_2"] == {
+        "driver": "mock_rover",
+        "execution_mode": "simulation",
+        "config": {"mode": "mock"},
+    }
     # Existing robot must survive.
     assert "arm_1" in data["robots"]
     # Registered config must still load.

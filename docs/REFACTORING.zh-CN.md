@@ -1,7 +1,7 @@
 # 重构过程
 
 > 本文浓缩自原 33 份 session-handoff 与 22 份 brief（已删除，git 历史可查）。姊妹文档：`SPEC.zh-CN.md`（目标与待办矩阵）。
-> 范围：基线 `8fa197a` → 当前。最后更新：2026-07-08。
+> 范围：基线 `8fa197a` → 当前。最后更新：2026-08-25。
 
 ## 0. 基线与纪律
 
@@ -21,9 +21,13 @@
 | D1-D2 | Transport 抽象 + WS → Serial/Loopback | `55addad` `7b1706a` |
 | D3-D4 | 心跳/halt 挂入循环 → watchdog 策略 → 实机回归与清单 | `14c9dcb` `bc12329` `9cb1978` `25c41e1` |
 | A1 | 官方 SDK → 设置/chat 桥 → 流式/abort → B5 收口 → 深思考 | `9c25e90` `affbda7` `605015c` `b5b6071` `3a807e7` |
+| A1.1b | Pydantic LLM contract 单真源 + 一次非流式 validation repair + typed API/trace | 专项 `143 passed, 1 warning`；Python full `555 passed, 1 warning`；独立终审无 P0/P1；commit/push 待完成 |
+| A1.3b | typed chat chunk + provider reasoning summary 的只读 UI 可观测性 | 本轮提交；Python `469 passed`、TUI `138 passed`、Chromium `28 passed`、clean-wheel smoke 通过 |
 | E0 | GUI 功能对齐（重置/硬件面板/配置注册） | E0 提交 + `29fb512` |
 | W1 | 驱动调用超时保护 | `2f00615` |
 | F0 | LLM planner 启用实验 + 本地 JSONL trace + 坏任务报告 | `d39e8f6` `caa4fa0` |
+| F0.1 / 005 | MOCE 多轮 ChatRuntime eval：10 场景/20 轮诊断 + deterministic scorer hardening | 本轮提交；nonstream 离线复裁=`15 memory + 1 clarification + 2 linear dependency`；stream smoke `invalid_json` fail-closed，release baseline 未建立；system prompt 未改 |
+| F0.2 | proposal clarification + memory guidance 微调 | 本轮提交；system/schema annotation 镜像，JSON shape/validation 不变；离线 100 passed、扩展调用链 125 passed、Python full 671 passed；未调用外部 LLM |
 | B6 | 退役 MarkdownStateStore 后端 | `9072b4e` |
 | F1 | 提案卡片 + Add to Actions + action 级审批流 | `0f49a3c` |
 | F2 | 结构化信息可读化：feedback/world/capabilities + lazy JSON tree | `58a75b0` |
@@ -32,9 +36,44 @@
 | F2.5-raw-debug-antd | RawDebug 改为 AntD 原生 Collapse/Tree，移除 react18-json-view | 本轮提交 |
 | Audit-doc-html | current architecture audit 静态 HTML 阅读页 | 本轮提交 |
 | F3 | context_builder 解耦：reply/proposal/planner/tool_loop 上下文统一 | `9cbb540` |
+| F3.1a | context_builder Unicode wire 与预算统一：中文不再因 `ensure_ascii` 转义提前摘要 | 本轮提交；context `16 passed`、调用链矩阵 `57 passed`、Python full `562 passed, 1 warning` |
+| F3.1b / 003 | SAFETY strict file truth、hard/guidance typed 隔离、逐动作新鲜度与 car Level 0 模板 | `85cbad1`、`9a25d0c` + 本轮 closure；专项 `443 passed, 1 warning`、full `638 passed, 1 warning`；独立 review/提交证据见 003 tasks |
 | F4 | 期望-比对-回灌：expected 确定性比对、feedback 回灌、前端可见性 | `b5be3b7` |
+| F5.0 | `car_agent` 自包含 TCP/NDJSON driver：默认禁运动、bounded `drive_for`、Watch/SafetyGate 实机链路地基 | 本轮提交；car 专项 `52 passed`、受影响矩阵 `131 passed`、Python full `521 passed`；独立终审 Critical/Important=0 |
+| F5.0-真机首连 | 真机首连验收：`scripts/car_first_contact.py` 探针（复用 driver 本体）+ 手动提案→审批→SafetyGate→watch `observe` 全链路（192.168.66.12） | 本轮提交；探针 10/10、SafetyGate 10 checks passed、`inspect` 能力=observe/stop、full pytest 见 §2 |
 | W2 | 观察并发化 + observe 频率与 tick 解耦 | `4e0f732` |
 | W3 | transport 断线重连：可选 policy、fail-fast、driver reinit hook | `1d9a812`, `7762c0f` |
+| VNext-0 | ProposalService + typed metadata + 执行边界 + execution_mode 地基 | 本轮提交 |
+| VNext-1 | AgentOutput task DAG + trusted PlanCompiler | 本轮完成 |
+| VNext-2 | materialized AgentOutput + structured feedback + 调度/上下文硬化 | 本轮完成 |
+| VNext-2b | Proposal actions batch 单事务 all-or-nothing | 本轮完成 |
+| W6.1 | workspace watch runtime lease + unique claim-owner CAS/reset guard | 本轮完成 |
+| R0 | 架构减法规格 + GUI/Markdown/streaming 三份退役审计 | `e8750ca` |
+| R1.5 | 正式 Dashboard parity 补缺 + packaged wheel + thin `gui` strangler cutover | `9f3880a`, `2d5e909` |
+| R2 | 删除 legacy controller/server/static/tests/package-data 与 safety allowlist 例外 | `5764bac` |
+| R2.1 | canonical projection 收口 + Playwright/wheel 阻塞门禁 | `30e97dd`, `9adaf6c`, `b20ad20` |
+| R3-A | 锁定 SAFETY/LOG sidecar、doctor、audit 与 mirror failure 行为 | `e7f878b` |
+| R3-B | state sidecar adapter 接管 SQLite runtime/doctor/audit | `a64be59` |
+| R3-C | legacy fail-closed 防护 + 真实 `9072b4e` 历史救援 smoke | `d1713a0` |
+| R3-D | 删除当前一次性 Markdown migrator 与专用兼容实现 | `6309a1b` |
+| R3-E | 删除 full Workspace helper 与退役 Markdown protocol | `4a8ec86` |
+| R3-F | 当前文档、示例与发布包收口 | `9698b3e` |
+| R4 | 删除 chat 自动推进兼容面与 CLI 内嵌 watch | `da14064` |
+| R5 | 单调用 structured Chat Turn + fence 双轨消费者 | `d1ca53c3`；fork Push run `29321294713`、PR run `29321297674` 均成功 |
+| R6 | application/read-model 去重 + 正式 consumer 收敛到 AgentOutput | `0bb7807`；fork Push run `29312317707`、PR run `29312319687` 均成功 |
+| R5-browser-gate | structured/fence 双轨真实 Chromium、增量去重与 Add→pending 独立验证 | 本地 27/27；`d1ca53c3` 的 fork Push run `29321294713`、PR run `29321297674` 均成功 |
+| R7 | 退役 action-draft wire/fence 与 proposal convenience payload | `9ba44af`；fork Push run `29399978672`、PR run `29399982326` 均成功 |
+| R8 | 当前架构、文档、示例、OpenAPI、发布包与全量门禁收口 | implementation closure `c4da4f9`，fork Push run `29476327424`、PR run `29476329954`；evidence closure `33b062b`，fork Push run `29477199756`、PR run `29477202468`；均成功 |
+| R8.1 | review hardening：LOG mirror、Gate owner correlation、nested OpenAPI 与证据纠偏 | `6d53db3`、`4c9c6a4` + `c38e3ec`、`89f84c8`，review follow-up `241fe8d`、`fc282cf`、`b2c93bb`；implementation/local closure `8438cb7`，fork Push run `29553985591`、PR run `29553987358` 均 completed success，headSha 均为 `8438cb7bf5f356021cb602908552a069e8227bc4` |
+| T4 | MOCE TUI 品牌、单一 Static transcript、轻量 finalized text 与宽度/物理 stdout 验收 | `7a968d9`、`69615dd`、`ed7cc4a`、`4fb0f57`、`e4ea0d4`、`c9981f0`、`83d9efe`、`88f7b5d`；review follow-up `a3d1d22`、`d25c80e`、`7e391b3`、`e9f886f`、`1d758f5`；test/CI follow-up `a8deeac`、`647ce53`；docs closure `8e30a42`；`038c1c6` runs `29629559330`/`29629560483` 与 `7d380f9` runs `29630023334`/`29630024721` 均仅 Ink TUI 失败，已执行的其余 jobs 成功；Push 条件型 full/Playwright skipped；implementation/docs closure `9c50067` 的 Push run `29630361521`、PR run `29630363135` 均 completed success，headSha 均为 `9c50067964e5ea184803e83526121388078862f9` |
+| T4.1 | 对话式 transcript、canonical terminal action activity 与终端宽度修复 | width/shared row `f81b134`；action activity `216a0b9`；owned action snapshot `8139d24`；clone-failure isolation `c2f8c7c`；App integration/read-only notice `e0215cb`。controller fresh gate：TUI typecheck/build exit 0、full `108/108`、activity/render/scenario `70/70`；Python safety `27/27`、full `463 passed`（仅 1 条已知 Starlette `TestClient` deprecation warning）；diff check 与禁止 import 扫描 clean。逐任务终审和整体 broad review 均 Critical=0、Important=0、Minor=0，broad verdict Ready to merge=Yes。implementation/docs exact head `357a4898fc19704179e15c1614f49e49f794263f`：Push run `29695566978`、draft-PR run `29695568726` 均 attempt 1 completed success。 |
+| T4.2 | finalized assistant 块级 Markdown、嵌套列表/code 悬挂缩进与 block-local fallback | parser `3b17ec6`；renderer `7c0a239`；physical width/App `25f20c4`；review repairs `499487c`、`8d578be`、`fe0b477`；final-review shortcut/image-reference repair `f1ed6c7`。`f1ed6c7` exact-commit：TUI parser+renderer `60/60`、full `134/134`、typecheck/build exit 0；Python full `463 passed, 1 warning`；controller fresh docs+safety `24/24`、safety `27/27`；boundary/package/diff clean。最终 re-review Critical=0、Important=0、Minor=1（接受非阻塞 Terminal smoke omission）。implementation/docs exact head `6631f35b22eba6c6e57394c07fec3a26254aa686`：Push `29728361574`、draft-PR `29728365131` 均 attempt 1 completed success。旧 `d72e187`/`a89be06` CI 当时有效但已被本修复 supersede。 |
+| C6 | Dashboard 信息架构重排：8 项导航、ContextTabs 唯一归属、按页 Proposal 与审批感知 ActionBoard | 本轮提交；frontend build 通过；真实 Chromium `33/33`；Python `469 passed`；Safety `32 passed`；TUI `138/138` + typecheck/build；clean-wheel 通过；最终复审 Critical/Important/Minor=0 |
+| C6-layout | 对话页撑满可用高度，收起态提案栏居中纵排 | 本轮提交；frontend build 通过；隔离后端的真实 Chromium `34/34`；Python `469 passed`；实机 1600×900 截图复核通过 |
+| C6-layout-CI | 竖排语义改用 computed style 跨平台断言；CI actions/Node 升至 v7/24 | 本轮提交；Browser 1600×900 复核、Chromium `37/37`、frontend build、TUI `138/138` + typecheck/build、Python `639 passed`；远端 CI 待 push 后确认 |
+| C6.1 | Dashboard 纯前端 `?page=` URL 状态、直达/刷新/history 同步 | frontend build 通过（3310 modules）；隔离后端真实 Chromium `37/37`；Python `469 passed`；Safety `32 passed`；TUI `138/138` + typecheck/build；clean-wheel 与 in-app Browser 复核通过；无 FastAPI/依赖改动 |
+| C5 | Dashboard 可读性与 i18n 收口：9 组件接 `useMessages`、Running 中英混排、Raw 折叠、焦点样式 | 本轮由 Claude 接手实现、用户本机跑门禁；`tsc -b` 与 `vite build`（3310 modules）通过；真实 Chromium `37 passed`；未改后端 |
+| C7 | 流式聊天期整树重渲染收口：delta rAF 攒批 + `MessageContent`/StatusBar/SidebarNav/ProposalPanel memo + handler `useCallback` + block 级 `MarkdownBlock` memo；rAF 与分块均提取为可测模块并补契约测试 | `npm run test:unit` 15/15（batcher 5 + blocks 10）；独立复审后补旧帧代际隔离与保守 document-wide reference fallback；`tsc -b && vite build` 通过（3312 modules）；真实 Chromium 37/37；Python 469/469；未改后端 |
 | T/C4/E3 | 独立 Ink TUI + 前端 i18n/暗色/Tour + e2e/CI 收口 | 本轮提交 |
 | CI-lite | 宽松 CI + CI 解释文档 | 本轮提交 |
 | TUI-review-fix | 修复 Ink TUI stream 清理、SSE EOF 降级、真实 watch 状态 | 本轮提交 |
@@ -83,9 +122,33 @@
 
 **D3** 把 heartbeat/halt 从 no-op 钩子接入 WatchRuntime 常驻循环（每 tick 心跳、关停 halt，`heartbeat_enabled`/`halt_on_shutdown` 开关）；**D3.1** 软件看门狗策略：连续心跳失败计数、达阈值 best-effort halt、恢复时写审计事件；**实机回归** 用 moce 臂真机跑通接入-执行-回报全链路；**D4** 收口实机准备清单文档。
 
+### F5.0：car_agent 自包含实机 driver
+
+2026-08-04 的真实小车接入需求单项重启 F5.0，不解冻 F5.1-F5.3/F6。实现选择根目录 `car_agent/` local-driver bundle，复用既有 manifest loader、PhysicalDriver、WatchRuntime 与 SafetyGate，不改 builtin registry、core transport、请求/Chat/API 或 SAFETY 文件真源。bundle 自带异步 TCP/UTF-8 NDJSON 客户端，严格核验 `moce-physical-agent/v1`、`moce-car`、`car_agent` 与健康/必要能力；请求紧凑单行且小于 2048 bytes，按 `id` 跳过额外响应，只依赖 `ok`/`error.code`，不自动重连或重放未知结果动作。
+
+默认配置不含本地运动包络，因此连接前后都只发布 `observe/stop`；只有同时配置 `max_abs_speed` 与 `max_duration_ms` 且远端声明 `drive` 才发布需审批的 `drive_for`。一个 Gate-approved execute 内按绝对 deadline 与 800ms 固件 watchdog 续发：下一帧从前一发送时刻调度，慢 ACK 不叠加 refresh 延迟；是否需要尾帧也从 `sent_at + 700ms` 的保守覆盖判断，测试同时锁定 drive→drive 与最后 drive→stop 均小于 800ms。迟到 ACK 不报告 completed；clamp、有效 speed 不符、电机不可用、远端错误、超时和取消均尝试最终 stop。任何未确认 stop（包括握手基线）都会断开 transport、清空远端运动能力，防止同一批次后续 action 继续续租。`halt()` 明确停车，`disconnect()` 明确只释放旧 owner 自身连接。
+
+测试使用真实 asyncio loopback TCP server 覆盖身份/健康/能力拒绝、NDJSON 分帧与畸形 envelope、远端错误码、无包络 fail closed、慢响应 cadence、绝对 deadline、取消、停车失败失效、Watch hardware 审批和 Gate-before-execute；样例配置与双语 README 固定“默认不能动”、单 watch、可信 2.4GHz、LLM 本地设置与车轮架空流程。最终证据：car driver/example `52 passed`；loader/manifest/safety/watch/timeout 受影响矩阵 `131 passed`；Python full `521 passed, 2 warnings`（既有 Starlette TestClient deprecation 与 pytest cache 权限提示）；两轮独立终审最终 Critical=0、Important=0。尚未提供真实小车 IP 与实测安全包络，因此本轮只完成软件/协议 fake 联调，**不声称真实连接或运动已验收**。
+
+**2026-08-05 真机首连验收**：用户提供实车（DHCP 192.168.66.12、固件 `0.1.0-level0`）与最新版设备接入说明书；对照其附录核验清单逐条复查 driver 全部符合。新增 `scripts/car_first_contact.py` 首连探针——刻意复用经 loader 加载的 `CarAgentDriver` 本体而非另写协议实现，避免探针与 driver 行为分叉（rationale：探针通过=watch 同代码路径通过；只调 connect/health/observe/halt，不调 execute，不触红线）。真机结果：探针 10/10，前轮"仅真机可验证"的 4 项中身份三元组、`service_running`、stop 确认 3 项实测吻合（drive 响应结构留运动轮）；L1 全链路手动提案（`POST /api/actions/propose`，注意 Action `id` 必填）→hardware 审批→SafetyGate 10 checks passed（policy_source=SAFETY.md，双 digest 入审计）→watch 执行 `observe`→feedback completed，TOF 实测 86-99mm。**设备文档偏差记录**：固件 observe 实际返回 `enc_left/enc_right`（说明书称 Level 0 无编码器数据且右编码器与 UART 冲突），driver 仅透传 raw、不采用，不得据此做闭环。运动验收仍待轮空标定包络后另轮进行。收工全量 pytest 唯一失败是样例护栏 `test_car_agent_sample_is_hardware_mode_with_motion_disabled`（提交样例必须保持 `REPLACE_WITH_CAR_IP` 占位）——决策：真实地址分离到 gitignore 的 `car_agent/physical-agent.local.yaml`（`*.local.yaml` 模式入 .gitignore），样例恢复占位符而非放宽护栏；car 专项复跑 `52 passed`，全量其余 `520 passed`。
+
 ### A1 系列：官方 SDK 与聊天体验（重构后期补做）
 
 A1 最初被跳过（工具循环建在自研 urllib 客户端上"够用"），后按计划补齐五轮：**A1.0/A1.1** 官方 openai SDK 替换（`[llm]` extra；base_url 按 API root 原样传递修掉拼接坑；strict json_schema 失败自动降级 JSON mode + 本地 jsonschema 校验；错误归一 + key 脱敏）；**A1.6a** `workspace/.llm.json` 本地设置（CLI/GUI/watch 共用一份，gitignore）+ Settings 表单 + 测试连接 + API chat 改走 ChatRuntime（API-safe flags 关闭 code skills/硬件接入）；**A1.2/A1.4** 流式：SDK stream 封装 `stream_chat_text()`、`/api/chat/stream` SSE + `/api/chat/abort/{id}`、前端乐观气泡 + Stop 按钮、会话重置（A1.7a）；**B5** 收口后端口径（state-check 加 backend 语义字段）；**A1.3a** 默认开 reasoning 请求参数（不展示 raw CoT）。
+
+### A1.3b：typed chat stream 与 provider reasoning summary
+
+本轮把 `stream_chat_text()`/structured chat 内部流从裸字符串收敛为 `StreamChunk(kind="message"|"thought", text=...)`。Responses API 的 `response.output_text.delta` 继续产生 message，新增的 `response.reasoning_summary_text.delta` 产生 thought；Chat Completions 仍只产生 message，正文拼接保持原样。非流式 provider output 另设 `_extract_responses_reasoning()` 读取 reasoning item 的 `summary[*].text`，不把不同 wire shape 塞进既有正文 extractor。typed chunk 的生产与消费只触及 LLM adapter、ChatRuntime 和既有 chat SSE，没有扩到 tool loop、MCP 或新的入口。
+
+ChatRuntime 只把 completed turn 的摘要写入 assistant chat metadata；中途 abort 会关闭同一个 provider iterator，并在 persistence 前丢弃 partial summary。SSE 新增 `thought`，`start/delta/done/aborted/error` 与 `done.agent_output`/ChatPlan 保持不变。React 用默认关闭的 `<details>` 展示完整摘要，Ink TUI 用带折叠标记的单行摘要行展示，两端都标注“模型推理摘要，仅供参考，不是决策依据”。context builder 在回放 chat history 前移除 `reasoning_summary`，负用例同时锁定摘要不进入 PlanCompiler 输入、AgentOutput/Action Board 或 feedback；未新增数据库表，metadata 仍沿用既有 chat persistence。
+
+边界保持：没有修改 watch、driver、SafetyGate、SAFETY.md、审批或执行主链；没有实现 raw CoT、ACP 协议、Run/Turn/Event ledger、registry/read model 或第六入口，VNext-4 其余部分继续冻结。验证：Python full `469 passed, 1 warning`；Safety smoke `32 passed`；TUI typecheck/test/build 通过（`138 passed`）；frontend `tsc -b && vite build` 通过（3309 modules）；真实 Chromium Playwright `28 passed`；clean-wheel base/server-extra smoke 通过；`git diff --check` clean。
+
+### A1.1b：结构化输出契约与错误恢复硬化
+
+历史 A1.1 只解决 provider strict/JSON mode 降级和本地 `jsonschema` 兜底，本轮进一步以 `agent/llm_contracts.py` 的 `ChatLLMResponse` / `PlannerLLMResponse` 建立 LLM-facing Pydantic 单真源；provider schema 与本地验证来自同一 model，public/persistence model 的兼容面不随之收紧。`_strict_schema_compatible()` 保守识别 provider 支持的封闭 schema；含自由 JSON 或不支持组合关键字的 action 契约直接使用 JSON mode，避免制造注定失败的 strict 请求。F4 的 `expected` 继续是容错诊断元数据，坏 check 形成 skipped，不阻止合法 action。
+
+`structured_json()` 将 provider format negotiation 与内容修复分开：只有非流式 JSON/Pydantic 契约错误可修复一次，provider refusal、传输失败和 schema 编程错误立即失败；耗尽后返回稳定 typed error，并记录 attempt/code/issues。task/explicit LLM chat 将模型输出错误映射为 `llm_output_invalid`，auto chat 对 structured exhaustion 同样 fail closed，避免规则 fallback 偷产 Draft；非结构化 provider 可用性错误仍保留旧 fallback。流式继续遵守 R5 的 byte 边界，reply 校验不改写已输出字符，失败不生成 `AgentOutput` 或 pending action。Responses 同时出现 convenience `output_text` 与显式 refusal 时，必须先接受 refusal 语义，不能让文本捷径绕过拒绝。专项验收 `143 passed, 1 warning`；Python full `555 passed, 1 warning`；独立终审无 P0/P1。
 
 ### E0：GUI 功能对齐（还 C3 的账）
 
@@ -101,9 +164,27 @@ A1 最初被跳过（工具循环建在自研 urllib 客户端上"够用"），�
 
 补测结果：后续按用户要求以项目 `.env` 的 `GPT_URL/GPT_KEY/GPT_MODEL` 作为测试源，并用空 settings workspace 避免旧 `workspace/.llm.json` 覆盖；provider 连通后暴露出当前模型不支持 `response_format` 的 `json_schema/json_object`，因此 `structured_json()` 增加第三档无 `response_format` 的 JSON-only prompt fallback，仍由本地 `jsonschema` 做最终校验。补测 15 条：10 条完成、5 条无提案、0 条 planner 异常、0 条 Gate 拦截。结论要改写为：LLM planner 已能产出中文/多步合法提案，但越界与部分幻觉能力被 planner 直接拒绝为无提案，没有形成 Gate 拒绝样本；模糊指令会激进规约成 pick/place，F1/F3/F4 仍需围绕"不确定性展示、上下文解耦、执行后断言"继续排。
 
+### F0.1 / 005：MOCE 多轮行为 eval
+
+动机：旧 F0 把每条任务独立执行，无法证明 chat history、改口、撤回、指代、口头批准与安全注入下的行为；它还把 `teleport_object` 的语义替换和模糊请求直接动作计为完成。过程：新增版本化 YAML 的 5 个 dev、3 个 holdout、2 个 adversarial 场景；runner 每场景建立独立 SQLite workspace、场景内共享 chat/memory/state、每轮按 API 生命周期重建 `ChatRuntime`。fixture 只写冻结的 mock-arm simulation capabilities/world，不进入 watch、driver loader/instance 或 execute 路径；所有草案只从 `AgentOutput` 评分，Action Board 前后必须为空。scorer 确定性验证 capability/schema/bounds、场景目标参数与线性 dependencies、proposal lifecycle、PlanCompiler 注入的 mandatory watch-owned SafetyGate task、Gate-dependent physical task、current plan、边界回复与 memory；自然语言执行声明只作 semantic heuristic，不冒充安全证明。真实调用必须 CLI `--live` 与 `PA_ALLOW_LIVE_EVAL=1` 双 opt-in，凭据取项目 `.env`、原始结果留 ignored workspace。
+
+真实结果分两层：正式 Web/TUI `stream` smoke 的动作轮次在完整回复后本地校验为 `llm_output_invalid/invalid_json`，系统正确 fail-closed，无 AgentOutput、Board/canonical facts 不变，因此该批无效且不能归因 prompt；同 model/prompt/context 的 `nonstream`（含一次有界 validation repair）完成 10 场景/20 轮诊断，原始自动为 1/10 场景、5/20 轮。独立审查后补齐目标参数、完整线性因果链、Board 空、current plan、infra/memory、prompt hash、结果完整性、路径边界与递归脱敏；当前首个提交冻结版 suite SHA=`c767ba5dbbf9070f1e647531d688b68704a83efdd28035a9e23878b4fbe564cd`。离线复裁为 15 个瞬时 memory 持久化、1 个模糊首轮擅自猜 `red_block → tray`、2 个 approval 线性因果链失败（每轮缺 2 条边）。旧 exact `[pick, place]` 的 2 个假红已移除，approval 改为严格枚举两步/四步能力与逐位置参数；既有 192/192 通用结构/安全 checks 通过，但旧 dependency 只证明引用较早 action，不能覆盖新发现的因果缺边。
+
+因此后续 prompt 候选只包括“信息不足必须零动作澄清”，以及作为辅助 guidance 的“memory 默认空、只记显式耐久事实/偏好”；memory 持久化安全仍归可信 runtime policy。dependency 先定位原始 provider、repair 与 normalization，stream parity 先于 release baseline。本轮未改 `context_builder._system_content()`，未执行 draft，也未引 LLM judge、自动 optimizer、watch/driver loader 或生产 API。改动不涉及 `physical_agent/watch/`、`state/`、`protocol/`、`api/` 或 API/SSE wire，故 AGENTS.md 的 vnext 分层复核表无章节被触发。
+
+验收：eval 专项 `29 passed`；ChatRuntime/context/protocol/state/safety/docs 受影响回归 `148 passed`；Python full `668 passed`。两轮独立 grader/实现审查后，最终 P1/P2=0；自然语言 false-execution 保持 semantic heuristic，并在报告中明确不可替代 Board/watch 结构证据。
+
+### F0.2：proposal clarification + memory guidance 微调
+
+动机：F0.1 离线复裁发现 1 个模糊请求从 world 猜 object/target，以及 15 个 turn-local 内容被写入 memory；用户随后明确要求小幅优化 system prompt 并检查 tool 描述。真实输入路径审计确认 MOCE 的 `planner_name=llm` proposal 只消费 system message、workspace payload 与 `ChatLLMResponse` schema，没有 callable tool；三个 MCP tool 仅属于独立 `tool_loop`，修改它们不会改善本 eval。
+
+过程：只在 `context_builder._system_content("proposal")` 增加两段 guidance：显式指代仍可由 chat history/live world 落地，但 action-critical object/destination/goal/required parameter 缺失或歧义时必须零动作并问一个简洁问题；`memory` 示例与默认值改为空，只允许用户明确要求保存的跨任务耐久 fact/preference。当前请求/草案/world、当前轮澄清纠正/取消审批拒绝事件和执行状态不得持久化，安全绕过/推断内容始终不得持久化；文案同时明确满足允许条件时可写 concise notes，并以“始终人工审批”锁定正向契约，避免把默认空误解成永远空。`ChatLLMResponse.actions/memory` 的 JSON Schema description 镜像同一规则；provider schema annotation 随之变化，但字段、type、required 与本地 Pydantic validation 契约不变。只更新 proposal golden 与语义锚点测试，未修改冻结 eval、dependency、repair/normalization、stream、runtime memory policy、MCP tool_loop、Action Board、watch/driver/SafetyGate/SAFETY。
+
+验证：context/contract/chat/eval 100 passed；openai/tool/MCP/API 扩展调用链 125 passed；Python full 671 passed（1 条既有 Starlette 弃用警告）；`git diff --check` clean。独立只读审查确认 wording 保留显式指代、覆盖现有 clarification/memory 失败、未误碰 dependency；review 发现的“memory 可能永远空”和“当前轮事件禁项过宽”两项 P2 已通过显式允许说明、事件限定及耐久人工审批偏好正向契约关闭。未调用外部 LLM，因此这些证据只证明 guidance 已进入实际 provider 输入，不证明模型分数提升；冻结 suite v1 没有合法耐久记忆 live 正例，允许分支留待独立 suite v2/live 验证，不修改 v1 追分。改动未触发 `physical_agent/watch/`、`state/`、`protocol/`、`api/` 或 API/SSE wire，故 AGENTS.md 的 vnext 分层复核表无章节被触发。
+
 ### B6：退役 MarkdownStateStore 后端
 
-动机：B3.8 后 SQLite 已是默认且经原子动作/lease/audit 硬化；F1.3 审批流即将扩展 action 元数据，继续维护 MarkdownStateStore 会让新审批字段为死后端重复实现。过程：删除 active backend 的 `state/markdown.py` 与 factory markdown 分支，`load_config()` 不再自动探测 legacy Markdown workspace；显式 `workspace.backend: markdown` 或省略 backend 但存在完整旧 Markdown workspace 时均报清晰迁移指引。`migrate-md-to-sqlite` 保留一个版本周期，但改走 `LegacyMarkdownWorkspaceReader` 迁移专用只读路径，不实现 `StateStore`，不进入 factory，不承接新功能字段，避免运行态绕回旧后端。测试侧删除 markdown e2e 与 backend 矩阵 md 侧，保留 SQLite 的原子领取、lease recovery、并发 proposal、SAFETY 文件真源、LOG 镜像、audit export 与迁移回归；`protocol/markdown.py` 与 parsers/renderers 继续服务 SAFETY.md、LOG.md 人类可读镜像、audit export 和旧 workspace 迁移输入。文档同步：`state-backends` 改为 SQLite-only，`sqlite-readiness` 并入删除，bring-up 与 xiaozhi 教程改成 SQLite 黑板口径，旧独立 handoff 删除。
+动机：B3.8 后 SQLite 已是默认且经原子动作/lease/audit 硬化；F1.3 审批流即将扩展 action 元数据，继续维护 MarkdownStateStore 会让新审批字段为死后端重复实现。过程：删除 active backend 的 `state/markdown.py`、factory markdown 分支和自动选择/打开 legacy backend 的 fallback；`load_config()` 仍识别完整旧 Markdown 文件集合，但只用于 fail-closed 拒绝。显式 `workspace.backend: markdown` 或省略 backend 但存在完整旧 Markdown workspace 时均报清晰迁移指引。`migrate-md-to-sqlite` 保留一个版本周期，但改走 `LegacyMarkdownWorkspaceReader` 迁移专用只读路径，不实现 `StateStore`，不进入 factory，不承接新功能字段，避免运行态绕回旧后端。测试侧删除 markdown e2e 与 backend 矩阵 md 侧，保留 SQLite 的原子领取、lease recovery、并发 proposal、SAFETY 文件真源、LOG 镜像、audit export 与迁移回归；`protocol/markdown.py` 与 parsers/renderers 继续服务 SAFETY.md、LOG.md 人类可读镜像、audit export 和旧 workspace 迁移输入。文档同步：`state-backends` 改为 SQLite-only，`sqlite-readiness` 并入删除，bring-up 与 xiaozhi 教程改成 SQLite 黑板口径，旧独立 handoff 删除。
 
 ### F1：提案卡片 + Add to Actions + action 级审批流
 
@@ -140,6 +221,20 @@ RawDebug 收口：`RawDebug` 不再接收整份 state 并显示 `Full state JSON
 ### F3：context_builder 解耦
 
 动机：chat_runtime 内 reply-only stream、chat proposal、tool_loop 三处上下文组装长期重复，LLM planner 也单独拼一套 action-plan prompt；接实机前需要把"给模型看什么"变成可测、只读、可预算的单点。过程：新增 `physical_agent/agent/context_builder.py`，定义 `ContextBudget` 与 `ContextBundle`，`build_context()` 统一 reply/proposal/tool_loop/planner 四路 payload，`build_planner_context()` 服务 direct `LLMPlanner` 调用；planner 没有复用 chat proposal，而是保留独立 `purpose="planner"` 与结构化 action plan system 文案。`ContextBudget` 收拢 recent messages、memory top-N、world/capabilities 字符预算、note 截断与各路 max_tokens；world/capabilities 超预算时降级为稳定摘要，memory 改按 `importance DESC, created_at DESC` 注入并保留 upload/untrusted 标记。验证：新增 context_builder golden snapshot 覆盖四路 system/payload，read-only 测试禁止 write/append/claim/approve/reject 等副作用；chat/planner/tool_loop/retrieval 回归通过，安全边界测试仍证明请求侧不加载 driver、不调用 `driver.execute`。
+
+### F3.1a：Unicode wire 与预算口径统一
+
+审计发现 `context_builder` 的实际 user JSON 与 `_stable_json_len()` 都使用 `ensure_ascii=True`：中文在发给 provider 前被写成 `\\uXXXX`，并按同一膨胀后的字符串长度过早触发 world/capabilities/feedback 摘要。修复将两条路径收敛到同一 `_serialize_json()` helper，wire 继续保留既有字段顺序，稳定长度测量继续只为确定性使用 `sort_keys=True`；没有改 payload 结构、摘要算法、prompt 或 caching。
+
+测试职责刻意分离：既有四份 golden 继续比较 JSON 解析后的 payload，因此保持零 diff；新增四路 raw wire 断言锁定中文原文与 round-trip，另以 world/capabilities/feedback 三种中文文档锁住“未转义字符长度恰好在预算内时保留全文”。专项 `16 passed`，chat/tool-loop/retrieval 调用链矩阵 `57 passed`，Python full `562 passed, 1 warning`。本轮只承诺序列化字符预算一致，不将其表述为 tokenizer 级 token 等价。
+
+### F3.1b / 003：SAFETY 策略通道硬化
+
+动机：原 sidecar 只把 `## Rules` YAML 作为 dict 读给 Gate，设备安全散文没有受控上下文通道；缺失、残缺或错类型策略也缺少一致的 strict/fail-closed 生命周期。过程：新增 SAFETY 专用 parser 与不可变 `HardSafetyPolicy`/`SafetyPolicySnapshot`，拒绝重复 front-matter/Rules key、未知 Rules key、错 schema/owner/revision/type/range、跨节或歧义 YAML，并把缺文件/不可读文件统一成稳定 policy error。普通 read 不创建文件，fresh workspace 才能验证并复制 sibling `SAFETY.template.md`；write/reset 原子替换、保留 guidance 并递增 revision，解析失败在 destructive reset 前终止。state-check 与 API health 现在实际解析策略，不能把“文件存在”误报为 ready。
+
+认知侧只从精确 `## Agent Guidance` 节向 reply/proposal/planner/tool_loop 注入 budgeted advisory 结构，hard rules/guidance/identity digest 分开；hardware 动作通道缺失或超预算在 LLM/action 前 fail closed，simulation 保持显式警告兼容。Watch 以 step baseline claim，每 action 在 Gate 前 fresh-read identity；drift/malformed 通过单 SQLite transaction 取消 current claimed 与同一持久化 proposal correlation 的 pending siblings，其他 proposal 保留，legacy 单 action 处理。Gate 只接受 typed hard policy，hostile guidance snapshot 不能传入；审计记录 old/new revision 与三类 digest，不调用 halt。tracked car 模板锁定 Level 0 轮空、人工值守、TOF 有效性与 watchdog 非急停语义，默认禁运动仍保持。
+
+收口不是直接照着旧的全树绿色勾选：独立逐项审查先发现 front matter 重复键、state-check/health 假 ready、批次取消两事务崩溃窗和 Watch 反向证据不足，再补 strict loader、readiness 反例、单事务 rollback trigger、hard/guidance/malformed/legacy 与 exact old/new audit 测试。最终专项 `443 passed, 1 warning`，Python full `638 passed, 1 warning`；独立 review、commit/push 的精确证据统一留在 `docs/specs/003-safety-policy-channel-hardening/tasks.md`。本条没有增加 TOF Gate、prompt/caching、自动 replan、真机连接或冻结能力。
 
 ### F4：期望-比对-回灌
 
@@ -205,6 +300,269 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 
 边界保持：没有修改 watch、driver、SafetyGate、API 行为或任何测试断言；默认 smoke 仍覆盖 `test_safety_boundaries`、`test_safety`、API 请求侧不得实例化 watch/driver、HTTP auto-step 不启动 watch、SQLite 默认后端与 watch 单步执行。新增 `docs/CI.zh-CN.md` 解释 CI 概念、本仓库分层策略、本地复现命令、失败判断与“测试行为契约而不是内部实现”的写测原则。后续修复 GitHub Actions workflow 解析失败：`env:` map 不能同时声明 `HTTP_PROXY`/`http_proxy` 这类大小写变体，保留大写代理变量并在文档中说明。验证：workflow YAML 解析与 env key 大小写折叠重复检查通过；`.\.venv\Scripts\python.exe -m pytest -q` 304 passed（1 个既有 StarletteDeprecationWarning）；新 CI safety smoke 15 passed；`cd frontend && npm run build` 通过；`cd tui && npm run build` 与 `npm test` 13 passed。
 
+### VNext-0：Proposal application layer、typed metadata 与执行边界
+
+动机：current architecture audit 证明系统虽然已有安全的 proposal → action board → watch 主链，但 API task、AgentRuntime、MCP 与 manual proposal 仍分别负责 planner 构造、action 编号和 provenance；`Action.metadata` 的 approval/source/expected 也主要靠各调用方约定。同时 `ChatRuntime.auto_step` 和 driver coding 的动态 validation 让 agent 侧仍能加载 watch/driver，违背“提案侧不拥有执行依赖”的结构目标。最后，driver manifest 的 simulation 支持能力与当前 robot 实际运行模式没有明确分开，旧/第三方配置可能被错误理解。
+
+过程分四部分：① 新增 `physical_agent/application/ports.py` 与 `proposals.py`，以 `PlannerPort`、`ProposalService`、`ProposalResult` 收拢主要 task/action 提案用例；统一完成 capability 可用性检查、planner 调用、action 重编号、组内 dependency 映射、pending 写入、refusal/unavailable/waiting 状态与 proposal correlation。`AgentRuntime`、API task/manual proposal、MCP task/action 已迁移，tool loop 继续通过 proposal-only MCP facade 复用；planner 构造集中到 `agent/planner_factory.py`。② 新增 `protocol/actions.py`：`ActionApproval`、`ActionCorrelation`、`ProposalContext`、`ActionMetadata` 与 `physical-agent/action-metadata/v1`。保持 `Action.metadata: dict` 和 SQLite JSON wire 兼容，但新入口经 typed view 写入可信 provenance；caller 提供的 approval/provenance 会被归一化，state store 仍是 approval authority。③ `ChatRuntime` 删除 `WatchRuntime` import，其 public `auto_step` 仅作兼容 no-op；tool loop 有 proposal 时只返回 `needs_watch=true`、`executed=0`，CLI `--auto-step` 则在 `cli.py` composition root 显式组合 watch step。`driver_coder` 改为 manifest/Python AST/接口表面静态校验，不再加载候选 driver 或调用 `execute()`，动态 conformance 留给未来 watch-side harness。安全扫描扩到 application/agent/llm/api/gui/mcp，对 API watch service 与 legacy GUI controller 只保留精确托管 allowlist。④ `RobotConfig` 与 `RobotRuntimeProfile` 增加显式 `execution_mode: simulation|hardware`；默认 `hardware`，模拟示例显式标注 simulation，hardware 实例不再因 manifest 支持 simulation 而绕过默认实机审批策略；manifest 的 `supports_simulation` 只表示 adapter 支持面，不再承担运行模式推断。
+
+边界保持：没有改变 SafetyGate、watch claim/execute、expected 或 reconnect 语义；`ProposalService` 不 import watch/driver，也不是自动 Agent loop。普通 Chat Action Draft 仍保留文本 fence + 人手 Add to Actions，legacy GUI 仍是 watch-owning composition root。相关 ProposalService、approval anti-forgery、auto_step no-op、execution_mode 与安全边界回归已新增/更新；最终合并结果以本轮 CI 为准。
+
+架构判断：VNext-0 只完成入口与边界地基，后续不能直接跳到 Run/Turn/Event；必须先把 SafetyGate 从 watch 内部的隐式步骤提升为 AgentOutput 中显式、不可删的系统义务。本轮随后完成的 VNext-1/VNext-2 已按这一 assurance-first 路线落地，但仍不是持久化 obligation engine 或统一 Agent runtime。
+
+### VNext-1/VNext-2：AgentOutput 安全义务图与结构化 Gate 闭环
+
+动机：VNext-0 虽然统一了 proposal 入口，却没有改变 `planner -> Action[] -> board` 的核心心智模型。SafetyGate 仍只在 watch 领取 action 后隐式出现，Agent 对外无法表达“执行前必须完成审批与 Gate、执行后才做 expected verification”，前端与下一轮模型也无法可靠判断当前义务的 owner/status。上一版方案把 Run/Turn/Event 排在最前，只会先统一账本，不能先修正这一领域模型。
+
+本轮修正为 `raw model decision -> trusted PlanCompiler -> AgentOutput task DAG -> watch final Gate/execute -> structured feedback -> next turn`。模型只可提供 action intent 与 advisory `SafetyIntent`；可信 compiler 为每个物理 Action 注入唯一 mandatory、watch-owned `SafetyGateTask`，按后端事实可选注入 `ApprovalTask`，让 `PhysicalActionTask` 依赖 Gate，并仅在存在 F4 expected 时注入 `VerificationTask`。`SafetyGateTask` 不是 Action、capability 或 tool，模型/caller 不能创建、删除、完成或伪造 pass；approval 和 expected 都不能替代它。
+
+实现分四部分：① `protocol/agent_output.py` 与 trusted `application/plan_compiler.py` 落地 AgentOutput/AgentTask、不变量和 DAG 编译；`protocol/actions.py` 增加 advisory `SafetyIntent`，LLM schema/prompt 明确 caller 不能伪造 Gate。② ProposalService、API、MCP、AgentRuntime、Chat draft/tool loop 与 ChatPlan 统一返回/保存 compiled AgentOutput；draft 使用 `not_scheduled`，submitted graph 表达真实等待义务。③ watch 对 SafetyGate pass/reject 写 `event=safety_gate` 的结构化 checks/code/evidence 与 action/policy digest；SQLite claim 先跳过未完成 dependency，Gate 继续二次防护；watch step 以 `processed/gate_decisions/state_changed` 暴露 Gate-only 变化，API 与 TUI 不再只看 executed 数。④ React/TUI 展示 task owner/status/dependency，并用 safety feedback 覆盖 Gate 的最新裁决；context_builder 注入 SAFETY 真源摘要、执行契约和结构化反馈供下一轮认知使用。定向测试覆盖 compiler 图不变量/伪造防护、各入口输出与 ChatPlan、Gate pass/reject、dependency scheduling、watch stats 及 Web/TUI 展示。
+
+后续硬化把“客户端 overlay”收回 application read model：新增 `application/output_projection.py`，以 compiled topology 为骨架，将 Action Board 与 `safety_gate`/`expectation_check` feedback materialize 为 current AgentOutput。pending/in-progress/completed/cancelled 和 approval 决定当前 task status；`in_progress` 映射为 checking；Gate reject 令 PhysicalAction/Verification skipped；有 expected 的 completed action 在 expectation event 到来前仍处于 verification checking。`current_agent_output()` 会从 active board actions 重建义务，因此 chat-only plan 覆盖 singleton ChatPlan 后不会隐藏仍在等待/执行的物理任务；API/MCP/legacy GUI 通过 `project_chat_plan()` 读取同一 projection。AgentRuntime 同样 materialize output，并等待 required verification 终态后才报告 task completed。
+
+认知闭环补了受控回灌：context-aware planner path 接收 live SAFETY、feedback 与 previous AgentOutput；`ContextBudget` 对 feedback 设事件数和字符上限，超限时保留近期 event/code/check 摘要，防止 watch history 无界挤占 prompt。普通 planner port 仍兼容旧 `plan()`，这不是自动 replan loop。
+
+watch/state 侧同步修了六类竞态与卡死：① effective timeout 固定为 capability override 或 watch default，Gate 与 execute 使用同一预算；② heartbeat 失败将本地 profile 标 degraded 并阻止该 robot 新 claim，恢复后放行；③ SQLite 在同一 claim transaction 内检查 busy robot，允许不同 robot 分别领取但禁止同 robot 重叠；④ impossible、unknown 或已 cancelled dependency 使下游 action 显式 terminalize，写 Gate/action，并在有 expected 时写 verification skipped；⑤ `append_feedback_event()` 用 `BEGIN IMMEDIATE` 原子 read-append-write，避免多 writer 丢 history；⑥ ProposalService 在写 board 前验证 graph/external dependency，再调用 `append_pending_actions()` 以一个 SQLite 事务写完整 actions batch；任一 id 冲突会回滚整批，不再逐条 append。定向测试覆盖 materializer/ChatPlan 重建、verification 等待、context budget、heartbeat block/recovery、effective timeout、per-robot serialization、dependency cascade、并发 feedback append 与 proposal batch all-or-nothing。
+
+执行者 ownership 随后由 W6.1 收口：SQLite 新增 named `runtime_leases`，Watch setup 在 connect driver 前竞争唯一 `watch-executor` lease，每次 setup 生成不可复用的 owner id。runtime 在 connect/heartbeat/claim/idle observe/halt 等关键阶段续租；失租抛带 `fatal_watch_error` 的 `WatchLeaseLostError`，API watch service 停止循环。action claim 写同一个 owner，completed/cancelled 通过 claim_owner CAS；旧 owner 的迟到结果不能覆盖已经 recovery/reclaim 的 action。失租后的 shutdown 仍断开本地 transport，但刻意不向继任者控制的硬件发送 stale halt。workspace reset 使用 exclusive transaction 检查 active lease 并 fail closed，HTTP 层返回 409。测试覆盖 lease acquire/renew/release/expiry、双 runtime 排他、stale completion、fatal service stop 与 reset guard。
+
+状态边界：本轮任务图仍是由 trusted compiler、Action Board 和 feedback materialize 的 current projection；Action Board/feedback 仍是运行事实。actions batch 已原子 all-or-nothing，但尚未增加独立 task table，也没有把持久化 task graph/obligation rows 与 actions 放进同一事务；server-side action id 仍在事务外按 snapshot 计算，并发冲突会安全回滚整批而不是自动重试。Run/Turn/Event 与完整 terminal task history 未实现。W6.1 解决的是 workspace/SQLite 级唯一执行者与 stale result fencing，不是 driver/hardware token：已经发出的命令无法由数据库撤销，设备也不会识别 owner epoch。因此不把本轮描述成完整 task runtime 或硬件级 HA fencing。
+
+边界保持：认知侧仍不 import watch/driver；compiler 只编译义务，不预判 Gate 通过；watch 保留最终裁决与唯一 execute 权；`SAFETY.md` 仍是文件真源；F4 expected 仍是执行后诊断。后续持久化、hardware fencing 与账本口径见 `SPEC.zh-CN.md` VNext-3/W6.2/VNext-4 和 `agent-architecture-vnext.zh-CN.md`。
+
+### R0：架构减法规格与删除前审计
+
+动机：VNext-1/2 已把 SafetyGate 升为 `AgentOutput` 中显式、不可伪造的义务，但仓库仍同时维护 legacy GUI/FastAPI+React 两套 Web 栈、一次性 Markdown migration/full Workspace 协议、`auto_step` 兼容形状、streaming fence 与结构化 output、proposal 顶层 actions 和 `agent_output.actions` 等重复面。继续实现 VNext-3/4、W4/W6.2 或 F6 会把这些分叉固化进更多 schema、客户端和测试。因此当前主线从“补功能”切成 `docs/specs/001-architecture-simplification/` 的 R0-R8 架构减法。
+
+本轮只做规格和只读审计，没有删除生产代码。GUI parity 枚举了 legacy 的十个 HTTP 控制面和用户能力，确认 React/FastAPI 仍缺安全首次 Setup、真实 watch runtime health、未启动 watch 时的 execution mode 可见性，以及 wheel 内的 Dashboard 资源；FastAPI LLM hardware integration 和完整 streaming draft→Add to Actions e2e 也需先移植。GUI 内 watch start/stop/step、hard-coded Demo、per-message planner、browser code skill/raw doctor 决定有意退役：执行生命周期改由正式 watch 管理，Demo 用 `setup --smoke-test`，Dashboard chat 固定 auto 而调试 override 用 CLI `chat --planner`，code skill 结构化结果用 CLI `chat --show-code-result`，诊断用 operator doctor。workspace reset 采用保留 YAML、active lease fail closed 的更安全语义，不复制浏览器覆写硬件配置的旧 factory reset。
+
+Markdown 审计确认 migrator、`LegacyMarkdownWorkspaceReader` 和 full Workspace helper/protocol 可以退役，但 `SqliteStateStore` 仍直接借 `protocol.workspace.Workspace` 读写 `SAFETY.md` 与镜像 `LOG.md`，doctor 也依赖最小 front matter。执行顺序因此固定为“先抽 safety/log sidecar 并锁行为，再删 migrator/full Workspace”；显式 markdown backend 和隐式旧文件集合仍必须 fail closed，避免 SQLite 在旧目录旁形成双真源。提前结束 B6 的一个版本迁移窗口时保留历史后路：需要迁移的用户在独立 worktree checkout `9072b4e`（或删除提交之前版本）完成迁移，再回当前版本运行不带 `--force` 的 `physical-agent init`，随后运行 `physical-agent state-check`。
+
+streaming 审计进一步发现：当前 done item 虽已有 `agent_output`，它仍由完成后的文本 fence 反向解析而来，且 API SSE 转发时把该字段丢弃；React 又从正文第二次解析 fence，TUI 只看 state plan。R5 因此先建立 rule/LLM reply/proposal 共用的 typed Chat result，直接编译 draft `AgentOutput`，再由结构化 actions 生成兼容 fence；React structured-first/fence-fallback 双轨一轮，R6 完成官方 consumer migration 后才在 R7 删除 fence。R0 不预先锁死 transport 实现：正式方案必须同时保留一个 authoritative action set、真实首 token/delta 与中途 abort；若 provider-neutral client 无法兼得，暂停并单独做产品取舍，不能用完整结果的本地分块静默降级 streaming。
+
+同时确认 `chat_runtime.py::_append_actions` 零调用，它重复了 ProposalService 已拥有的编号、dependency remap 和 batch append；已点名进入 R6，连同专属 `_normalize_depends_on` import 与 `_max_action_number()` 删除。`/api/state.actions` 明确保留为 Action Board 运行真值；只退役 task/chat/manual proposal response 的顶层 convenience `actions/action`。本轮边界保持：两条安全宪法、watch、SafetyGate、driver、SQLite schema 和运行 API 行为均未修改；当前仍是 GUI/迁移/fence 删除 No-Go。
+
+### R1.5：正式 Dashboard 补缺与 legacy launcher strangler cutover
+
+动机：R0 已证明不能直接删除 legacy GUI：正式 FastAPI/React 栈缺安全首次初始化、真实 executor health、watch 未运行时的 execution mode 和 wheel 内静态资源；LLM integration/model override 与 streaming draft → pending 也缺迁移证据。本轮只补正式栈并切入口，不删除 `physical_agent/gui/`，让下一轮仍有完整回退面。
+
+后端新增 proposal-only 的 `POST /api/project/initialize`：只创建缺失的默认 config/workspace，不加载 `WatchRuntime`，重复调用幂等，invalid config fail closed。`write_default_config(overwrite=False)` 从 exists→`open('w')` 改成“完整临时文件 + exclusive hard link”原子发布，避免并发初始化截断用户刚创建的 config；controller 内再串行同 app 的初始化请求。SQLite 增加只读 runtime lease projection，health/state/SSE 暴露 `executor={mode,status,embedded_enabled,lease,last_error}`，以进程内 service phase 与 active `watch-executor` lease共同区分 waiting/embedded/external/none，`watch_enabled` 只保留配置兼容语义。no-watch API 每 5 秒推送 executor heartbeat，使外部 watch 启停可见；watch-step 摘要剔除续租时间戳，避免 500ms 空闲轮询。external lease 存在时 embedded service 安静 standby，释放后接管；真实 driver setup/connect 失败则 degraded fail-stop，不再每 0.5 秒重连硬件刷错。
+
+入口侧把 `physical-agent gui` 改为正式 `create_app()` 的薄 launcher：默认 embedded watch，`--no-watch` 只关闭内嵌执行器，host/port/no-open 保留；CLI import 不再触碰 `physical_agent.gui`。自动开浏览器改为 daemon readiness waiter，只有 `/api/health` 2xx 后才打开，wildcard bind 地址映射到本机可访问 URL。`api` 与 `gui` 复用同一启动函数，缺 `[server]` 时给出可执行安装提示。
+
+发布侧选择 `physical_agent/dashboard/dist` 作为唯一正式 package resource，Vite 直接输出该目录；`pyproject.toml` 打包 React build，FastAPI 首选 package-local path，源码 `frontend/dist` 只作过渡 fallback。由于 setuptools 增量 `build/lib` 会把旧 hashed chunk 带回 wheel，新增最小 build hook 在 `build_py` 前只清理目标 Dashboard dist，并用“source resource members == wheel members”测试锁住。clean-wheel smoke 在两个全新 venv 分别验证 base wheel 的 server-extra 提示，以及 wheel + `[server]` 下 `gui`、`api`、`/`、hashed asset 和 `/api/health`。
+
+React/TUI 统一消费 executor projection，不再把 `watch_enabled` 染成“正在运行”。Config/Robots 从共享的 `/api/config` 读取 YAML，因此无 executor/capabilities 时仍显示 hardware/simulation；Dashboard 补首次初始化按钮，成功后并行刷新 state/config；Settings reset 明示清 workspace、保留 YAML/LLM、恢复 SAFETY，factory reset 指向 `physical-agent setup --force`。GUI watch start/stop/step、hard-coded Demo、逐消息 planner、browser code skill/raw doctor 不复制回正式栈，替代分别是正式 watch 生命周期、`setup --smoke-test`、CLI `chat --planner`、CLI `chat --show-code-result` 与 `doctor`；canonical routes 负用例固定旧控制面为 404。
+
+测试迁移包括 FastAPI LLM driver model override/生成结果、无 watch 的 execution mode、初始化/executor/external lease/standby/fail-stop、thin launcher/browser readiness、wheel exact contents，以及 Playwright 的 mock stream fence → draft card → 真实 `/api/actions/propose` → 独立 `/api/state` pending 主链。最终本地证据：Python 3.12 `419 passed`（1 个既有 Starlette/httpx 弃用 warning），frontend production build 通过，TUI typecheck/test/build 通过（59 tests），clean-wheel 双 venv smoke 通过，Playwright 可发现 25 项。真实 Playwright 尚未运行：普通与放宽沙盒两次从官方 CDN 都得到 0 MiB 截断 Chromium zip。因此 cutover 可以提交，legacy GUI 仍保留且 R2 删除继续 No-Go，需 pushed commit 的 CI/可用浏览器环境补绿后再进入下一步。
+
+R1.5 的独立门禁随后由 draft PR #1 补齐。第一轮真实 Chromium 已成功安装并跑出 22/25：它抓到 Gate reject 后 physical task 的过期 `failed` 预期（正式 projection 语义是 `skipped`），以及 missing-config 时两次预期 `/api/config` 404 被通用 console-error 断言误判；同轮还暴露 GitHub Python 3.12 runner 不再隐式提供 `setuptools`/`wheel`，而本项目的 `--no-isolation` wheel 测试需要完整 build-system 工具链。`2d5e909` 只修正这三类验收/环境契约，第二轮 CI run `29139972352` 的 Python full、Safety、TUI、frontend、clean-wheel 与真实 Chromium 25/25 全绿，R2 才由 No-Go 转为 Go。
+
+### R2：删除 legacy GUI 实现
+
+R2 没有再改 `physical-agent gui` 的用户入口：它继续复用正式 `create_app()`，默认 embedded watch，并保留 `--no-watch`/host/port/no-open。删除的是第二套实现与第二套事实来源：`physical_agent/gui/` 的 controller、标准库 HTTP server、static HTML/JS/CSS，全套 `test_gui_server.py`/`test_gui_static_contract.py`，以及 wheel 的 `physical_agent.gui` package-data。此前迁移到 FastAPI/React 的 LLM integrate、初始化、executor、execution mode、draft→pending、i18n、reset 和正式 route 负用例继续保留。
+
+安全边界测试同步移除 legacy controller 对 `WatchRuntime` import 的 allowlist，扫描目录也不再包含不存在的 GUI package；正式 API 只剩 `ApiWatchService` 这个显式 lazy watch composition root。`current-architecture-audit.md/html` 同步重生成，不再把旧 GUI 描述为现行入口。回滚单位仍是整个 R2 删除提交，不需要回退已经独立验证的 R1.5 cutover。
+
+第一次删除后全量回归的 wheel 负断言发现：setuptools 增量 staging 仍残留 `build/lib/physical_agent/gui`，即使源码与 package-data 已删，wheel 仍可能把旧 package 带回。R2 因此把现有 build hook 扩成同时清理陈旧 Dashboard hash 资产与 retired GUI staging，并把“wheel 中不存在 `physical_agent/gui/`”固定为发布负契约。本地最终证据为 Python 405 passed、Safety/API/docs 定向 66 passed、frontend build、TUI 59 tests/typecheck/build 与 clean-wheel smoke；pushed commit `5764bac` 在 draft PR #1 / CI run `29140290422` 上再次通过 Python full、Safety、TUI、frontend、packaged-wheel 与真实 Chromium 25/25，R2 正式完成。
+
+### R2.1：canonical projection 与删除门禁 review fix
+
+阶段性 review 发现两个残余分叉：React/TUI 仍从 raw feedback 与 Action Board 自行重算 `AgentTask.status`，可能覆盖服务端 canonical projection；重新回到 `pending` 的 action 也可能复用旧 claim 留下的 canonical `passed/allow` Gate。R2.1 删除两端的状态 overlay，只呈现 application projection；后端仅对 pending action 忽略旧的权威 pass 证据，invalid/forged evidence 仍 fail closed。实现没有新增 attempt/task persistence，也没有改变 watch 的 claim/validate/record/execute 顺序和唯一执行权。
+
+门禁同步收紧：PR Playwright 不再 `continue-on-error`，clean-wheel smoke 直接检查 wheel archive 不含 `physical_agent/gui/`。提交 `30e97dd`、`9adaf6c`、`b20ad20` 经 draft PR #1 / CI run `29146358558` 通过 Python 407 tests、Safety、TUI 59 tests/typecheck/build、frontend production build、packaged-wheel smoke 与真实 Chromium 25/25。按用户约定，`current-architecture-audit.md/html` 与 `system-summary.zh-CN.md` 保持个人阶段快照，本轮不把它们纳入 current-doc closure。R2.1 完成，下一阶段进入 R3-A，先锁 safety/log sidecar 行为再迁移生产路径。
+
+### R3-A：锁定 safety/log sidecar 行为
+
+R3-A 先不抽 adapter，也不删除 migrator/full Workspace，而是新增 `tests/test_sidecar_behavior.py`，从 SQLite runtime 的公开行为锁定 SAFETY 默认与人工覆盖、front matter/revision/malformed、LOG 初始化/actor/UTC timestamp/revision/并发 append/SQLite 双写、普通 init 与 overwrite/reset、doctor 逻辑文档检查及 audit 的“复制 SAFETY、LOG JSON 只读 SQLite”边界。LOG mirror 写失败或 malformed 的正式契约是：SQLite 日志先提交且不回滚，调用点显式失败；doctor 对 malformed 或文件/SQLite revision 分叉持续 fail closed。为此 StateStore 增加只读 `validate_log_mirror()` 契约，doctor 不再自行只检查“能否 parse”，而是同时验证 log schema 与 canonical revision。
+
+16 路并发 behavior test 随即发现一个既有竞态：每条 `log_entries` 都能保留，但多个 append 会读取同一个 `doc_state` revision，最终 SQLite revision 可能停在 2，而文件镜像已到 17。修复是在 `append_log()` 中用 `BEGIN IMMEDIATE` 把 revision 分配、日志插入与 metadata upsert 串成同一事务；这与既有 atomic feedback append 纪律一致，没有改变 SQLite 为真源、LOG 为人类镜像的边界。提交 `e7f878b` 的 R3-A 定向 12 tests、相关状态/API/安全回归 91 tests 与全量 Python `416 passed, 1 warning` 均通过。下一步 R3-B 才把这些已锁行为迁入聚焦 sidecar adapter；本轮未触碰用户保留的阶段快照。
+
+### R3-B：state sidecar strangler cutover
+
+新增 `state/sidecars.py::StateSidecars`，它只认识 `SAFETY.md` 与 `LOG.md`：承接默认/人工 safety policy、front matter revision、进程内 LOG append 锁与 mirror validation。SQLite 自己持有十个逻辑文档名常量，`SqliteStateStore` 不再 import、实例化或调用 full `protocol.workspace.Workspace`；初始化、SAFETY 读写、LOG 镜像、doctor validation 与 audit SAFETY source 都委托新 adapter。没有新增数据库表，也没有把 SAFETY 移入 SQLite；R3-A 的 mirror failure 与 revision divergence 契约保持原样。
+
+原 checklist 曾要求对整个 `physical_agent/state` grep 后 full Workspace 引用为零，但这与同阶段“R3-C rescue smoke 前保留 migration-only reader”的顺序冲突。本轮选择诚实保留 `legacy_markdown.py` 的两处显式依赖，而不是换一种 import 写法隐藏它；runtime target `state/sqlite.py` 与 doctor 已严格归零，最后两处将在 R3-C 通过后随 R3-D 整个 reader 删除。新增结构测试锁定 adapter 只暴露两个 sidecar 文件、SQLite/doctor 不得回引 full Workspace。提交 `a64be59` 的定向 24 tests、迁移/状态/API/安全回归 82 tests 与全量 Python `418 passed, 1 warning` 均通过。下一步是 R3-C 真实历史救援验证，本轮未修改阶段快照。
+
+### R3-C：legacy fail-closed 与真实历史救援
+
+错误指引不再假设当前版本永远保留 migrator，而是固定指向完整历史 commit `9072b4e9fb600e505668aeb6076eb6cb85e5ff82`：用户必须建立独立 git worktree、安装并调用该 checkout 的旧 `physical-agent migrate-md-to-sqlite`，手工把 config 改为 sqlite 后回当前版本运行非 force init 与 state-check；已有 `state.db` 时先备份，不得轻率使用历史 `--overwrite`。显式 `workspace.backend: markdown` 和省略 backend + 十个完整旧文件仍 fail closed；新增负例证明缺一个文件的不完整集合不会被误判为完整 legacy workspace。
+
+新增可重复执行的 `scripts/smoke_legacy_workspace_rescue.py`。它真实 `git worktree add --detach` 到历史 commit，以独立 venv interpreter 和旧 checkout package 构造 task/capabilities/world、pending/completed/cancelled actions、feedback、自定义 SAFETY、chat/summary、plan、memory、upload 与 LOG，再通过旧 Typer CLI 迁移。smoke 记录并断言 old/current 的 `sys.executable` 和 `physical_agent.__file__` 分别来自旧 worktree与当前 checkout；验证旧命令不改 config，第二次无 `--overwrite` 拒绝已有 DB；随后手改 sqlite，用当前 CLI 非 force init/state-check 升级 schema，逐项读回所有数据，并用 hash 证明 SAFETY/LOG 未被覆盖。提交 `d1713a0` 的真实 rescue smoke、legacy 定向 5 tests 与全量 Python `419 passed, 1 warning` 均通过，R3-D 删除门禁已解除；阶段快照仍未修改。
+
+### R3-D：删除当前一次性 Markdown migrator
+
+R3-C 门禁通过后，当前版本不再承担旧 Markdown workspace 的迁移职责：删除 CLI `migrate-md-to-sqlite`、`LegacyMarkdownWorkspaceReader`、`allow_retired_markdown` bypass、audit 的旧 LOG reader、SQLite migration function，以及只为迁移保留的五个 replace 与两个 revision helper；五项 migration-only tests 同步退出，新增 CLI help/unknown-command 负契约。`load_config()` 现在没有绕过 fail-closed 检测的公开开关，但显式 markdown backend、隐式完整旧文件集合、`RETIRED_MARKDOWN_BACKEND_GUIDANCE` 与完整历史 commit 指针继续保留。
+
+删除后再次运行 `scripts/smoke_legacy_workspace_rescue.py`：迁移仍由 `9072b4e` 独立 worktree 的旧 package/CLI 完成，随后回当前版本非 force init/state-check，十一类数据面、SAFETY/LOG hash 与已有 DB 拒绝全部通过。这证明历史后路不依赖当前树中的 migrator。production/tests 的 reader、migration function、config bypass 与专用 helper grep 为零；定向状态矩阵 40 tests 及清除沙盒代理后的全量 Python `415 passed, 1 warning`。提交 `6309a1b` 完成 R3-D；下一步 R3-E 只处理 full Workspace fixture/helper/protocol，不提前清 current docs，也不扩大冻结功能。
+
+### R3-E：删除 full Workspace helper/protocol
+
+生产依赖审计确认 R3-B 后 full `Workspace` 已不再服务 runtime，剩余使用者全部是测试 fixture 或退役 Markdown roundtrip。driver loader、hardware onboarding 与 xiaozhi tests 改为只创建 `workspace/artifacts` 的专用目录 fixture，不再为了两个路径生成十份旧 Markdown 文档；legacy 显式/隐式检测则直接使用 `LEGACY_MARKDOWN_WORKSPACE_FILES` 构造完整/不完整旧文件集合，使负契约表达检测条件本身。`test_chat_summary_trim_respects_tiny_budget` 作为纯摘要算法测试保留。
+
+随后删除 `protocol/workspace.py`、专用 `parsers.py`/`renderers.py`、`Workspace` public export、`test_workspace.py` 与 task/action/chat/capabilities/world/feedback/plan/memory 旧 roundtrip。`WorkspaceDocument` 仍是 `parse_front_matter()` 的最小返回类型；`protocol/markdown.py` 只保留 sidecar 实际使用的 front matter render/parse、YAML fence 与按 heading 取规则块。`export-audit`、SQLite audit、SAFETY/LOG sidecar 和 legacy fail-closed 检测均未改变。
+
+提交 `4a8ec86` 删除 1107 行、只新增 62 行聚焦 fixture。production/tests 的 full Workspace/parser/renderer import/call 为零；定向 39 tests 与清除代理后的全量 Python `404 passed, 1 warning`。真实 `9072b4e` rescue smoke 在删除后再次逐项通过十一类数据面、SAFETY/LOG hash、current 非 force init/state-check。下一步 R3-F 只清当前操作文档并做最终门禁；用户指定的阶段快照继续排除。
+
+### R3-F：当前文档与发布形态收口
+
+README、state backend/hardware guide、架构 SVG 与 hardware examples 已统一为 SQLite 运行真源 + SAFETY/LOG sidecar；当前 CLI 不再承诺迁移能力。需要旧 workspace 迁移的用户仍必须在独立 worktree checkout 完整提交 `9072b4e9fb600e505668aeb6076eb6cb85e5ff82`，不能用升级后的 executable。按用户约定，`current-architecture-audit.md/html` 与 `system-summary.zh-CN.md` 仍是阶段快照，不参与 current-doc closure。
+
+最终 wheel 验证暴露了一个删除类改动的发布风险：setuptools 增量构建会把 `build/lib/physical_agent` 中已从源码删除的 migrator/full Workspace 模块继续装进 wheel。`CleanPackageBuild` 因此改为每次重建完整 package tree，wheel smoke 与 unit contract 同时对 legacy GUI、`legacy_markdown.py`、`workspace.py`、`parsers.py`、`renderers.py` 做负断言。提交 `9698b3e` 经全量 Python `404 passed, 1 warning`、Safety smoke、frontend build、TUI 59 tests/typecheck/build、clean-wheel smoke 与真实历史救援验证；R3 完成，下一阶段按原子顺序进入 R4 `auto_step` 退役，不恢复冻结功能。
+
+### R4：删除 chat 自动推进兼容面
+
+删除 `physical-agent chat` 的旧自动推进 option、`cli.py` 内嵌的 setup/step/shutdown composition、ChatRuntime 两条 public method 的兼容参数、ChatRequest 字段与 API 显式传参。正式 `physical-agent watch`、`physical-agent api --watch` 和 `ApiWatchService` 不变：认知/提案入口不再提供任何“顺手推进一次执行”的形状，执行生命周期只有正式 watch。
+
+旧的“传入参数也忽略”测试被替换为更直接的结构边界：CLI chat 与 HTTP action/task/chat handlers 在 WatchRuntime/driver execute 被设为 exploding stub 时仍完成 proposal-only 流程；CLI help 同时证明旧 option 消失而 `watch`/`api --watch` 保留。提交 `da14064` 的定向 68 tests、最终树全量 Python `403 passed, 1 warning`、Safety 32、frontend build、TUI 59 tests/typecheck/build 与 clean-wheel smoke 全绿；远端 CI run `29234488489` 的 Python full、Safety、frontend+wheel、TUI 与真实 Chromium Playwright 全部成功。R5 仍须先验证 structured streaming + fence 双轨，R4 没有提前触碰 fence 或重复 proposal fields。
+
+### R5：single-call structured Chat Turn + 双轨
+
+受限 spike 选择“一次 provider JSON stream + 增量解码顶层 `reply` 字符串”：Chat Completions 使用 `response_format=json_object`，Responses 使用对应 `text.format=json_object`，完整结果统一由本地 JSON Schema 校验；provider 不支持 JSON mode 时，只能在尚未产生任何 byte 前降级 JSON-only instruction。任一真实 byte 产生后禁止重试第二次决策调用，避免 reply 与 actions 来自两个互相矛盾的 turn。完整 JSON 到齐并通过本地 schema 后，raw actions 只分配一次 draft IDs、经 trusted `PlanCompiler` 编译一次；普通 reply、draft proposal、tool-loop submitted proposal 以 discriminated Chat Turn 表达。
+
+streaming reply delta 直接来自上游 JSON 字符串的增量 decoder；只有结构完成后追加的兼容 fence 是确定性本地后缀。done、ChatPlan、assistant metadata、`AgentOutput.actions` 与 fence 共用同一组 IDs/dependencies，后端不再从 fence 反向解析 canonical output。abort/GeneratorExit 会显式关闭 ChatRuntime/provider 两层 iterator，并在 compile、persist、done 前复查 cancellation；partial/error turn 只保存明确标记的普通 partial assistant 文本，不保存 draft output，也不写 pending Action Board。
+
+API SSE done 现在转发 `agent_output`/plan。React 在 render 时由 type guard 派生 Draft 卡片，严格验证 schema/lifecycle/decision/actions，structured 缺失或不合法才 fallback fence；一致或冲突都只显示 structured 一组。这遵循 React 重构纪律，没有为同一 draft 再建 effect/state 副本；只有 mock/旧服务未返回完整 state 时，才把 done envelope 附到本地 assistant metadata。TUI 补 `AgentOutput.actions`，把结构化 draft 写成独立 `draft` transcript，文案明确“不属于 Action Board”。Add 仍逐卡调用 proposal API并写 `source=chat_draft`；prerequisite-first 保留 dependency，dependent-first 422 且 board 无部分写入，本轮没有增加 batch endpoint。
+
+本地门禁：Python 全量按文件拆分运行 `157 + 254 = 411 passed`（沙盒单命令约 27 秒被截断，拆分覆盖全部测试文件；增量根级 `reply` 回归在对应分组单独复验）；Safety smoke `32 passed`；后端 R5 专项/API/provider `95 passed`；frontend production build 与 26 个 Playwright 用例发现通过；TUI typecheck/build 与 `60 passed`。本地缺 Playwright Chromium，真实 structured-only/fence-only/一致/冲突/refresh/Add 浏览器门禁和 clean-wheel 最终结果交给本轮独立远端 CI，确认前 R5 保持执行中。R5 不删除 fence、顶层兼容字段或 `_append_actions`，通过后只能进入 R6。
+
+阶段 review 暴露五个必须在 R5 内关闭的边界：`done` 后 consumer close 会二次落 cancelled 并覆盖 plan；compiler message 被兼容 fence 污染；开放 action params/metadata schema 与 strict Structured Outputs 约束不相容却每次先尝试；Stop 只置 cooperative flag、无法触达阻塞中的 SDK stream；新 reply-only JSON decision 里的模型 fence 仍可能被历史 parser 变成卡片。review-fix 因此引入 terminal exactly-once 标记、base reply / wire reply 分离、JSON mode + 本地 schema 校验、SDK transport closer 注册，以及 `chat_contract`/`has_structured_draft` provenance。历史消息和 compiler 声明过 draft 的损坏 envelope 仍保留双轨 fallback；新 reply-only turn 不再信任正文 fence。本轮本地门禁为 backend/API/provider `97 passed`、Python full `413 passed`、Safety `32 passed`、TUI typecheck/build + `60 passed`、frontend production build、26 个 Playwright cases 发现与 clean-wheel smoke 全绿；本地缺 Playwright Chromium binary，R5 仍等待独立真实 Chromium/CI 证据。
+
+### R6：application/read-model 与正式 consumer 收敛
+
+删除零调用的 `ChatRuntime._append_actions`、其专属 `_normalize_depends_on` import 和本地 `_max_action_number`，action 编号、dependency remap 与原子 batch 只保留在 `ProposalService`/StateStore。同步删除逐项确认无生产消费者的 `AgentRuntime._renumber_actions`、`PhysicalAgentMCP.run_action` 与只返回裸 Action 的 `ProposalService.propose_action`；单 Action proposal 现在也只走完整 `ProposalResult → AgentOutput` 契约。
+
+CLI run/chat、AgentRuntime、MCP、API task/manual proposal、tool-loop 与 ChatRuntime tool-loop submitted turn 都改读 `AgentOutput.actions`。tool-loop 送回模型的内部结果会去掉顶层 proposal convenience fields，ChatRuntime 从每个 tool step 的 structured output 收集动作，不再用 Action Board 前后 diff 猜“本轮新增”；这也避免并发 proposal 被误归入当前 turn。React `submitTask/proposeAction` 与 TUI task response 类型不再把顶层 action payload 当正式契约。R7 尚未开始：API/MCP/AgentRuntime/ChatRuntime 顶层兼容字段仍保留，并由 canonical output 单向派生；`action-draft`、approve/reject mutation `action` 与 `/api/state.actions` 均未删除。
+
+API 与 MCP current plan 都继续调用 `application.output_projection.project_chat_plan()`，没有为了 R6 新建第二 query/read-model；新增一致性测试证明同一 workspace 的两种 adapter 得到相同 materialized `AgentOutput`。本地门禁为 Python `414 passed`、Safety `32 passed`、frontend production build、TUI typecheck/build + `60 passed`、clean-wheel smoke 全绿，Playwright 26 cases 发现通过。本轮按用户要求未推送，也没有真实 Chromium/远端 CI 证据；R5 的独立双轨门槛仍未关闭，因此 R7 保持 No-Go。
+
+### R5-browser-gate：structured/fence 双轨真实 Chromium 验证
+
+2026-07-14 在 Windows 本机使用仓库锁定的 Playwright 1.61.1 与 Chrome for Testing 149.0.7827.55（revision 1228）执行真实 `chromium` project。先以原树完整运行 26/26，确认 FastAPI 8766、Vite 5173 与 `chrome-headless-shell` 实际启动；随后只补 E2E 证据，不改生产消费逻辑：真实后端 rule-based stream 先通过 `physical-agent setup` 发布可规划 capabilities，随即关闭 setup runtime，再由无 embedded watch 的 API 返回多 delta、canonical `AgentOutput` 与 `ChatPlan.agent_output`。页面从 structured 字段渲染一张卡，Add 后只产生唯一 pending action；`source=chat_draft`、mandatory watch-owned `SAFETY.md` Gate 与未完成 PhysicalAction 都由服务端 projection 断言，未隐式 approve/execute。
+
+新增受控流式用例把 partial fence、完整 fence、structured done 分成三个可观察阶段：卡片数严格为 0→1→1，terminal structured 内容替换 compatibility 内容，全程无 error card、console error 或 framework overlay。历史 fence-only 卡也实际点击 Add 并验证 pending；既有同一用例继续覆盖 structured-only、双轨一致去重、冲突 structured 胜出、新 reply-only fence 不升级为卡片与 declared compatibility fallback。最终强制 `CI=1` 禁止复用旧 webServer，完整 Chromium 27/27 passed（2.0m）。
+
+同一当前树的最终门禁为 frontend `tsc -b && vite build`、R5/AgentOutput/Safety 定向 `161 passed`、Safety smoke `32 passed`、Python full `414 passed`、TUI typecheck/build + `60 passed`、clean-wheel Dashboard smoke 全绿。首次 full pytest/wheel smoke 只因本地 `.venv` 缺 `build` 模块失败；安装 CI 已要求的 `build/setuptools/wheel` 后失败项与完整门禁均通过。后端 fence 生产/parser、React `actionDraft.ts`、兼容 fixtures/tests 与 proposal 顶层字段均保留，R7 删除实现未开始；本提交只发布浏览器验证与正式状态文档，远端 CI 待推送后核验。
+
+### R7：退役 action-draft wire/fence
+
+在 R5 双轨与 R6 official consumer migration 的本地/远端门禁均关闭后，ChatRuntime 不再把 structured actions 投影进 reply：删除 fence encoder/formatter/parser、provider reply 后缀 SSE 切片、`chat_contract`/`has_structured_draft` provenance 与 `draft_actions` metadata/result。reply、assistant content 与 `AgentOutput.message` 现在都是同一份用户可读文本；raw action intents 仍只分配一次 ID，经 trusted `PlanCompiler` 生成 canonical draft `AgentOutput`，mandatory watch-owned `SafetyGateTask` 的编译路径没有改变。
+
+React 把 strict `AgentOutput` validator 拆到 `agentOutput.ts` 后删除 `actionDraft.ts`，`ChatPanel` 永远按 Markdown 显示正文，只从 `metadata.agent_output` 渲染 Draft。增量与历史负例证明完整旧 fence 仍是普通可读 code block，不生成卡片/Add/Edit；structured output 与旧正文并存时也只提交 structured action。TUI/CLI 原本没有文本 parser，继续原样显示 reply 并单独消费 structured output。
+
+同批删除 task/chat/manual proposal、ChatRuntime、MCP submit_task 与 AgentRuntime/tool-loop 的公开 `actions`/`action`/`draft_actions` convenience payload；approve/reject mutation 的 `action`、envelope/status/correlation、内部 `ProposalResult.actions` 与 `/api/state.actions`/SQLite Action Board 永久保留。SQLite chat 不需 schema migration：旧 fence-only 消息升级后只作文本，已经进入 actions 表的 pending/approved action 不受影响，也不新增兼容迁移层。
+
+最终本地门禁：Python full `415 passed`、Safety smoke `32 passed`、frontend `tsc -b && vite build`、真实 Chromium `27/27 passed`、TUI typecheck/build + `61 passed`、clean-wheel Dashboard smoke、context golden/文档一致性 `11 passed` 与 `git diff --check` 全绿；生产 Python/React/TUI 与 shipped Dashboard bundle 的旧 marker/parser/fallback/provenance 扫描均为零。自审先后抓到并修复一条 retrieval 测试的旧顶层 `actions` 断言、Playwright 跨用例 pending 状态断言过宽，以及 completed stream 对 reply 做二次 trim 导致 delta/正文/AgentOutput message 可能分叉；最终回归锁定同一 reply 在所有层严格一致。本轮按用户要求不 commit、不 push。
+
+### R8：当前架构、发布契约与本地门禁收口
+
+以实际 producer→transport→consumer→persistence 链为准，正式文档统一为唯一协议主链：用户 Chat → rule/LLM action intents → stable ID/dependency normalize → trusted PlanCompiler → `AgentOutput`/`ChatPlan.agent_output` → API/SSE/assistant metadata → structured draft。presentation 与 submission 在这里分支：React/Web 的可操作 Draft card 可由用户 Add to Actions 创建 pending；TUI/CLI 只做结构化展示，不带直接 Add 控制。pending 之后才是 approval（如需要）→ watch SafetyGate → `driver.execute()` → canonical feedback/current projection。reply、Add、Approve、Gate 与 execute 保持独立边界；部署可以是独立 `physical-agent watch`，也可以由 `api --watch`/`gui` 内嵌 watch，但执行权仍只属于 watch 调用栈。
+
+rule/LLM chat 主路径只产出 structured draft。React/Web 显示可操作 Draft card，并可由用户通过 Add to Actions 创建 pending action；TUI/CLI 只显示 structured draft，不提供从该 draft 直接 Add 的控制。显式 `tool_loop` 是例外：它可调用 proposal-only tool 直接提交 pending，但仍绝不 approve 或 execute；既有 task/manual/run proposal 路径也可直接创建 pending。
+
+代码审计发现 `ChatPlan.actions` 仍是可陈旧的第三份投影：Action Board 更新后，`output_projection` 会刷新 `agent_output.actions`，却不会同步顶层列表。R8 删除该 schema、所有 writer 与 React 类型，旧 SQLite plan payload 的额外字段按现有 Pydantic 行为忽略，并用回归证明 active board 只投影到 canonical `agent_output.actions`。同时删除 chat 固定 `executed=0`、CLI 不可达的 “Watch step executed” 文案；真正的 watch event 仍保留 executed/processed/Gate 统计。proposal/task/chat 与 approve/reject 增加 typed 200 response models，OpenAPI 现在明确 proposal 通过 `agent_output` 返回动作、mutation 通过 `action` 返回结果；`/api/state.actions` 继续是 Action Board truth。
+
+正式文档、双语 README、SPEC/PLAYBOOK、架构说明、Moce 示例与 CI 口径同步。Moce partial-hardware 配置改指向干净 SQLite workspace，仓库删除两套会触发 fail-closed 的完整 legacy Markdown runtime 快照，并按当前 driver manifest 修正能力与 Dashboard 操作顺序。用户保留的 `current-architecture-audit.md`、`current-architecture-audit.html`、`system-summary.zh-CN.md` 是阶段快照，不属于 current-doc contract；本轮不修改、不删除、不重新生成。VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 与自动 replan/Level 3 继续冻结，不因 R8 自动恢复。
+
+最终本地证据：Python full `435 passed, 1 warning`；Safety smoke `32 passed`、AST boundary `2 passed`，真实 `driver.execute` 只位于 watch runtime；current-doc/golden/Moce `29 passed`；frontend 独立 `tsc -b` 与 Vite production build 成功，locale 修复后已重建 tracked `physical_agent/dashboard/dist`，并由 source + shipped bundle contract 验证；ignored `frontend/dist` 不作为发布证据；TUI typecheck/build、默认测试 `61 passed`、独立 scenario matrix `11 passed`；`CI=1` 真实 Chromium 完整 `27 passed`；clean wheel 在隔离环境完成 base/server 安装，并验证安装后的 `gui`/`api`、health、index 与 hashed assets 全绿；`git diff --check` 和退役面扫描均 clean。实现 closure commit 为 `c4da4f9`；fork Push run `29476327424`、PR run `29476329954` 均 completed success，headSha 均为 `c4da4f9`。最终 evidence closure commit 为 `33b062b`；fork Push run `29477199756`、PR run `29477202468` 均 completed success，headSha 均为 `33b062b`。
+
+2026-07-16 独立 review-fix 先后发现并修复六类口径/门禁缺口：中英文 README 一度把请求侧描述成会动态加载或以 mock 验证候选 driver，现均改为只做静态 manifest/Python/interface 校验，动态 conformance 明确归属显式 watch 侧工作流；Moce 最小流程仍建议 `chmod 777`，现改为 `dialout`/udev 的最小权限指引；R5 远端 CI checkbox 未按已有事实勾选，R6/R7 与删除证据矩阵又只写了模糊的成功口径，现已按阶段补齐准确 closure commit 与 Push/PR run；Dashboard 通用 `/api/chat` fixture 的 `executed: 0` 已删除，而刻意保留的 legacy internal stream fixture 明确断言公开 SSE 丢弃该字段，锁住两者不同意图；R8 本地证据曾误把 ignored `frontend/dist` 当发布目录，现改为核验 Vite 实际 outDir 与 tracked package resource `physical_agent/dashboard/dist`；R8 第 11 项也不再把当时仍为 🟡 的 SPEC 状态缩写成“完成”，而是精确记录“实现与本地验收完成、等待最终提交和远端 CI”。新增 current-doc 契约逐行解析删除证据矩阵并锁定各 surface 的 commit/run 映射，同时按门槛身份逐项锁定 R8 的 11 个本地 checkbox、正确发布资源与英文请求侧静态校验边界；当时只有 commit/push 保持未勾选，closure 后已按最终证据回写为完成；两份受保护轮次 brief 与三份受保护 current-architecture audit/system-summary snapshots 均未修改。
+
+终审继续发现并修复三项事实分叉：Dashboard locale source 与 shipped bundle 仍残留“mock 动态验证/只有 watch 加载 driver”的旧文案，现改为静态校验边界、重建 tracked dist 并同时锁 source + bundle；主链把 shared `AgentOutput` 协议误泛化成所有入口都有 Add，现明确 React/Web 的可操作卡片、TUI/CLI 的只读 structured draft、`tool_loop` 的 proposal-only pending 提交例外，以及 task/manual/run 的既有直接 proposal 路径；README 又把执行权唯一误写为 loadability 唯一，现明确 request/proposal 不加载、watch 独占 connect/操作生命周期/`driver.execute`，operator `doctor` 仅可为惰性诊断 import/instantiate，绝不 connect/execute。以上均以 current-doc 与 shipped locale 契约回归锁定，未增加 TUI/CLI Add 功能，也未改变生产 Python/TUI 行为。
+
+同轮晚段复核又发现双语 README 的 OpenAI/chat 使用说明仍沿用旧心智：把普通 LLM chat 写成直接回写 proposed actions，并暗示只要启动 watch 就能执行 CLI 显示的 draft。现按实际分流改正：task/manual/run 与 MCP proposal、显式 `tool_loop` 可提交 pending；普通 rule/LLM chat 只持久化 reply/current intent/structured draft，React/Web Add 后才入板，TUI/CLI 只显示；watch 只看已经进入 Action Board 的 action。新增契约直接截取两份 README 的 OpenAI 晚段，禁止旧句并要求 draft/submitted/watch board-only 区分，避免由文档开头的正确段落掩盖后段回归。
+
+### R8.1：阶段 review hardening
+
+阶段 review 发现三处实现缺口。`6d53db3` 把 SQLite 已提交日志作为唯一镜像输入，以第二个 `BEGIN IMMEDIATE` 跨进程序列化 snapshot/read/publish，并通过同目录临时文件、flush/fsync 和 `os.replace` 原子发布 `LOG.md`；mirror-only 失败被限制在 SQLite commit 之后，doctor 仍可诊断 stale revision，execute timeout 的 halt 又提前到持久化之前。`4c9c6a4` 使用既有 `actions.claim_owner` 约束 in-progress Gate evidence，旧 owner pass 只作 stale evidence；review 再以 `c38e3ec` 把 claim-owner read 放到 feedback 之后，挡住 late prior-owner event 与 earlier owner snapshot 的错误配对。`89f84c8` 让 `ChatPlan.agent_output` 的 Pydantic/FastAPI schema 引用 canonical `AgentOutput`，同时保持 runtime dict、JSON alias 与旧 extra-field 忽略边界不变。后续四轮 fix/re-review 又以 `241fe8d` 绑定 terminal final owner，以 `fc282cf` 按 newest raw owner 校验 Gate 并覆盖真实 dependency path，以 `b2c93bb` 将缺失 owner 的兼容 fallback 收窄为 denial-only。
+
+定向/阶段证据保留：Task 1 focused `60 passed`、state/backend/watch/safety group `177 passed`、阶段 full `439 passed`；Task 2 combined `127 passed`；Task 3 API/chat/projection `78 passed`，额外 protocol/state adapters `78 passed`。最终本地证据（2026-07-17）：Python full `462 passed, 1 warning`；TUI typecheck/test/build `61 passed`；frontend `tsc -b && vite build` （3309 modules）与真实 Chromium `27 passed`；clean-wheel base/server-extra smoke 通过；多进程 LOG + halt + Gate owner + OpenAPI + Safety AST + docs/golden/Moce 专项 `71 passed`；受影响 state/projection/API/MCP/watch/safety `152 passed`；`git diff --check`、tracked dist、退役 production markers 与受保护 snapshot diff 均 clean；独立终审经四轮 fix/re-review 后 Critical=0、Important=0、Minor=0。远端 closure 证据（2026-07-17）：implementation/local closure `8438cb7`；fork Push run `29553985591`、PR run `29553987358` 均 completed success，headSha 均为 `8438cb7bf5f356021cb602908552a069e8227bc4`。
+
+本轮已同步修复 spec/plan/evidence matrix/PLAYBOOK 的历史口径，并已更新 draft PR #1 title/body 到 R8.1 范围；PR 保持 OPEN + draft。phase-A closure commit 的 exact-head Push/PR CI 已成功，phase-B 只记录既有远端证据，不预写自身 hash/run。R8.1 不解冻 VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 或自动 replan；只有出现可复现的真实需求并形成显式 SPEC 决策后，才可重启对应条目。
+
+### T4：MOCE TUI 品牌与终端视觉刷新
+
+2026-07-17 用户在真实 Windows Terminal 体验后明确重启 TUI 展示条目，并批准“启动大 Logo + 常驻紧凑标题栏”的 MOCE 暗蓝方案。实现以 `7a968d9` 建立响应式 Banner 与 theme token，以 `69615dd` 把 Banner 和 finalized transcript 收敛进唯一持久 `Static` feed，再由 `83d9efe` 统一 StatusBar、SectionTitle、角色轨道与 round-border 输入框。`ed7cc4a` 引入 finalized assistant 的 heading/list/bold/inline-code 轻量格式化，后续 `4fb0f57`、`e4ea0d4`、`c9981f0`、`a3d1d22`、`7e391b3`、`1d758f5` 按逐条 RED→GREEN review 把换行、嵌套下划线、delimiter run、含/不含外层 pipe 的 GFM table 与嵌套 label 的 link/image 全部收紧为整条 literal fallback。streaming partial、其他角色和旧 action-draft 文本始终不进入格式化器。
+
+验收由 `88f7b5d` 覆盖默认/100/48/未知列宽、完整 App 重绘和 raw stdout 一次性打印；`d25c80e`、`e9f886f` 进一步把物理输出检查从固定 sleep/任意 write 改为 post-Enter 的 `View: status`、`View: chat`、`Snapshot refreshed.` 语义完成标记，并在 250ms delayed client 下证明不会抢跑。最终本地证据：TUI typecheck、render `30 passed`、scenario `16 passed`、API-only safety `1 passed`、full `84 passed`、build 全绿；Python safety `2 passed`，full `463 passed, 1 warning`；`git diff --check` clean；独立 spec/quality 终审 Critical=0、Important=0、Minor=0。Windows 可见启动把 `$Host.UI.RawUI.WindowTitle` 放在子进程脚本内并使用 `npm.cmd`，避免原截图中的外部 `WindowTitle` 命令错误。
+
+首次 push 暴露了两层真实测试环境偏离。exact-head `038c1c6` 的 Push run `29629559330`、PR run `29629560483` 均只有已执行的 Ink TUI job 失败，full/compact 物理用例在 Enter 前超时；`a8deeac` 给 `TestStdin.read()` 增加真实消费计数，发送命令正文后等待消费，再发送 Enter。第二次 exact-head `7d380f9` 的 Push run `29630023334`、PR run `29630024721` 均推进到 Enter 后的 `View: status` 等待才失败；源码核对确认 Ink v5 在 `isInCi && debug:false` 时只即时写 Static，动态 frame 只保存为 `lastOutput` 并延迟到 unmount，因此 hosted runner 不可能在交互过程中从物理 stdout 看到完成标记。这两轮 Push 中 safety 与 frontend+wheel 成功，条件型 Python full/Playwright skipped；两轮 PR 中 Python full/safety、frontend+wheel 与真实 Chromium Playwright 成功。
+
+`647ce53` 因此只在 `tui/scripts/run-tests.mjs` 启动的 Node test child 中把 `CI` 规范化为 `false`，让 `isTTY=true`、`debug:false` 的物理 stdout test harness 在本地与 hosted runner 都走 Ink 非 CI 动态渲染分支；harness 仍是模拟流，typecheck、build、安装与产品 runtime 仍保留真实 CI 环境。Enter 后仍按新的 command-specific stdout 区间等待语义完成，不放松 Logo=1、`rows=10000`、delayed client 或 API call-count 断言。`CI=true npm.cmd test` 在修复前稳定 82/84、修复后 84/84，typecheck/build 全绿；独立复核 Critical=0、Important=0，Minor=1（未来 CI 专属行为须放入独立保留 `CI=true` 的子进程）。
+
+本轮没有修改 FastAPI、SQLite、watch、driver、SafetyGate、Action Board、审批或命令语义；TUI 仍是纯 HTTP API/SSE 客户端。Phase F 其余功能、VNext-3/4、W4/W5/W6.2、F0/F5/F6、B4-vec、registry/read-model 与自动 replan 继续冻结。最终远端 closure：implementation/docs head `9c50067` 的 Push run `29630361521`、PR run `29630363135` 均 completed success，headSha 均为 `9c50067964e5ea184803e83526121388078862f9`；PR 中 Python 3.12 full/safety、Ink TUI、frontend+wheel 与真实 Chromium Playwright 全部成功。phase-B evidence-only 提交只记录既有远端事实，不预写自身 hash/run。
+
+### T4.1：对话式 transcript 与终端宽度修复
+
+根因是 finalized chat 把角色前缀与正文拆成 sibling 后，`Static` auto-width 仍给正文近似整行预算，没有扣除 padding、marker 与 gap；旧测试又用 code point 数低估 emoji/CJK display width。原始 48 列物理输出 RED 实测为 `49 > 48`。`f81b134` 用 `width="100%"` 且正文可收缩的共享 `MessageRow` 统一 finalized/streaming，`>`、`⏺`、`draft ◇` 分别保留 success green、brand blue、warning 的 glyph+颜色双重角色契约；测试改用 `string-width` 后覆盖 24/48/100 列和宽字符，GREEN 时每条物理行都不超过 `stdout.columns`。
+
+动作数据契约只认 canonical Action Board，并且只把本 TUI 会话内已观察到的 non-terminal → terminal transition 单调追加到全局唯一 feed；首次 snapshot 的历史终态、draft、Gate/expectation feedback、feedback-only 与重复 snapshot 都不能产生假的 terminal item，reset 会清本地 generation/seen 状态。`216a0b9` 建立该 tracker 与稳定结果映射；随后 immutable nested alias RED 证明浅层引用会让已打印项随源对象突变，`8139d24` 改为自有 `structuredClone` snapshot。partial clone-batch RED 又证明一个不可 clone 的 action 会截断整批并被错误关闭，`c2f8c7c` 把失败隔离到单项：有效同批项仍追加，失败项保持可重试，恢复为可 clone 后只追加一次。
+
+cancelled/result race 的取舍是宁缺毋滥：approval rejected 可直接确定为 `rejected`；其他 cancelled 必须等同 `action_id`、无 `event` 的 action-result feedback 后才映射为 `failed` 或 `cancelled`。两阶段 RED 先给 cancelled snapshot 时不 append，下一 snapshot 带 failed result 时才 append 一次；safety_gate、expectation_check 或带 event 的 driver feedback 均不能充当结果。notice/App missing-feature RED 则由 `e0215cb` 收口：App 在同一 append-only feed 中按观察顺序加入真实 action，动态区只显示响应式 execution approval notice、精确 action id、既有 `/approve`/`/reject` 和“批准后仍需 watch SafetyGate”，不截获单键，也不生成 y/n/a 或 session grant。
+
+2026-07-20 在 `e0215cb` 的 controller fresh gate：TUI typecheck exit 0、full `108/108`、build exit 0、activity/render/scenario 专项 `70/70`；Python safety `27/27`，full `463 passed` 且仅 1 条已知 Starlette `TestClient` deprecation warning；`git diff --check` 与禁止 TUI driver/watch/sqlite import 扫描均 clean。逐任务终审和 whole-implementation broad review 均 Critical=0、Important=0、Minor=0，broad verdict Ready to merge=Yes。implementation/docs exact head `357a4898fc19704179e15c1614f49e49f794263f` 的 Push run `29695566978`、draft-PR run `29695568726` 均于 attempt 1 completed success。Push 中 Ink TUI、frontend build + packaged wheel smoke 与 Python safety 成功，PR-only Python full/Playwright jobs skipped；draft-PR 中 Ink TUI、frontend+wheel、Python 3.12 full、Python safety 与真实 Chromium Playwright 成功，generic matrix job skipped。
+
+本轮未修改 FastAPI、SQLite、action/feedback wire、watch、driver、SafetyGate、SAFETY.md、parser/审批语义、时间戳或 feature-freeze；既有 `/approve`、`/reject` 行为不变，TUI 仍是纯 HTTP API/SSE 客户端，其他冻结条目不因 T4.1 完成而解冻。
+
+### T4.2：finalized assistant 块级 Markdown
+
+T4 的 whole-message fail-closed 能保住全文字符事实，但真实 LLM 回复里一个嵌套列表会让相邻合法 heading、bold、inline code 一起退化。T4.2 选择无新依赖的 scanner + controlled inline parser，把 fallback domain 收窄到 block：只格式化 finalized assistant；streaming/user/draft/system/unknown role 仍 literal；table、link、HTML、quote、task list、畸形 inline/list 等 unsupported block 原样保留，reserved `action-draft` fence 从 opener 到 closer/EOF 逐字呈现且绝不升级为 Draft/action。
+
+`3b17ec6` 以纯 TypeScript block model 实现 heading、paragraph、最多三层 mixed list 与顶层普通闭合 triple-backtick fence。list candidate 允许空格/tab 收集连续 marker 行，但 item grammar 只认 ASCII-space separator；indentation stack 的任意正增量只推进一级，第四个 distinct depth 或 unknown dedent 整块 literal。fence language 只认设计内 ASCII token，普通 fence 仅控制 presentation，不读取 metadata/Action Board，也不调用 proposal/parser。`7c0a239` 把 block/inline model 接到 Ink，`25f20c4` 以独立 prefix/body `HangingRow` 证明 24/48/100 display width，并保留 paragraph 每个源换行。
+
+broad review 在提前 push 的 `25f20c4` 后发现表格边界、空 fence、code rail 与物理内容生存缺口；`499487c`、`8d578be`、`fe0b477` 均先以 focused RED 锁住再作最小修复，最终独立 spec 与 quality re-review 各自 Critical=0、Important=0、Minor=0。2026-07-20 controller fresh gate 得到 TUI typecheck/build exit 0、parser+renderer `53/53`、scenario `24/24`、full `127/127`；Python safety `27/27`、full `463 passed, 1 warning`，唯一警告是已知 Starlette `TestClient`/`httpx` deprecation；禁止 TUI driver/watch/sqlite import 扫描 exit 1（无匹配），`tui/package*.json` 零变化，implementation diff 仅 7 个 TUI 文件，working/index `git diff --check` clean。pytest 首次 full 因旧 `.superpowers/sdd/pytest-tmp/pytest-of-17003` 属于另一安全主体而产生 `PermissionError`；切到同一指定根目录下本轮独立子目录后，最小 `tmp_path` `1/1` 与 full 均通过，未改产品代码、未删除旧目录。
+
+live smoke 前只读确认 `physical-agent.yaml` 唯一 driver 为 `mock_arm`、SQLite Action Board 只有 completed 且 `pending/in_progress=0`、既存 API 返回 `ready=True` 且 unsafe action=0。已有两个用户启动的 API/watch 进程保持原样；Windows 应用自动化安全规则禁止控制 Terminal，故没有启动无法可靠交互/归属清理的额外窗口，也没有声称观察到 nondeterministic LLM 长回复。deterministic scenario 与 24/48/100 physical stdout tests 是本轮权威视觉证据。
+
+历史门禁偏离：Task 3 在 independent review 前提前 push `25f20c48eb8bd9ac4d40aa9bcce120ae42acf7a0`；该 head 的 Push run `29723405783` 与 draft-PR run `29723407703` 虽均 attempt 1 completed success，但 review 后已有三笔 repair，因此这两次 run 明确作废为 closure 证据，不以事后成功重写门禁顺序。reviewed implementation/docs exact head `d72e187d340a2517d0dd005830977dd1b2babb0c` 的 Push run `29725427128` 与 draft-PR run `29725429981` 均 attempt 1 completed success，`headSha` 精确匹配：Push 的 Ink TUI、frontend+wheel、Python safety 成功且 PR-only jobs skipped；draft-PR 的 Ink TUI、frontend+wheel、Python 3.12 full、Python safety、Playwright 成功且 generic matrix skipped。全程未修改 FastAPI、API contract、SQLite、watch、driver、SafetyGate、SAFETY.md、审批/freeze 状态或 package dependency，其他冻结项不因 T4.2 解冻。
+
+final whole-branch review 在 evidence-only head `a89be0658a05f03ae20a9e2b707f6966363a2131` 找到 matching shortcut/image shortcut reference 的 content-preservation 缺口：definition 位于后续 block 时，旧 per-block unsupported check 无法让先前 shortcut literal，受控 inline parser 会隐藏其中 `**`。`f1ed6c773cebac930fd11578b6ef653e259cf6fa` 以 document-wide normalized label set 把匹配 shortcut、image shortcut 与 definition 保留为 block-local literal，并复用实际 `parseFence()` consumption 排除 fenced pseudo-definition；未新增 link renderer、destination resolution 或 CommonMark dependency。严格 RED/GREEN 后，exact-commit 报告为 parser+renderer `60/60`、full TUI `134/134`、typecheck/build exit 0、Python full `463 passed, 1 warning`；closure controller fresh docs+safety `24/24`、safety `27/27`。最终 re-review Critical=0、Important=0、Minor=1，唯一 Minor 是已接受的非阻塞 Terminal smoke omission。
+
+先前 `d72e187` 的 Push/PR `29725427128`/`29725429981` 与 `a89be06` 的 Push/PR `29725619311`/`29725622285` 在各自 exact head 上均成功，历史事实不撤销；但 `f1ed6c7` 改变最终产品树，所以这些 run 已 supersede，不能作为新 final head closure 证据。SPEC 因此曾退回 🟡。包含本修复与本地 living-doc evidence 的 implementation/docs exact head `6631f35b22eba6c6e57394c07fec3a26254aa686` 已由 Push run `29728361574` 与 draft-PR run `29728365131` 在 attempt 1 completed success：Push 的 Ink TUI、frontend+wheel、Python safety 成功，PR-only jobs skipped；draft-PR 的 Ink TUI、frontend+wheel、Python 3.12 full、Python safety、Playwright 成功，generic matrix skipped。安全/冻结边界、API、SQLite、watch、driver、SafetyGate、SAFETY.md、审批和 package dependency 均未改变。
+
+### C6：Dashboard 信息架构重排
+
+本轮把 Dashboard 的内容归属收敛为 8 个内部 page key：`chat` 独立承载原 Overview 中的 ChatPanel；`overview` 只保留 StateOverviewPanel 与 RobotsPanel，其中任务图已由 StateOverviewPanel 内部组合；`state` 接管原 `world/safety` 并成为四页签 ContextTabs 的唯一入口；`hardware` 继续组合 HardwarePanel、ConfigPanel 与 RobotsPanel，因此可直接退役 `robots`。Actions 页保留 ActionBoard，但 ContextTabs 通过 `only="feedback"` 只渲染 feedback，消除了侧栏高亮与内容页签互相矛盾的双导航。
+
+ProposalPanel 沿用既有桌面侧栏/窄屏 Drawer 两种容器，以版本化 localStorage 按 `PAGE_KEYS` 白名单保存每页偏好：Actions 无偏好时默认展开，其他页面默认收起；收起时组件不挂载，聊天 streaming 不再带动常驻 Proposal 子树更新。ActionBoard 的折叠偏好同样是展示态：空板只留单行灰色提示，普通 pending 留计数并折叠；只要 pending 中存在 `metadata.approval.required`，就忽略用户偏好、强制显示 warning 与审批按钮，并移除折叠入口。最终 review 补强了两个安全/可用性组合：Tour 锚点改为始终存在的导航项；窄屏 Actions 有待审批时，审批信号优先抑制 Proposal Drawer 并禁用打开按钮，待状态解除后恢复原按页偏好。
+
+验收采用真实行为而非只看 DOM 宽度：C6 五条专项锁定 8 项顺序、旧 key 负断言、新归属正断言、所有非 Actions 页默认不挂载 Proposal、按页持久化，以及 ActionBoard 三态；既有 reasoning summary、chat stream、proposal、robot 与 AgentOutput 用例按新导航迁移。最终 frontend `tsc -b && vite build` 通过（3309 modules），真实 Chromium `33/33`，Python full `469 passed, 1 warning`，Safety smoke `32 passed`，TUI typecheck/build 与 `138/138`，clean-wheel smoke 通过，代码复审 Critical/Important/Minor 均为 0。没有修改 Python、API/SSE、SQLite、ChatPlan、TUI view 协议、watch、driver、SafetyGate 或 SAFETY.md。
+
+后续布局收口把桌面对话页主区、Chat Card body 与消息区串成一条有界 flex 高度链：卡片占满 header 以下的可用视口，长消息仍只在 `.bubble-stage` 内滚动，输入区保持可见；该规则只在 `min-width: 821px` 生效，避免覆盖既有移动端高度策略。提案栏不再让 icon 与文字共同继承 `writing-mode`，而是把箭头、编辑图标和独立的纵排文字按 column 居中。新增 Chromium 几何用例在 1600×900 下锁定卡片底部 12px 间距、文字纵向/居中/不越界及点击展开行为；隔离 `.tmp/e2e` 后端后 full `34/34`，frontend build 与 Python `469 passed` 通过。
+
+2026-08-20 PR CI 连续两次只在纵排文字 `height > width` 失败，其他 36 条 Chromium 场景通过；本机 Browser 1600×900 则得到 computed style `vertical-rl/upright`、文字框 `14×32`、居中偏差约 0 且点击展开正常。根因是测试把 CJK 字体边界框比例误当成 CSS 竖排语义。修复后用 `getComputedStyle()` 断言 `writing-mode`/`text-orientation`，仍保留宽高非零、居中、不越界与真实交互检查；full Chromium `37/37`。同轮将官方 `checkout/setup-python/setup-node` actions 升到 v7，frontend/TUI CI 运行时升到 Node 24，移除 hosted runner 的旧 Node 20 action 警告，不改变 CI 触发或阻塞策略。门禁：Browser console 0 warning/error、frontend build（3312 modules）、TUI typecheck/build + `138/138`、Python full `639 passed, 2 warnings`；未改生产 UI/CSS、API、SQLite、watch、driver、SafetyGate 或 SAFETY.md。
+
+### C6.1：Dashboard 纯前端 URL 页面状态
+
+新增 `frontend/src/navigation.ts`，把 8 个 `PAGE_KEYS`、`PageKey`、query 解析/写入与 `popstate` 同步收口为 `usePageNavigation()`。有效 `?page=` 直接选页；缺省 `/` 保持 overview 且不主动改写；非法或已退役 key 以 `replaceState` 归一到 `?page=overview`。Sidebar 与 action 内跳转统一走 `navigatePage()`，写入时保留其他 query/hash，同页点击不制造重复 history。Hook 只同步页面选择，Dashboard 外壳、SSE、snapshot、chat stream 与按页 Proposal 偏好均不 remount。
+
+没有引入 React Router 或状态管理依赖，也没有增加 clean-path/404/FastAPI fallback：当前产品是根路径托管的本机工具，query 足以表达 8 个稳定页面，避免扩大后端 surface。三条新增 Chromium 用例锁定 direct+reload、query preservation+Back/Forward、invalid/retired normalization；全量真实 Chromium `37/37`。frontend build（3310 modules）、Python full `469 passed, 1 warning`、Safety smoke `32 passed, 1 warning`、TUI typecheck/build 与 `138/138`、clean-wheel 均通过；in-app Browser 另行复核 URL 与可见内容一致，console 0 warning/error。没有修改 FastAPI、API/SSE、SQLite、watch、driver、SafetyGate 或 SAFETY.md。
+
+### C5：Dashboard 可读性与 i18n 收口
+
+C6/C6.1 收口信息架构与 URL 状态后，仍有 9 个组件（ProposalPanel、StateOverviewPanel 及其局部子卡、CapabilityCard、WorldObjectsTable、AgentTaskGraphCard、FeedbackTimeline、EventsPanel、MemorySearchPanel、UploadPanel）完全没接 `useMessages`，中文模式下常驻提案栏与概览首屏整块显示英文；ActionBoard 状态段还残留 `Running` 硬编码，与同组 `labels.actions.*` 形成「待处理 / Running / 已完成」中英混排。本轮补齐：`en.ts` 为源、`zh.ts` 覆盖，新增 proposal/overview/capability/world/taskGraph/feedbackTimeline/events/memorySearch/upload 九组词条；组件经 `useMessages()` context hook 就地取值，不改任何调用点——这是 i18n 基础设施当初选 context 而非 prop 透传的红利。
+
+可读性三项：feedback 时间线的 Raw 元数据摘要改原生 `<details>` 默认折叠（`JsonSummaryLine` 新增 opt-in `collapsible`，仅 FeedbackTimeline 启用，Params/Constraints/Payload 保持内联）；历史反馈徽章降饱和，与动作板当前状态区分，避免「待处理 0」旁并列历史 pending 徽章被误读；补全局 `:focus-visible` 描边，此前全仓 `:focus` 为 0。空状态高度与表格列宽属视觉判断项，按 brief 保守处理（列宽本有显式值，未盲调）。
+
+一处 e2e 回归教训：折叠 Raw 后 `F2 readable context` 用例断言 `context-tabs` 含 `"Raw:"` 失败——折叠 summary 只渲染 `Raw` 无冒号。修法是保留折叠、在 summary 补回冒号，而非改测试，既过断言又不丢 F2「结构化信息可读」契约。分工为 Claude 直接编辑、用户本机跑门禁：`tsc -b` 与 `vite build`（3310 modules）通过，真实 Chromium `37 passed`；沙盒缺 Linux 原生 rollup 与 Chromium，故构建/E2E 全部由用户执行。未触碰 Python、API/SSE、watch、driver、SafetyGate 或 SAFETY.md。收尾同轮补齐 `SettingsPanel`（state 摘要 + state-backend 诊断 + LLM 表单标签）、`HardwarePanel`（生成结果字段与 model placeholder）、`RawDebug` 空态、`ChatPanel` 清空 aria 的残留硬编码，组件层 `label=`/`description=` 英文归零；技术诊断词（Source of truth、SQLite schema 等）给出可辨识中文而非直译。
+
+### C7：流式聊天期整树重渲染收口
+
+brief §2 记的 P1：`streamMessages` 挂在 Dashboard 顶层，聊天流式输出时每个 delta 都 `setStreamMessages`，令 Dashboard 及同屏子组件每 token 重渲染一次。核查时又发现一处 brief 未点破、实则更贵的热点：`ChatPanel` 的 `items` `useMemo` 依赖里含 `messages` 与两个每渲染换新引用的 handler（`onAddDraft`/`onEditDraft` 是 Dashboard 里的普通 `function` 声明），流式期该 memo 每 token 失效，导致**整段历史消息全量重跑 `<ReactMarkdown>` 解析**，成本 O(历史条数 × token 数)。
+
+本轮按 brief 的方案①轻量版 + ② + ③全部落地：
+
+- **①delta rAF 攒批**：`App.tsx handleChat` 通过 `createStreamingFrameBatcher` 调度，delta/thought 只累加到局部 `assistantContent`/`reasoningSummary` 并请求一次 `requestAnimationFrame`，把每 token 一次 `setState` 合并为每帧至多一次。`done`/`aborted`/`error` 三个终止分支先 `cancel()` 再走原逻辑（终态内容用完整 `assistantContent`，不丢字）；`finally` 用 `settle()` 结算 endedEarly 情形残留的最后一帧，防丢尾 token。刻意保留原 `idleWatchTick` SSE 去重逻辑（brief 明确"别动"）。
+- **②ChatPanel 拆条 memo**：`MessageContent` 用 `React.memo` 包裹；`updateStreamingAssistant` 本就对非流式消息返回原对象引用，故历史条 `message` 引用稳定。为让 memo 真正命中，`ChatPanel` 内 `handleAddDraft` 改 `useCallback`，`App.tsx` 的 `handleAction`/`handleEditDraft` 改 `useCallback`（依赖 `message` / `setActiveProposalExpanded`，二者在聊天页稳定）——即 brief 追问预警说的"memo 必须配 useCallback，单加 memo 无效"。效果：流式期只有正在生长的那条消息重渲染并重解析 markdown，历史条全部 memo 命中，热点从 O(历史) 降为 O(1)。
+
+- **③常驻组件 memo + handler 稳定**：`StatusBar`/`SidebarNav`/`ProposalPanel` 各改为 `export const X = memo(XBase)`；新增 `handleRefresh`/`handleOpenInspector`/`handleTask`（`useCallback`）替换传给它们的 inline 箭头。`navigatePage` 本已是 `useCallback([])`、`onCollapse` 是 setState setter，天然稳定未改。逐个核对四个 memo 组件在流式期收到的 props 全为基本类型或稳定引用（无 inline object/array prop），故流式期全部 bail；快照真更新时 props 变化仍正常重渲染，未牺牲正确性。
+
+**回归测试（按 `docs/superpowers/specs/2026-07-26-c7-raf-batching-test-design.md`）**：内嵌在组件闭包里的 rAF 生命周期只能靠完整浏览器流程间接验证，故按设计文档把它提取为 `frontend/src/streamingFrameBatcher.ts`——`createStreamingFrameBatcher({flush, requestFrame, cancelFrame}) => {schedule, settle, cancel}`，帧 API 可注入（生产用浏览器帧 API，测试注入手动帧队列，因此不依赖真实刷新率/计时器/绘制）。`App.tsx handleChat` 保留 `assistantContent`/`reasoningSummary` 聚合与 `setStreamMessages` 回调，只把 schedule/settle/cancel 生命周期换成 batcher，事件语义、最终消息内容、错误处理与 DOM 均不变。测试沿用 `@playwright/test`、不使用 `page` fixture、不引 Vitest/Jest：新增 `frontend/unit/streamingFrameBatcher.spec.ts` 与独立的 `playwright.unit.config.ts`（`npm run test:unit`），后者不配 webServer，使 Node 级契约测试无需 API/dev server 或浏览器即可运行，与需要真实 Chromium 的 `test:e2e` 分开。独立复审发现，已取消/结算的旧 rAF 回调若被环境迟到执行，可能误消费刚排入的新一轮 flush；实现因此加入单调递增 generation，旧回调只对自己的 generation 生效。五条 batcher 契约覆盖 burst、settle、cancel，以及 cancel→新 schedule、settle→新 schedule 两种陈旧帧跨代执行场景。变异验证按文档执行：临时移除 `schedule()` 里"已有帧则不重复排队"的守卫后，burst 用例如期转红（`actual: 3, expected: 1`），恢复实现后全绿。
+
+**block 级 memo（2026-07-27）**：②只做到 per-message，正在流式那条仍每帧整段重解析。本轮补 `frontend/src/markdownBlocks.ts` 的 `splitMarkdownBlocks()`，`ChatPanel` 的 `MarkdownBody` 逐块渲染、`MarkdownBlock` 各自 `memo`，把这条消息内部从 `O(整段)` 压到 `O(尾块)`。**未引新依赖**：采用保守切分器——只在下一行顶格且非列表/引用/缩进/未闭合 fence 内部时才切，宁可合并也不误切。切分保持无损（`join("") === 原文`），空行分隔符归属前一块，因此消息增长时已完成块逐字节不变。独立复审发现，跨块渲染会破坏 CommonMark 文档级 reference definition；切分器现在把任意 `]:` 视为可能的定义并保守返回整篇单块，从而覆盖根级、容器内与多行 label。误判只会放弃该条消息的分块优化，不改变输出；漏判则会改变渲染，因此这里明确偏向 fail-safe。**与 draft 的关系**已核实无冲突：`structuredDraftActions()` 只接受 `physical-agent/agent-output/v1` 结构化信封，draft 卡片由 `metadata.agent_output` 驱动、是正文的兄弟节点，且只在 `done` 才到达；分块只是 `message.content` 的纯渲染优化，绝不反向喂给 draft 提取。十条 block 契约覆盖无损重组、fence、松散列表、引用/缩进代码、普通块切分、未闭合 fence、流式增长稳定性，以及根级、容器内、多行 label 三种 document-wide reference link；后三项均用真实 `ReactMarkdown` 静态渲染断言。
+
+验收：`npm run test:unit` 15/15（batcher 5 + blocks 10）；`tsc -b && vite build` 通过（3312 modules）；隔离后端真实 Chromium 37/37；Python full 469/469（2 条环境 warning）。未触碰 Python、API/SSE、watch、driver、SafetyGate 或 SAFETY.md。未做项留后续：尾块未闭合降级、代码高亮、SSE revision 去重（需后端加字段）、长会话虚拟列表、`streamMessages` 下沉（Dashboard 本体每帧仍重渲染一次，但 memo 子组件已退出，成本属可接受残余）。
+
 ## 3. 关键决策与偏离（跨阶段汇总）
 
 1. **A1 曾被"替代"后补做**——教训：spec 状态要回写，不能只散落在 handoff。
@@ -217,7 +575,7 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 8. **审批死胡同在 F1 收口**：不新增 runtime backend 状态机状态，放行记录落在 action metadata；Actions 板审批改变"是否等人"，不改变 SafetyGate 校验链。
 9. **项目根 `physical-agent.yaml` 是 ignored 本地运行配置**（F0）：本轮按要求切到 `planner: llm` 但不强行纳入版本库；共享默认仍以 `config.py` 的 `rule_based` 与模板为准。
 10. **F0 补测凭据源固定为 `.env`**：真实 provider 测试使用项目 `.env`，实验命令用空 settings workspace 避免旧 `workspace/.llm.json` 覆盖；GUI/runtime 的本地设置机制暂不重构，留给后续配置收口。
-11. **退役 active backend 与保留迁移 reader 分离**（B6）：运行态只支持 SQLite；旧 Markdown 文件只作为迁移输入读取，迁移 reader 不实现 `StateStore`，不进入 factory，也不承担新功能字段。
+11. **[已被 R3 取代] 退役 active backend 与迁移 reader 分离**（B6）：B6 当时只把运行态切到 SQLite 并暂留迁移 reader；R3 已提前结束该兼容窗口，当前版本不再读取旧 workspace，只保留 SAFETY/LOG sidecar、legacy fail-closed 检测与 `9072b4e` 历史救援。
 12. **两个 Approve 必须拆语义**（F1）：Chat draft 的按钮叫 Add to Actions，只代表"创建 action"；Actions 板的 Approve execution 才代表"放行 requires_approval action 被 watch claim/execute"。
 13. **approval.required 不信任认知侧或 UI**（F1）：LLM draft、前端表单、API caller 都不能决定是否需要审批；后端每次写入/读取/claim 前按真实 robot/capability 重新归一化。
 14. **raw/debug 是兜底，不是主界面**（F2/F2.5）：已知协议字段仍写定制组件；unknown/raw/private 字段可以折叠展示，但优先用 AntD 原生 Tree 或轻量摘要，避免把"漂亮 JSON"误当成可读产品。
@@ -228,7 +586,7 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 19. **Typer CLI 与 Ink TUI 并存**（T）：Typer 继续管脚本化/自动化，Ink 管 SSH/无 GUI/开发者日常交互；TUI 是独立 Node 包，不塞进 Python CLI。
 20. **TUI 是纯 API/SSE 客户端**（T）：TUI 不直接读写 SQLite/workspace，不 import watch/runtime/driver，不新增硬件控制命令；审批只解除“等人”，不改变 SafetyGate。
 21. **前端偏好用轻量字典与 AntD token，不上重库**（C4/E3）：当前需求只需要高频文案和主题切换，i18next 与新 UI 库继续不引入。
-22. **默认 CI 测安全契约，full run 手动收口**（CI-lite）：自动阻塞项只覆盖安全边界和主 GUI 构建；慢 e2e、TUI 与 Python 版本矩阵提供信号但不默认卡住日常重构。
+22. **[已被 R2.1 取代] CI-lite 的初始宽松门禁**：CI-lite 当时只阻塞安全与主 GUI；R2.1 起 TUI 在 push/PR 阻塞，PR 还阻塞 Python 3.12 full pytest 与真实 Chromium Playwright。Python 3.11/3.12 全量矩阵继续按需手动运行。
 23. **TUI upload 只通过 API**（T3）：本地文件读取只用于构造 multipart `POST /api/upload`，不直接写 workspace/uploads，不调用后端路径式 ingest 作为交互入口，untrusted/memory/chunks 仍以后端结果为准。
 24. **TUI 不做 YAML 编辑器**（T3）：config 视图只读，robot 注册只调用既有 `POST /api/config/robots`；编辑已有 robot 或任意 yaml 字段继续由人手改配置并重启 watch。
 25. **终端 raw fallback 只做摘要**（T3）：Ink 里没有 dashboard 的可折叠 JSON tree，默认展示已知字段与短 raw summary，避免把 config/robot/upload 视图退回整页 JSON。
@@ -238,6 +596,74 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 29. **TUI 启动参数接受裸 API URL**（TUI-api-arg-fix）：Windows/npm/tsx 链路可能吞掉 `--api` flag；CLI 入口兼容 positional URL，保持文档命令和实际落地命令都能启动，不改变 TUI 的 API-only 边界。
 30. **TUI 命令验收以场景文件为真源**（TUI-command-acceptance）：命令级回归不只测 parser 或组件，而是用 `.scenario` 记录输入、mock API/SSE、输出与状态变化；新增命令必须更新场景和 `docs/tui-command-matrix.md`，避免 README/帮助与可测行为分叉。
 31. **audit 文档展示先落静态 docs 页**（Audit-doc-html）：这轮目标是把已有审计内容呈现出来，不是把 audit export 接入 Dashboard；选择 `docs/current-architecture-audit.html` 可直接打开、零运行态依赖、零 SafetyGate/watch/API 触碰，Dashboard 内页预览继续留作 F2 远期后续。
+32. **ProposalService 是 application use case，不是 Agent runtime**（VNext-0）：它只负责 task/action → proposal → pending board；Chat reply、审批、Gate、执行、观察与自动重规划不应继续塞入该类。
+33. **typed metadata 先兼容 wire，再逐步升级消费者**（VNext-0）：`Action.metadata` 暂时保持 dict/JSON，已知字段经 v1 Pydantic 模型解析且未知扩展保留；不能因为有强类型 view 就声称 frontend/TUI 契约已经统一。
+34. **execution_mode 以实例配置为真源，默认 hardware**（VNext-0）：manifest 只描述 driver 是否支持 simulation，不能替当前连接声明“这是模拟器”；新硬件注册默认 hardware，simulation 必须显式选择。
+35. **ChatRuntime 永不推进 watch**（VNext-0/R4）：旧自动推进参数先降为无执行语义的兼容形状，再由 R4 完整删除；driver 动态验证也必须进入未来显式的 watch-side conformance，而不是在 driver coding agent 内 allowlist `execute()`。
+36. **AgentOutput 不是 raw model output**（VNext-1）：模型只能产生不可信 decision/action intent；只有 trusted `PlanCompiler` 可以注入系统任务、可信 owner/status 与 Gate 依赖。
+37. **每个物理 Action 必有唯一 GateTask**（VNext-1）：`SafetyGateTask` mandatory、watch-owned，既不是 Action 也不是 tool；caller 提供的 `safety_gate=passed` 或自定义 task graph 不具权威性。
+38. **approval、Gate 与 verification 是三个不同义务**（VNext-1）：approval 决定是否等人，Gate 在执行前裁决，F4 expected 在执行后诊断；三者不能合并成一个泛化 status。
+39. **Run/Turn/Event 是闭环账本，不是心智模型起点**（VNext-1）：先稳定 compiled task DAG 与结构化 Gate feedback，再建立生命周期、恢复和 timeline，避免给旧的 Action[] 模型只套一层事件外壳。
+40. **Gate pass 与 reject 都是 watch 事实**（VNext-2）：两者都写结构化 feedback/checks/digest；AgentOutput 只声明待履行的 Gate 义务，不能预填 outcome。
+41. **task status 是 application materialized projection，不是执行权威**（VNext-2）：服务端用 Action Board、approval metadata 与 watch feedback 覆盖 compiled 初始状态；客户端只消费结果，不能写回 Gate 完成，也不能把 projection 冒充持久化 obligation engine。
+42. **`executed=0` 不代表没有状态变化**（VNext-2）：Gate reject 会处理 action、写 feedback 和终态却不调用 driver；watch/API/TUI 以 `processed/gate_decisions/state_changed` 判断刷新。
+43. **compiled topology 与 materialized state 分离**（VNext-2）：PlanCompiler 决定不可绕过的节点/边；output_projection 只把 board/feedback 事实映射为当前 status，不得修改 topology 或制造 Gate pass。
+44. **ChatPlan 是 presentation singleton，不是 task truth**（VNext-2）：chat reply 可以覆盖 plan 文档，但 API/MCP/GUI 必须从 active Action Board 重建义务，不能让 pending action 因聊天消失。
+45. **driver completed 不等于 Verification completed**（VNext-2/F4）：有 expected 时，AgentRuntime 必须等 `expectation_check` 终态；materializer 在间隙显示 verification checking。
+46. **planner 回灌必须有事实优先级和预算**（VNext-2/F3）：contextual path 可见 SAFETY、feedback、previous output，但 feedback 只保留预算内近期结构化信息；这提供下一轮依据，不默认触发自动重试。
+47. **Gate 必须检查实际执行 timeout**（VNext-2）：capability override 与 watch default 先求 effective timeout，SafetyGate 的 max policy 和 `driver.execute()` 共同使用，避免“未配置 capability timeout 就漏检 default”的缝隙。
+48. **workspace runtime lease 是软件执行者真源**（W6.1）：per-robot busy check 只管 action overlap；Watch 必须先持有唯一 named lease 才可 connect/heartbeat/claim/observe/halt，第二实例 fail closed。
+49. **不可能依赖必须终态化**（VNext-2）：waiting dependency 保持 pending；unknown/cancelled 或级联 impossible dependency 则显式 rejected/cancelled，并写 verification skipped，避免永久等待。
+50. **feedback append 原子不等于 Event ledger**（VNext-2）：事务追加解决 lost update，但 history 仍是单文档列表，没有 sequence/cursor、独立事件表、保留策略或 Run correlation。
+51. **actions batch 原子不等于 task graph 原子**（VNext-2b/VNext-3）：`append_pending_actions()` 保证多 action 全有或全无；AgentOutput graph 仍是派生/plan 数据，尚无持久化 task rows 可与 action batch 同事务提交。
+52. **executor owner 必须贯穿 claim 与 terminal CAS**（W6.1）：每次 Watch setup 使用新 owner；过期 action 被 successor 重领后，旧 owner 的 completed/cancelled 写入必须返回失败并触发 fatal stop。
+53. **失租后的旧 owner 不得善意 halt**（W6.1）：halt 本身也是物理副作用；successor 接管后，stale shutdown 只能断开自己的 transport，不能发送可能干扰新 owner 的 halt。
+54. **reset 不能抹掉活跃 ownership**（W6.1）：workspace reset 与 lease acquire/renew 串行；active lease 时 fail closed，避免删表制造 split brain。
+55. **数据库 lease 不是设备 fencing token**（W6.2）：它能阻止下一次受检查的软件操作，却无法撤销 in-flight I/O 或让硬件拒绝旧 epoch；实机 HA 接管仍需 driver/transport/device 层协议。
+56. **先减兼容面，再扩 Agent runtime**（R0）：VNext-3/4、W4/W5/W6.2、F0 后续、F5/F6、B4-vec、registry/read-model 与自动 replan 在 R0-R8 期间冻结；收口后按真实需求重新排序，不自动恢复旧排期。
+57. **legacy GUI 删除以用户任务 parity 为门禁**（R1.5/R2）：保留命令体验但只启动正式 FastAPI+React；仍支持的任务必须先覆盖并测试，违背 proposal-only 边界的旧能力则显式退役并给替代，不能静默消失，也不机械复制危险语义。
+58. **迁移入口退役不等于删除 safety/log sidecar**（R3）：一次性 Markdown reader/full Workspace 可以删；`SAFETY.md` 文件真源、`LOG.md` 镜像和旧目录 fail-closed 检测属于当前生产安全边界，先抽聚焦 adapter。提前结束迁移窗口以 `9072b4e` 独立 worktree 作为救援指针。
+59. **structured output 必须独立于 fence 生产**（R5/R7）：从 `action-draft` 反向解析出的 AgentOutput 不是新通道；先建立 typed Chat Turn，以 structured actions 生成兼容 fence 并双轨验证，R7 再完整删除 fence。
+60. **Action Board truth 与 proposal action payload duplication 分开**（R6/R7）：`/api/state.actions`/SQLite board 永久保留；只删除已有 `agent_output.actions` 替代的 task/chat/manual proposal 顶层 `actions/action/draft_actions`，approve/reject mutation result、envelope/status/correlation 和内部 `ProposalResult.actions` 不在此列。
+61. **统一协议，不强行统一 presentation**（R6）：React 与 TUI 可以保留不同 formatter/viewmodel；只统一后端 `AgentOutput`、projection 和 owner/status/Gate 解释，避免跨浏览器/终端的伪共享抽象。
+62. **`watch_enabled` 不是 executor health**（R1.5）：真实执行者状态必须合成本进程 service phase 与 SQLite active lease；driver/hardware health 继续由 capabilities/runtime profile 单独表达。
+63. **安全初始化用原子发布且不拥有 watch**（R1.5）：首次初始化 handler 只能创建 config/workspace；已有 config 不覆盖，并发创建不能被 TOCTOU 截断；执行器由 lifespan 自行等待和接管。
+64. **保留 `gui` 命令，不保留第二 controller**（R1.5）：命令兼容通过正式 FastAPI app factory 实现；legacy 模块只在 R2 门禁通过前作为回退存在，不再是默认入口。
+65. **真实 setup 失败不自动高频重连硬件**（R1.5）：missing init/external lease 可以安全轮询；driver connect/setup 错误 degraded fail-stop，交给显式进程生命周期重试。
+66. **Dashboard 是 wheel package resource，hashed build 必须去陈旧化**（R1.5）：源码 cwd 只能做开发 fallback；增量 wheel 在复制前清目标 dist，并验证 wheel 资源集合与当前 Vite 输出严格相等。
+67. **structured streaming 只能有一次权威决策调用**（R5）：同一 provider stream 同时承载 reply 与 action intents；format fallback 只允许发生在零 byte 阶段，已经产生 byte 后失败就终止该 turn，不能再调用模型拼接第二份 actions。A1.1b 只在非流式且 canonical output 尚未接受或持久化时，对 JSON/Pydantic 契约错误做至多一次修复；它不是自动 replan，也不适用于 provider/refusal、Gate、expected 或 action 失败。
+68. **兼容 fence 只曾是 structured output 的临时投影，不是输入**（R5/R7）：R5 期间 draft IDs/dependencies 先稳定、compiler 后注入 Gate，再从同一 actions 写 fence；后端从未 fence → AgentOutput。R7 后连该投影也不再输出。
+69. **Stop 的语义包含上游资源释放和零 draft persistence**（R5）：只停浏览器渲染不够；abort 必须 close provider iterator，并在 compile/persist/done 前复查，partial assistant 可留审计但不能带可提交 draft metadata。
+70. **terminal persistence 必须 exactly-once**（R5）：SSE `done` 已落 completed 后，consumer close 只是资源清理，不能再落 cancelled 或降级 ChatPlan。
+71. **compatibility projection 不能污染 canonical message**（R5/R7）：`AgentOutput.message` 保存 base reply；fence 只属于已结束的 R5 双轨 wire reply，并已在 R7 单独切除。
+72. **历史 fallback 必须有结束边界**（R5/R7）：R5 双轨窗口曾允许无标记历史消息解析 fence；R7 后旧消息只作普通文本，任何 reply 正文都不得提升成 proposal，唯一 Draft 来源是 compiler-owned `AgentOutput`。
+73. **turn correlation 读 tool result，不读 Action Board 差分**（R6）：tool-loop 的 submitted actions 由每个 tool step 的 `AgentOutput.actions` 明确归属；Action Board 只负责运行事实，不能用前后 diff 猜本轮输出，否则并发 proposal 会串入错误 turn。
+74. **真实 structured browser fixture 先发布 capabilities、再关闭 setup runtime**（R5-browser-gate）：默认 E2E 的 `init + api` 不发布 runtime capabilities，rule-based chat 会正确返回 reply-only。真实主链验证选择调用正式 `physical-agent setup` 让 watch-owned setup 发布 capabilities 并立即 shutdown，再由不带 watch 的 API 完成 chat/Add；这样既不伪造后端 `AgentOutput`，也不让 executor 抢走刚 Add 的 pending action。
+
+75. **proposal projection 只保留一份 canonical action payload**（R8）：`ChatPlan.actions` 会与 materialized `agent_output.actions` 分叉，因此退役；proposal/draft 读 `agent_output.actions`，运行 Action Board 读 `/api/state.actions`，两者用途不同且都不能由客户端写回 Gate truth。
+76. **OpenAPI 是 wire 删除门禁的一部分**（R8）：运行时 dict 和单测全绿仍不足以发布 breaking shape；proposal/chat/task 与 mutation 必须用 typed response model 明确保留/删除字段，防止 SDK 继续把任意 object 当契约。
+77. **阶段快照不自动升级为 current-doc contract**（R8）：用户明确保留的 audit/system-summary 可以作为历史资料存在；正式 current docs 另行列明范围，既不重写用户快照，也不拿已知历史文本阻塞收口。
+78. **前端发布证据以 tracked package resource 为准**（R8 review-fix）：Vite 唯一正式 outDir 是 `physical_agent/dashboard/dist`，发布核验只认该 tracked 目录与 wheel members；ignored `frontend/dist` 不进入发布判定。
+79. **R5 browser hard gate 与 R6 的历史顺序发生偏离**（R8.1 review）：R6 `0bb7807` 先于 R5 real-Chromium closure `d1ca53c3`；当时 compatibility fallback 仍保留且 R7 保持 No-Go，所以不存在当前 compatibility defect，R7 最终也在 R5/R6 门禁均关闭后才执行，但 plan 声明的 hard-gate 顺序仍发生偏离。这里如实记录 commit ancestry 与 CI head，不重写历史。
+80. **R6/R7 实际提交没有兑现计划承诺的 rollback units**（R8.1 review）：R6 在 `0bb7807` 合并 consumer migration 与 dead-code removal，R7 在 `9ba44af` 合并 fence 与 response-field removal，均不是 plan 所写的独立回退提交。历史不拆分、不 force rewrite；恢复整阶段时使用父提交/完整提交边界，若只恢复单一 compatibility surface，则必须先列出显式 file/hunk 选择，复跑 wire、consumer、projection 与安全契约后再提交，不能引用不存在的 split commit。
+81. **TUI finalized text 以整条 fail-closed 为边界**（T4）：只支持明确列出的 heading/list/bold/inline-code 子集；同一条消息一旦出现 fence、link、table、嵌套或畸形 token，就整条 literal 呈现，不能只格式化“看得懂”的局部。这样保住模型正文与旧 action-draft 的字符事实，也避免轻量 parser 冒充 CommonMark。
+82. **物理终端回归必须等待语义完成，不等待任意重绘**（T4 review）：Ink 的 input clear、busy 或其他异步状态都可能产生 stdout write；Logo 一次性断言必须在 Enter 后新的命令完成标记出现后再检查。测试 client 刻意延迟响应，防止固定 sleep、call-start count 或首个 write 造成假绿。
+83. **测试 stdin 消费与 stdout 写入必须解耦**（T4 exact-head CI）：custom stdin 的 `read()` 消费是可控的输入边界，stdout 写入还受 Ink render mode 与 CI 策略影响，不能作为发送 Enter 的前置条件。输入同步等待真实消费；结果同步仍等待 Enter 后命令专属语义标记，两者不能合并成任意 write 或固定 sleep。
+84. **物理 stdout 契约必须显式选择 Ink 非 CI 动态渲染分支**（T4 exact-head CI）：Ink v5 的 `isInCi && debug:false` 分支刻意抑制动态 frame，只在 unmount 写末帧；它不等价于 `isTTY=true` test harness 的目标路径。该测试可只对子测试进程设 `CI=false`，但 typecheck/build/runtime 继续保留真实 CI；未来若要测 CI 专属输出，必须另开保留 `CI=true` 的独立子进程，不能复用非 CI 契约冒充覆盖。
+85. **TUI finalized fallback 从 whole-message 收窄为 block-local，但协议例外更强**（T4.2）：选择无依赖 block scanner，是为让一个 unsupported block 不拖累相邻合法内容；放弃 CommonMark dependency 与删除标记式后处理，以控制依赖/AST 映射面并避免内容损失。`action-draft`、非 finalized assistant 与畸形 block 继续逐字，presentation 解析不得解释 proposal/action/Gate。
+86. **shortcut reference 判定需要 document-wide label context，但 fence 仍是 presentation island**（T4.2 final review）：采用归一化的单行 definition label 集合，让 matching shortcut/image shortcut 整块 literal；收集阶段复用 scanner 自身 fence consumption，避免第二套 grammar 和 code 内容泄漏到文档结构。放弃 destination 解析与完整 CommonMark label 语义，只修 content-preservation 边界。
+87. **typed `thought` 是 chat UI 可观测性，不是 VNext-4 账本重启**（A1.3b）：只在既有 provider stream→ChatRuntime→chat SSE 链路增加 message/thought 区分，放弃 Run/Turn/Event、registry/read model 与新持久化 schema；VNext-4 其余范围继续冻结，仍须满足可复现需求 + 显式 SPEC 决策才可重启。
+88. **provider reasoning summary 永远是不可信、只读的展示 metadata**（A1.3b）：只保存 completed turn 的摘要并从后续 LLM context 过滤；不得进入 PlanCompiler、Action Board、feedback、Gate 或审批依据，abort 的 partial summary 不落盘。模型是否给出摘要不影响 canonical reply/AgentOutput。
+89. **Dashboard page key 只保留唯一内容归属，不保留隐藏兼容别名**（C6）：直接退役 `world/safety/robots`，由 `state/hardware` 接管，并用新页正向覆盖与旧 key 负断言证明能力未丢失；放弃 alias/redirect，因为这些 key 只是无 URL 路由的前端内部状态，并非 API/TUI 契约，保留它们只会延续双导航真源。历史 Proposal localStorage 也只按当前 `PAGE_KEYS` 白名单读取，旧 key 自然失效。
+90. **本机根路径 Dashboard 先用 query 表达页面，不引入路由库或后端 clean-path fallback**（C6.1）：选择 `?page=<page-key>`，因为它能在不改变 FastAPI 静态托管与依赖图的前提下提供直达、刷新和 history；缺省 `/` 继续兼容 overview，显式非法 key 才 replace 归一。放弃 `/actions` 一类 clean path 与 404 页面，因为当前不是公网多路径应用，收益不足以覆盖后端 fallback、部署与测试面扩张。
+91. **流式重渲染采用 rAF 攒批 + 分层 memo，不引状态管理库、不先做全局 state 下沉**（C7）：选择 `requestAnimationFrame` 合帧（而非固定毫秒节流），配 generation 隔离陈旧回调；`MessageContent`/`MarkdownBlock` 与常驻组件 `React.memo` + 关键 handler `useCallback`，把每 token O(历史) 的 Markdown 重解析压到 O(尾块)，并让流式无关组件退出渲染。放弃方案①的"彻底版"（把 `streamMessages` 下沉进 ChatPanel/独立 store），因为现有分层已吃掉主要卡顿且改动面小可回滚；`streamMessages` 仍留在 Dashboard 顶层，Dashboard 本体每帧至多重渲染一次，若 profiling 仍显示瓶颈再下沉。保留 `idleWatchTick` SSE 去重不动。
+92. **设备专用 driver 先随硬件 bundle 交付，运动能力以本地实测包络 opt-in**（F5.0）：选择 `car_agent/` local driver + 标准库 asyncio stream，放弃在首台 Level 0 小车上提前抽象 core TCP/NDJSON transport 或 builtin registry。固件 ±60 只是技术夹限，不是实车安全值；缺任一速度/时长上限就不发布运动。未知动作结果不重放，未确认 stop 立即断连并撤销运动，fresh handshake 才能恢复。
+93. **所有者授权的 Level 0 落地试运行（一次性偏离，2026-08-05）**：项目所有者四次明确要求后，在「场地宽阔、人员在场可随时拿起小车、速度包络 ±25/单发 ≤2s、逐动作人工审批、agent 侧每次运动前核对 TOF」条件下，对 Level 0 固件做落地前进/后退试运行，偏离设备说明书 §0 与 F5.0 尾注的"仅台架"约束。已向所有者书面告知残余风险：该固件无本地避障兜底，断连时按最后指令盲跑最多 ~850ms（当日实测发生过两次 WiFi 掉线）。此偏离不构成先例：**落地常态化的重启条件仍是设备侧 Level 1（避障强制兜底）验收**；执行权唯一与 Gate-before-execute 两条宪法未受影响。
+94. **SAFETY hard rules 与 Agent Guidance 使用一份文件、两个 typed channel**（F3.1b / 003）：选择严格 `HardSafetyPolicy` 作为 Gate 唯一输入，guidance 只存在于 Snapshot/context；放弃把散文拼进 Rules dict 或 hard digest，因为那会让“模型看见”冒充“Gate 强制”。SAFETY front matter 与 Rules YAML 都拒绝重复 key，未知 Rules key 也拒绝，避免 YAML 后值覆盖和未实现规则制造虚假安全感；通用 Markdown parser 保持兼容。
+95. **策略漂移批次以 persisted proposal correlation 单事务失效，新鲜度在 fresh snapshot + Gate 处线性化**（F3.1b / 003）：current claimed 与同 proposal pending siblings 在一个 SQLite transaction 内取消并随异常整体回滚，放弃两个独立 terminal mutation。claim 后读取的 snapshot 通过 Gate 后 action 视为 in-flight，文件更新从下一 action 生效；放弃声称无 writer/execute 共锁的软件读操作能撤销已越过该点的命令，硬件 fencing 仍是独立问题。
+96. **CSS 语义验收不依赖平台字体几何**（C6-layout-CI）：竖排契约选择 computed `writing-mode: vertical-rl` + `text-orientation: upright`，同时保留尺寸非零、居中、不越界与点击展开；放弃 `height > width`，因为 CJK fallback 字体会让同一正确 CSS 在 Ubuntu hosted Chromium 上稳定假红。
+97. **多轮 eval 先分 transport 有效性、确定性合同与行为归因**（F0.1 / 005）：正式 stream 批次只要有 structured infra failure 就不能进入 prompt 质量分母；nonstream repair 对照只能定位，不得冒充 release baseline。首轮真实运行发生在 grader hardening 前，因此保留为 pre-freeze 诊断证据，不伪装成当前 suite 自动分；独立审查后一次性修正 exact-sequence 假红、目标参数与 causal dependency，并以 SHA 锁定首个提交版本。后续不得改 holdout 追分。
+98. **只让已归因且与 transport/dependency 解耦的静态 guidance 先行**（F0.2）：用户显式重启后，选择先改已证实的 clarification/memory system + schema annotation，放弃同轮修改 dependency、stream 或 runtime memory enforcement，避免一个 diff 混入多种根因。该偏离只改变 F0.1 的建议实施顺序，不取消 stream release baseline 与 dependency 来源诊断的前置条件；离线契约测试也不得表述为真实模型改善。
 
 ## 4. 经验教训（流程侧）
 
@@ -245,7 +671,14 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 - **快照式文档过期极快**：REFACTOR-LOG/system-summary 写完次日即失真；解法是活账本（SPEC §4）+ 每轮更新一行。
 - **git/CI 基建要跟上纪律**：长期单分支不 push、无 CI、测试对宿主环境敏感（代理变量/Python 版本），均记为工程欠账。
 - **mock 测不出阻塞类缺陷**（W1 的教训）：凡是"永不失败"的测试替身，都在掩盖一类真实故障模式；需要故意注入挂死/超时的对抗性测试。
+- **watchdog 测试必须覆盖最后一条命令到停车，且覆盖窗口从发送时刻计算**（F5.0 的教训）：只看相邻 drive gap 会漏掉尾部提前 watchdog；从 ACK 时刻重新起算会把响应延迟错误地加回剩余覆盖。fake server 应记录 drive/stop 到达时刻，慢响应正例同时断言 drive→drive 与 tail→stop 都小于设备 watchdog。
 - **LLM 实验先固定凭据源与 provider 能力，再谈 planner 质量**（F0 的教训）：同一个 OpenAI-compatible 入口可能不支持 `response_format`/JSON mode；批量实验要先用 `.env` 连通、记录模型能力，再靠本地 schema 校验兜底，否则会把 provider 兼容问题误读成 planner/Gate 问题。
+- **自动场景通过率不是未经归因的模型分数**（F0.1 的教训）：本轮 1/10 经加固 grader 复裁为 15 个 memory policy failure、1 个澄清 failure 和 2 个真实 linear dependency failure；旧 exact-sequence 的 2 个假红已移除。既有 192/192 通用结构/安全 checks 全绿，但其 dependency 只证明引用更早 action。报告必须同时给原始自动分、transport 有效性和加固后归因，不能用一个百分比驱动 prompt 堆规则。
+- **“依赖合法”至少分语法拓扑与任务因果两层**（F0.1 的教训）：`depends_on` 只引用更早 action 能防未知/后向引用，却不能证明 `move→pick→move→place` 的每个物理前提已串起；场景 grader 必须核对所需因果边。合法的安全中间动作也不能用 exact capability 列表误杀，应枚举受参数约束的合法 variants，而不是放宽成任意 subsequence。
+- **流式可见 reply 不等于尾部 JSON 已成立**（F0.1 的教训）：reply 字段可以先增量显示，后续 actions/memory 尾部仍可能 `invalid_json`；eval 应保存脱敏的 code/reason/attempts，并在 infra turn 继续核对 Board/canonical facts，原始 provider 正文只留 ignored trace。
+- **优化模型指导前先追真实 provider 输入路径**（F0.2）：MOCE proposal 路径消费 system message 与 `ChatLLMResponse` schema，没有 callable tool；因此同步 system/schema annotation，不能修改无关 MCP tool 文案后声称 eval 已优化。静态契约测试只证明指导被发送，不证明真实模型得分提升。
+- **结构化 streaming 的降级边界必须按“是否已产出 byte”定义**（R5）：按异常类型无条件重试会把一次 turn 偷换成两次不一致决策；producer 测试必须同时断言 early delta、midstream abort、close 和零 draft persistence。
+- **provider 成功只代表传输完成，不代表结构化结果可用**（A1.1b 的教训）：format fallback 与 validation repair 必须分开观测；本地失败记录 attempt/code/issues，测试同时锁住修复耗尽、公开错误脱敏与零 Draft/Action。
 - **后端退役要同时保迁移旁路与清 UI 口径**（B6 的教训）：删除 factory 分支不够，CLI 迁移、state-check、前端说明、e2e mock、操作手册和旧 handoff 都可能继续暴露退役后端。
 - **同名产品动作要拆 UI 文案和数据语义**（F1 的教训）：draft 提交与执行审批都容易被叫 Approve；若文案不拆，用户会误以为点一次就放行执行，或误把提交动作板当成绕过审批。
 - **模型自带的证明必须给人看见**（F4 的教训）：expected 不参与安全裁决，但它会影响后续诊断上下文；至少要在 draft/action 详情露出摘要或 raw，避免变成不可见的“模型自证”。
@@ -255,5 +688,35 @@ driver 层补 `PhysicalDriver.on_transport_reconnected()` 默认 no-op；transpo
 - **同一能力多入口要复用同一后端边界**（T3 的教训）：dashboard 已有 `/api/upload`、`/api/config`、`/api/config/robots` 时，TUI 只补客户端和展示，不应另开路径或把本地文件/配置写入规则复制到终端侧。
 - **Ink 交互测试要模拟 readable stdin，而不是只测组件快照**（TUI-command-acceptance 的教训）：Ink 5 通过 `stdin.read()` 和 `readable` 驱动输入，scenario runner 需要提供带 `ref/unref/read` 的测试流；命令粘贴与回车之间也要留给 React/Ink 一次状态更新，否则容易测到旧输入值。
 - **可读性验收要锁“不开 raw 能否回答问题”**（F2.5 的教训）：只断言 JSON tree 折叠不够；Playwright 应直接检查用户问题对应的表格、卡片、Descriptions 是否存在，并确认 raw 内容默认不可见。
+- **入口收敛不等于 Agent runtime 收口**（VNext-0 的教训）：共享 ProposalService 解决了重复用例，但没有自动产生安全义务图、统一 feedback 或闭环状态机；后续文档和产品文案必须区分“安全 proposal runtime”与“统一自主 Agent runtime”。
+- **先做账本会掩盖错误的领域模型**（VNext-1 的教训）：Run/Event 能统一 correlation，却不会自动让隐式 SafetyGate 成为 Agent 的公开义务；演进顺序应先 assurance loop，后 ledger envelope。
+- **把 status overlay 留在客户端会再次分叉**（VNext-2 的教训）：compiled graph、Action Board 与 feedback 的合成规则应集中在 application projection；Web/TUI 只渲染同一 materialized 输出。
+- **软件 ownership 与硬件 fencing 要分层命名**（W6 的教训）：workspace runtime lease 已覆盖单数据库内的执行者排他、claim CAS 和 reset guard；不能因此声称 in-flight command 或设备控制权已被 epoch fence。
+- **删除/迁移清单必须来自代码 surface，不只来自现有测试**（R0 的教训）：legacy GUI 的 setup/watch/doctor/task 多条路径没有直接测试，若只搬测试会再次漏功能；先枚举端点、用户任务、打包入口、文档和负用例，再决定覆盖或有意退役。
+- **兼容字段存在不代表已经有独立新通道**（R0 的教训）：当时 stream done 内部已有 `agent_output`，但它仍由 fence 反解析且 API 丢弃；判断迁移完成要追 producer→transport→consumer→persistence 的事实来源，而不是只看 schema 名称。
+- **带 hash 的前端产物要防增量构建残留**（R1.5 的教训）：只让 Vite `emptyOutDir` 不够，setuptools 的 `build/lib` 仍可能保存旧 chunk；wheel 测试必须比较资源全集，而不是只断言“有 index 和任意 asset”。
+- **浏览器验收不可用 discovery 冒充 runtime**（R1.5 的教训）：`playwright --list` 能抓语法/发现问题，但不能证明 route handler、SSE 与 DOM 交互实际成立；浏览器二进制不可用时应保留删除 No-Go，而不是为了收工勾绿。
+- **源码删除不等于发布物删除**（R2 的教训）：setuptools 增量 staging 会保留已经从源码树移除的 package；退役模块必须增加 wheel member 负断言，并在 build hook 中清理对应 staging 目录。
+- **真实浏览器证据要同时锁服务新鲜度与增量中间态**（R5-browser-gate 的教训）：R5 双轨取证设置 `CI=1` 禁止 Playwright 复用 5173/8766 的陈旧服务；只断言 terminal 卡片数还不够，partial fence→完整 fallback→structured done 当时逐阶段检查 0→1→1，才能排除瞬时重复和错误卡。
+- **兼容 parser 退役要把历史正例改成产品负例**（R7 的教训）：只删除生产 helper 不足以证明 wire 已切断；浏览器必须在 partial/完整/持久化三种旧正文上断言 0 卡、0 Add，同时确认文本仍可读，并由独立 structured output 证明产品功能没有一起被删。
+- **删 wire 字段要追到嵌套 DTO 与 OpenAPI**（R8 的教训）：顶层 proposal convenience fields 删除后，`ChatPlan.actions` 仍可形成第三份陈旧投影，而无 response model 的 OpenAPI 又无法表达 canonical shape；收口扫描必须同时覆盖 schema、writer、持久化旧 payload、TS 类型、浏览器 fixture 和生成契约。
+- **示例 workspace 也是发布契约**（R8 的教训）：文档写 SQLite 并不够；仓库若仍附带完整 legacy Markdown runtime 文件，current loader 会正确 fail closed，示例却不可运行。示例配置、目录内容、能力清单和操作顺序必须由真实 loader/driver 测试共同锁定。
+- **checkbox 测试必须锁门槛身份、阶段与证据语义**（R8 review-fix 的教训）：pre-closure 阶段应逐一锁定 11 个本地门槛为 `[x]`，第 11 项沿用 SPEC 🟡 的“实现与本地验收完成、等待最终提交和远端 CI”，第 12 项 commit/push 为 `[ ]`；只有真实 closure commit 已 push 且 fork Push/PR CI 均成功后，才能切换为 12 项全部 `[x]` 与 SPEC ✅ 完成，最终状态测试还必须逐项锁定完整门槛身份和对应 commit/run 证据。
+- **证据矩阵测试必须逐行锁映射**（R8 review-fix 的教训）：在整份文档全局搜索 commit/run 名称不能证明证据属于正确删除项；应先按 surface 解析唯一矩阵行，再断言该行的提交与 Push/PR run 映射。
+- **发布目录证据先核对构建配置与 Git 跟踪状态**（R8 review-fix 的教训）：目录名相似不等于发布面；Vite outDir、package-data、tracked resource 与 wheel members 必须指向同一目录，ignored `frontend/dist` 的“无差异”不能证明发布物新鲜。
+- **门禁顺序必须核对 commit ancestry 与 CI headSha**（R8.1 的教训）：文档表格顺序或后来成功的 run 不能证明前置门槛当时已经关闭；每个 hard gate 都要记录依赖 commit、实际祖先关系与对应 run 的 headSha，发现偏离就保留事实并说明安全影响。
+- **承诺的 rollback unit 必须落实为实际提交边界**（R8.1 的教训）：计划写“可单独回退”时，实现就应拆成对应 commits；若已合并提交，则不得事后把它描述成可独立 revert，必须记录父提交/完整提交或显式 file/hunk selective recovery，并在恢复后重跑相关契约。
+- **TUI 测试先区分模拟 TTY 与 Ink CI 输出策略**（T4 CI 的教训）：`CI=true + debug:false` 会让 Ink 抑制动态 frame，这不是 Windows/Linux 产品差异。测试 harness 应分别暴露 stdin consumption 与 post-Enter semantic completion；物理 stdout 契约只在显式非 CI test child 中运行，CI 专属输出另设独立用例。
+- **push 必须在独立 review 修复完成后发生**（T4.2 的教训）：`25f20c4` 在 review 前提前 push，后续 CI 即使成功也只能算被 supersede 的历史运行；closure 文档只允许引用 reviewed exact head，并必须逐 run 核对 `headSha`、attempt 与全部 applicable job conclusion。
+- **provider 正文与 reasoning summary 必须按各自 wire shape 独立提取**（A1.3b 的教训）：Responses output text 位于 `content[*].text`，reasoning summary 位于 reasoning item 的 `summary[*].text`；共用 extractor 会把显示语义和正文语义混在一起。streaming 也要保留同一分类直到 UI，terminal persistence 只在 completed 后写 summary，才能同时锁住非 reasoning 字节兼容与 abort 零残留。
+- **导航退役必须同时证明旧入口消失与能力在新入口可达**（C6 的教训）：只断言菜单从 9 变 8 不能证明无能力丢失；真实 Chromium 还要逐项锁住 world/safety/capabilities/robots 的新归属，并验证活动导航与可见内容一致。
+- **CSS 隐藏不等于性能收口，响应式默认值也必须服从安全信号优先级**（C6 的教训）：Proposal 收起验收必须断言组件不挂载，不能只看宽度；同时组合测试窄屏、Actions 默认展开和待审批状态，才能发现 Drawer 遮蔽审批入口的问题。安全 override 应只控制可见性、不抹掉用户偏好，条件解除后再恢复。
+- **真实 Chromium 回归不得复用正在展示的用户工作区后端**（C6 layout follow-up 的教训）：Playwright 的 `reuseExistingServer` 会接受同端口的任意健康实例；若本地正在运行真实 SQLite workspace，包含真实 API 的场景会污染 action/chat/upload 状态，待审批信号还会改变移动端预期。全量回归前必须先释放测试端口，让配置启动隔离的 `.tmp/e2e` 后端；展示服务只能在回归结束后恢复。
+- **浏览器字体边界框不是 writing-mode 契约**（C6 layout CI 的教训）：`textBox.height > textBox.width` 会把字体 fallback、hinting 与 glyph metric 差异升级成阻塞门禁；应直接断言 computed CSS 语义，并把原始宽高作为诊断证据，而不是判定真源。产品视觉仍需配 Browser/截图与可见交互，不能只把测试改绿。
+- **URL 状态不能只测点击后的地址字符串**（C6.1 的教训）：至少同时锁定 direct open、reload、Back/Forward、活动导航/内容一致、其他 query 保留，以及非法/退役 key 的 replace 归一；否则很容易得到“地址变了但视图没同步”或 history 堆积的半路由。
+- **`React.memo` 只有配稳定引用才生效，热点常藏在被 `useMemo` 依赖拖累的子渲染里**（C7 的教训）：给组件加 memo 前必须先确认它收到的 handler/props 引用稳定——Dashboard 里的普通 `function` 声明每渲染换新引用，会让下游 `useMemo`/`memo` 全部失效，单加 memo 等于白加，memo + `useCallback` 必须成套做。定位流式卡顿也别只盯 setState 频率：真正贵的是 `ChatPanel.items` `useMemo` 因不稳定依赖每 token 失效、连带整段历史重跑 markdown 解析，把每 token O(历史) 降为 O(1) 比单纯降 setState 频率收益更大。rAF 攒批则要在终止/早停路径配 cancel + settle，避免丢尾 token。
+- **组件闭包里的调度逻辑要提取成可注入依赖的模块才可测**（C7 测试的教训）：内嵌在 `handleChat` 里的 rAF 生命周期只能靠完整浏览器流程间接验证，测试要么退化成"源码里有没有 `requestAnimationFrame`"的字符串断言，要么去 mock React setter。把帧 API 做成可注入参数后，契约（每帧至多一次 flush、settle 不丢尾、cancel 后陈旧帧不得二次 flush）可以用手动帧队列直接断言，不依赖真实刷新率、计时器或绘制。补回归测试时还应做变异验证——移除"已有帧不重复排队"守卫后 burst 用例必须转红，否则测的是实现在场而非契约成立。Node 级契约测试应配独立的 Playwright config（不带 webServer），与需要真实 Chromium 和后端的 e2e 分开，避免为一个纯函数模块启动整套服务。
+- **全树绿色不是规格逐项完成证明**（F3.1b / 003 的教训）：旧 `619 passed` 仍漏掉重复 SAFETY front matter、state-check/API health 假 ready 和 Watch drift 证据语义。收口必须把每个 checkbox 映射到正反用例，再让独立 reviewer 从失败路径找“测试从未问过的问题”。
+- **同一安全批次的多条状态更新必须共享事务边界**（F3.1b / 003 的教训）：先 cancel claimed、再另事务 cancel siblings 在正常路径全绿，却能在第二步异常时留下可再次执行的半批。用 SQLite trigger 注入 sibling update 失败并断言 current 也回滚，才能证明 all-or-nothing，不应把两次原子操作误称为一个原子业务动作。
 
 *新一轮工作完成后：§1 表格加一行，§2 追加小节，决策/教训有则补记。*

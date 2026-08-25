@@ -134,6 +134,7 @@ export function HardwarePanel({ onStateChange, onError, onRobotRegistered }: Har
       const response = await registerRobot({
         robot_id: values.robot_id.trim(),
         driver: values.driver.trim(),
+        execution_mode: "hardware",
         config
       });
       setRegisterFeedback({ type: "success", text: response.message });
@@ -201,7 +202,7 @@ export function HardwarePanel({ onStateChange, onError, onRobotRegistered }: Har
           </Form.Item>
           {mode === "llm" && (
             <Form.Item label={labels.hardware.modelOverride} name="model">
-              <Input placeholder="Leave blank to use configured model" />
+              <Input placeholder={labels.hardware.modelPlaceholder} />
             </Form.Item>
           )}
         </div>
@@ -244,16 +245,16 @@ export function HardwarePanel({ onStateChange, onError, onRobotRegistered }: Har
               )}
             </Space>
             <Descriptions size="small" column={1} className="tight-descriptions">
-              <Descriptions.Item label="Output path">
+              <Descriptions.Item label={labels.hardware.outputPath}>
                 <Typography.Text code>
                   {result.output_path ?? result.integration?.output_path ?? "-"}
                 </Typography.Text>
               </Descriptions.Item>
-              <Descriptions.Item label="Detected transport">
+              <Descriptions.Item label={labels.hardware.detectedTransport}>
                 {profile?.transport ?? "-"}
               </Descriptions.Item>
-              <Descriptions.Item label="Robot kind">{profile?.robot_kind ?? "-"}</Descriptions.Item>
-              <Descriptions.Item label="Title">{profile?.title ?? "-"}</Descriptions.Item>
+              <Descriptions.Item label={labels.hardware.robotKind}>{profile?.robot_kind ?? "-"}</Descriptions.Item>
+              <Descriptions.Item label={labels.hardware.resultTitle}>{profile?.title ?? "-"}</Descriptions.Item>
             </Descriptions>
             {generatedFiles.length > 0 && (
               <Space size={5} wrap>

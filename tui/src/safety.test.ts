@@ -24,6 +24,19 @@ test("TUI stays an API client without watch, driver, or SQLite access", async ()
     assert.equal(sqliteImport.test(content), false, `${file} imports SQLite directly`);
     assert.equal(sqliteDirectAccess.test(content), false, `${file} appears to access SQLite directly`);
   }
+
+  const staticOwners: string[] = [];
+  const staticOpeningTag = "<" + "Static";
+  for (const file of files) {
+    const content = await readFile(file, "utf8");
+    if (content.includes(staticOpeningTag)) {
+      staticOwners.push(file);
+    }
+  }
+  assert.equal(staticOwners.length, 1);
+  assert.equal(staticOwners[0].endsWith(join("components", "Transcript.tsx")), true);
+  const transcriptSource = await readFile(staticOwners[0], "utf8");
+  assert.match(transcriptSource, /kind:\s*"brand"/);
 });
 
 async function sourceFiles(root: string): Promise<string[]> {

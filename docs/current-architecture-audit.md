@@ -1,8 +1,8 @@
 # Current Architecture Audit
 
-日期：2026-07-08
+日期：2026-07-11（R2 更新；初版审计 2026-07-08）
 
-范围：本报告以代码为准，文档只作为对照。扫描范围包括 `physical_agent/`、`frontend/`、`tui/`、`tests/`、`docs/`。本轮未修改业务代码。
+范围：本报告以代码为准，文档只作为对照。扫描范围包括 `physical_agent/`、`frontend/`、`tui/`、`tests/`、`docs/`。R2 更新已反映 legacy GUI 退役后的正式入口。
 
 ## 0. 模块地图
 
@@ -16,7 +16,7 @@ physical_agent/
 ├── protocol/            Pydantic 数据模型、workspace 文档格式、期望检查、记忆/检索协议
 ├── llm/                 OpenAI-compatible 客户端与设置
 ├── ingest/              上传文件入库、chunk、memory note
-├── gui/                 旧版内置静态 GUI，自己持有 watch runtime
+├── dashboard/           wheel 内正式 React Dashboard 构建产物
 ├── mcp/                 proposal-only MCP facade
 ├── cli.py               Typer CLI：init/api/watch/run/chat/ingest/inspect 等入口
 └── config.py            配置模型、默认配置、sqlite-only backend 校验
@@ -56,7 +56,7 @@ docs/
 
 ```text
 用户入口
-  -> API/CLI/旧 GUI/MCP 创建任务或 action proposal
+  -> React Dashboard/API/CLI/MCP 创建任务或 action proposal
   -> StateStore 写入 pending action
   -> watch loop claim ready action
   -> SafetyGate 重新校验
@@ -75,7 +75,6 @@ docs/
 | CLI `physical-agent chat` | `ChatRuntime.respond()` | 默认否；`tool_loop + auto_step` 可实例化 `WatchRuntime` 跑一步 |
 | CLI `physical-agent watch` | `WatchRuntime` | 是，watch 内执行 |
 | API `--watch` | `ApiWatchService` lazy import `WatchRuntime` | 是，API 进程里的后台 watch loop 执行 |
-| 旧 GUI `physical_agent/gui` | `GuiController` 直接持有 `WatchRuntime` | 是，旧 GUI 可 start/step watch |
 | MCP facade | `PhysicalAgentMCP.submit_task/propose_action` | 否，只写 pending |
 
 ### 典型任务："pick red block"
@@ -362,8 +361,7 @@ request/proposal 侧未发现 frontend 或 TUI 直接执行入口。FastAPI requ
 
 1. `physical_agent/agent/driver_coder.py` 有 `loaded.driver.execute(...)`，用于 driver onboarding 的 mock validation。测试中已把它作为 allowlist，但它不是 watch 调用栈。
 2. `physical_agent/agent/chat_runtime.py` 顶层 import `WatchRuntime`，且 tool-loop `auto_step` 分支会实例化 watch。API chat 传 `auto_step=False`，streaming chat 测试也防止实例化 watch；但从架构边界看，agent 层持有 watch 依赖是一个偏差。
-3. 旧 GUI `physical_agent/gui/controller.py` 直接持有 `WatchRuntime` 并能 step watch。这仍通过 watch 执行，但它不是当前 React frontend 的纯 API 架构。
-4. watch 中大多数 driver 调用都包了 `_call_with_timeout()`；但 `_maybe_halt_for_heartbeat_failure()` 里存在直接 `await loaded.driver.halt()` 的分支，应按 W5 收敛到 timeout wrapper。
+3. watch 中大多数 driver 调用都包了 `_call_with_timeout()`；但 `_maybe_halt_for_heartbeat_failure()` 里存在直接 `await loaded.driver.halt()` 的分支，应按 W5 收敛到 timeout wrapper。
 
 SafetyGate 当前校验：
 
@@ -413,8 +411,7 @@ SafetyGate 当前校验：
 4. Capability 来源是 driver runtime，但 config/manifest/registry/planner 都参与链路，缺少一份“capability contract truth table”。
 5. World model 形状偏自由，缺少 `observed_at` 和 freshness contract，planner/context/UI 很难判断世界状态是否新鲜。
 6. frontend/TUI/API 的展示模型重复，字段漂移风险高。
-7. 旧 GUI 与当前 React frontend 架构不同：旧 GUI 直接持有 watch，容易让“GUI”一词在文档中歧义。
-8. watch timeout 包装接近完成，但 halt/watchdog 路径仍有一处未包 timeout。
+7. watch timeout 包装接近完成，但 halt/watchdog 路径仍有一处未包 timeout。
 
 ## 10. 重构建议评分
 
@@ -425,7 +422,6 @@ SafetyGate 当前校验：
 | C. API/ViewModel | 高 | 中 | 高 | 很值得做。可先增加后端派生 view 或共享 schema，减少客户端猜字段。 |
 | D. Frontend/TUI 重复逻辑 | 中高 | 低中 | 中 | 适合跟 C 绑定，小步迁移 parser/formatter。 |
 | E. Driver abstraction | 中 | 中高 | 中 | 不建议马上大改。先修 timeout 与 capability contract，再考虑低层/高层语义拆分。 |
-| F. 旧 GUI 收敛 | 中 | 中 | 中 | 需要先决定旧 GUI 是否保留；若保留，文档必须明确它是 legacy/watch-owning。 |
 
 ## 11. 未来 3 轮最小路线
 
@@ -454,7 +450,7 @@ SafetyGate 当前校验：
 ### 用户任务完整流程
 
 ```text
-React/TUI/CLI/MCP/旧 GUI
+React Dashboard/TUI/CLI/MCP
   -> ChatRuntime / AgentRuntime / SafeProposalPlanner / MCP facade
   -> Action proposal
   -> SqliteStateStore.append_pending_action()

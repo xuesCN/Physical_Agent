@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, Observation
+from physical_agent.state.safety_policy import HardSafetyPolicy, SafetyPolicySnapshot
 
 
 @runtime_checkable
@@ -47,7 +48,14 @@ class StateStore(Protocol):
 
     def read_actions(self) -> dict[str, Any]: ...
 
+    def read_action_claim_owners(self) -> dict[str, str]: ...
+
     def append_pending_action(self, action: Action | dict[str, Any]) -> Action: ...
+
+    def append_pending_actions(
+        self,
+        actions: list[Action | dict[str, Any]],
+    ) -> list[Action]: ...
 
     def approve_action(
         self,
@@ -65,7 +73,22 @@ class StateStore(Protocol):
         reason: str | None = None,
     ) -> Action: ...
 
-    def claim_next_ready_action(self, *, claim_owner: str = "watch") -> Action | None: ...
+    def claim_next_ready_action(
+        self,
+        *,
+        claim_owner: str = "watch",
+        blocked_robot_ids: set[str] | None = None,
+        hard_policy: HardSafetyPolicy | None = None,
+    ) -> Action | None: ...
+
+    def cancel_pending_actions_by_proposal(self, proposal_id: str) -> list[Action]: ...
+
+    def cancel_claimed_action_and_pending_by_proposal(
+        self,
+        action: Action | dict[str, Any],
+        *,
+        claim_owner: str,
+    ) -> list[Action]: ...
 
     def recover_stale_actions(
         self,
@@ -74,9 +97,39 @@ class StateStore(Protocol):
         claim_owner: str | None = None,
     ) -> int: ...
 
-    def mark_action_completed(self, action: Action | dict[str, Any]) -> None: ...
+    def acquire_runtime_lease(
+        self,
+        name: str,
+        owner: str,
+        *,
+        ttl_s: float,
+    ) -> bool: ...
 
-    def mark_action_cancelled(self, action: Action | dict[str, Any]) -> None: ...
+    def renew_runtime_lease(
+        self,
+        name: str,
+        owner: str,
+        *,
+        ttl_s: float,
+    ) -> bool: ...
+
+    def read_runtime_lease(self, name: str) -> dict[str, Any] | None: ...
+
+    def release_runtime_lease(self, name: str, owner: str) -> bool: ...
+
+    def mark_action_completed(
+        self,
+        action: Action | dict[str, Any],
+        *,
+        claim_owner: str | None = None,
+    ) -> bool: ...
+
+    def mark_action_cancelled(
+        self,
+        action: Action | dict[str, Any],
+        *,
+        claim_owner: str | None = None,
+    ) -> bool: ...
 
     def write_feedback(
         self,
@@ -84,11 +137,15 @@ class StateStore(Protocol):
         history: list[dict[str, Any]] | None = None,
     ) -> None: ...
 
+    def append_feedback_event(self, event: dict[str, Any]) -> None: ...
+
     def read_feedback(self) -> dict[str, Any]: ...
 
     def write_safety(self, rules: dict[str, Any] | None = None) -> None: ...
 
     def read_safety(self) -> dict[str, Any]: ...
+
+    def read_safety_snapshot(self) -> SafetyPolicySnapshot: ...
 
     def write_chat(
         self,
@@ -151,5 +208,7 @@ class StateStore(Protocol):
     ) -> list[dict[str, Any]]: ...
 
     def append_log(self, message: str, *, actor: str | None = None) -> None: ...
+
+    def validate_log_mirror(self) -> dict[str, Any]: ...
 
     def export_human_view(self, out_dir: Path | None = None) -> dict[str, Any]: ...

@@ -90,6 +90,7 @@ physical_agent/drivers/xiaozhi_mcp.py：
 robots:
   xiaozhi_1:
     driver: .
+    execution_mode: simulation
     config:
       mode: mock
       device_name: xiaozhi-demo-device
@@ -289,6 +290,7 @@ driver 加载逻辑在 `physical_agent/drivers/loader.py`。
 robots:
   xiaozhi_1:
     driver: .
+    execution_mode: simulation
     config:
       mode: mock
 ```
@@ -663,11 +665,14 @@ class MyDeviceDriver(PhysicalDriver):
 robots:
   my_device_1:
     driver: ./my_device_driver
+    execution_mode: simulation
     config:
       mode: mock
 ```
 
 watch 启动后就会自动加载这个 driver，并把它的能力发布给 agent。
+
+`execution_mode` 描述的是当前 robot 实例正在连接模拟器还是实机，不能从 manifest 的 `supports_simulation` 推断。旧配置和第三方 driver 未声明时会按 `hardware` 处理；切到 HTTP/WS/串口等真实设备时必须显式写 `execution_mode: hardware`。
 
 ## 一句话总结
 

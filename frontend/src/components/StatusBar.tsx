@@ -7,34 +7,38 @@ import {
   SafetyOutlined
 } from "@ant-design/icons";
 import { Badge, Breadcrumb, Button, Space, Tag, Typography } from "antd";
+import { memo } from "react";
 import type { Messages } from "../locales";
-import type { AgentState, HealthState } from "../types";
+import type { AgentState, ExecutorProjection, HealthState } from "../types";
 
 interface StatusBarProps {
   health: HealthState | null;
   state: AgentState | null;
   sseConnected: boolean;
-  watchEnabled: boolean | null;
+  executor: ExecutorProjection | null;
   loading: boolean;
   activePageLabel: string;
   labels: Messages;
   onRefresh: () => void;
   onOpenInspector: () => void;
+  proposalDisabled?: boolean;
 }
 
-export function StatusBar({
+function StatusBarBase({
   health,
   state,
   sseConnected,
-  watchEnabled,
+  executor,
   loading,
   activePageLabel,
   labels,
   onRefresh,
-  onOpenInspector
+  onOpenInspector,
+  proposalDisabled = false
 }: StatusBarProps) {
   const backend = state?.backend || health?.backend || "-";
   const ready = Boolean(state?.ready ?? health?.ready);
+  const executorView = describeExecutor(executor, labels);
 
   return (
     <div className="status-bar" data-testid="status-bar">
@@ -59,8 +63,13 @@ export function StatusBar({
         <Tag icon={<ApiOutlined />} color={ready ? "green" : "gold"}>
           {labels.status.workspace} {ready ? labels.status.ready : labels.status.notReady}
         </Tag>
-        <Tag icon={<CloudSyncOutlined />} color={watchEnabled ? "cyan" : "default"}>
-          {labels.status.watch} {watchEnabled ? labels.status.enabled : labels.status.off}
+        <Tag
+          data-testid="executor-status"
+          icon={<CloudSyncOutlined />}
+          color={executorView.color}
+          title={executorView.detail}
+        >
+          {labels.status.executor} {executorView.label}
         </Tag>
         <span data-testid="sse-status">
           <Badge
@@ -73,6 +82,7 @@ export function StatusBar({
           data-testid="open-proposal-drawer"
           icon={<FormOutlined />}
           size="small"
+          disabled={proposalDisabled}
           onClick={onOpenInspector}
         >
           {labels.app.propose}
@@ -89,3 +99,62 @@ export function StatusBar({
     </div>
   );
 }
+
+function describeExecutor(
+  executor: ExecutorProjection | null,
+  labels: Messages
+): { label: string; detail: string; color: string } {
+  if (!executor) {
+    return {
+      label: labels.status.executorUnknown,
+      detail: labels.status.executorUnknown,
+      color: "default"
+    };
+  }
+
+  const status = (executor.status ?? "").trim().toLowerCase();
+  const failed = ["degraded", "error", "failed", "fatal"].includes(status);
+  const active = ["active", "running", "ready"].includes(status);
+  const base =
+    executor.mode === "waiting_for_init"
+      ? labels.status.executorWaiting
+      : executor.mode === "embedded"
+        ? labels.status.executorEmbedded
+        : executor.mode === "external"
+          ? labels.status.executorExternal
+          : executor.legacy_watch_configured
+            ? labels.status.executorUnknown
+            : labels.status.executorNone;
+  const showStatus =
+    Boolean(status) &&
+    executor.mode !== "waiting_for_init" &&
+    !(executor.mode === "none" && ["stopped", "disabled", "inactive"].includes(status));
+  const label = `${base}${showStatus ? ` · ${status}` : ""}`;
+
+  const error = readExecutorError(executor.last_error);
+  const lease = executor.lease;
+  const leaseDetail = lease?.active
+    ? `Lease active${lease.expires_at ? ` until ${lease.expires_at}` : ""}.`
+    : "No active executor lease.";
+  return {
+    label,
+    detail: [leaseDetail, error ? `Last error: ${error}` : ""].filter(Boolean).join(" "),
+    color:
+      executor.mode === "waiting_for_init"
+        ? "gold"
+        : failed
+          ? "red"
+          : active || executor.mode === "external"
+            ? "cyan"
+            : "default"
+  };
+}
+
+function readExecutorError(value: ExecutorProjection["last_error"]): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  return value?.message ?? value?.error_type ?? "";
+}
+
+export const StatusBar = memo(StatusBarBase);

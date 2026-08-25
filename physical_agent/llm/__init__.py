@@ -2,6 +2,9 @@ from physical_agent.llm.openai_compatible import (
     OpenAICompatibleClient,
     OpenAICompatibleSettings,
     OpenAICompatibleError,
+    ProviderRefusalError,
+    StreamChunk,
+    StructuredOutputError,
 )
 from physical_agent.llm.settings import (
     LLMSettingsError,
@@ -17,6 +20,9 @@ __all__ = [
     "OpenAICompatibleClient",
     "OpenAICompatibleError",
     "OpenAICompatibleSettings",
+    "ProviderRefusalError",
+    "StreamChunk",
+    "StructuredOutputError",
     "llm_settings_path",
     "public_llm_settings_summary",
     "read_llm_settings_file",

@@ -50,7 +50,7 @@ tick 监督循环 + SafetyGate（10 项检查）+ 原子领取/lease 恢复 ✅ 
 
 ## 8. 配置
 
-`physical-agent.yaml`（robots/watch/agent；watch 含 4 个 W1 超时预算）✅ · `physical_driver.yaml` manifest+config_schema ✅ · GUI：只读配置视图 + 一键注册 robot 写回 yaml（E0.3）🟢 · `.llm.json` 独立于 git/审计 ✅。
+`physical-agent.yaml`（robots/watch/agent；watch 含 5 个 W1 超时预算）✅ · `physical_driver.yaml` manifest+config_schema ✅ · GUI：只读配置视图 + 一键注册 robot 写回 yaml（E0.3）🟢 · `.llm.json` 独立于 git/审计 ✅。
 
 ## 9. 测试 · 文档 · 基建
 

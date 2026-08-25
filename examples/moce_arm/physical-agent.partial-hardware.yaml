@@ -2,7 +2,7 @@ project:
   name: momoagent-driver-partial-wrist-gripper
 
 workspace:
-  path: ./workspace-partial-wrist-gripper
+  path: ./workspace-partial-hardware
 
 watch:
   tick_ms: 500
@@ -17,6 +17,7 @@ agent:
 robots:
   momo_1:
     driver: .
+    execution_mode: hardware
     config:
       mode: hardware
       hardware_profile: partial

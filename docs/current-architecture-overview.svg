@@ -79,9 +79,9 @@
   <text class="small" x="390" y="585">workspace/state.db source of truth</text>
   <text class="small" x="390" y="606">payloads are JSON, WAL, lease recovery</text>
   <rect class="boxOrange" x="680" y="535" width="220" height="85" />
-  <text class="label" x="700" y="562">Markdown import</text>
-  <text class="small" x="700" y="585">retired backend; migration input only</text>
-  <text class="small" x="700" y="606">migrate-md-to-sqlite preserves old workspaces</text>
+  <text class="label" x="700" y="562">File sidecars</text>
+  <text class="small" x="700" y="585">SAFETY.md human-owned policy</text>
+  <text class="small" x="700" y="606">LOG.md human-readable mirror</text>
   <rect class="boxOrange" x="960" y="535" width="210" height="85" />
   <text class="label" x="980" y="562">Audit / Human View</text>
   <text class="small" x="980" y="585">export-audit, state-check</text>

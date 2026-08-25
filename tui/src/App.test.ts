@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyEvent,
+  executorFromEvent,
   runTuiChatStream,
   shouldRefreshFullStateFromEvent,
   shouldUpdateLastRefreshFromEvent,
   shouldFallbackAfterSseClose,
   sseClosedFallbackMessage,
-  sseErrorFallbackMessage,
-  watchStatusFromEvent
+  sseErrorFallbackMessage
 } from "./App.js";
 import type { AgentState } from "./types.js";
 
@@ -47,6 +47,27 @@ test("chat stream abort clears streaming state without noisy failure", async () 
   );
 
   assert.deepEqual(calls.streaming, [true, false]);
+  assert.deepEqual(calls.notices, []);
+});
+
+test("chat stream abort clears live reasoning without appending a transcript row", async () => {
+  const calls = createChatCalls({ includeTranscript: true });
+  const abortError = new Error("The operation was aborted");
+  abortError.name = "AbortError";
+
+  await runTuiChatStream(
+    {
+      sendChatStream: async (_message, onEvent) => {
+        onEvent({ type: "thought", payload: { delta: "partial reasoning" } });
+        throw abortError;
+      }
+    },
+    "hello",
+    calls.handlers
+  );
+
+  assert.deepEqual(calls.streamingThought, ["", "partial reasoning", ""]);
+  assert.deepEqual(calls.transcript, []);
   assert.deepEqual(calls.notices, []);
 });
 
@@ -130,6 +151,113 @@ test("chat stream done with summary state can append reply to transcript", async
   assert.deepEqual(calls.states, []);
 });
 
+test("chat stream appends a collapsed non-decision reasoning row before the reply", async () => {
+  const calls = createChatCalls({ includeTranscript: true });
+
+  await runTuiChatStream(
+    {
+      sendChatStream: async (_message, onEvent) => {
+        onEvent({ type: "thought", payload: { delta: "Checked constraints. " } });
+        onEvent({ type: "thought", payload: { delta: "No action executed." } });
+        onEvent({ type: "delta", payload: { delta: "Safe answer." } });
+        onEvent({ type: "done", payload: { reply: "Safe answer." } });
+      }
+    },
+    "hello",
+    calls.handlers
+  );
+
+  assert.deepEqual(calls.streamingThought, [
+    "",
+    "Checked constraints. ",
+    "Checked constraints. No action executed.",
+    ""
+  ]);
+  assert.deepEqual(calls.transcript, [
+    {
+      role: "thought",
+      content: "模型推理摘要（仅供参考，不是决策依据；默认折叠） · Checked constraints. No action executed."
+    },
+    { role: "assistant", content: "Safe answer." }
+  ]);
+});
+
+test("chat stream renders structured draft separately from Action Board", async () => {
+  const calls = createChatCalls({ includeTranscript: true });
+
+  await runTuiChatStream(
+    {
+      sendChatStream: async (_message, onEvent) => {
+        onEvent({ type: "delta", payload: { delta: "Review this draft." } });
+        onEvent({
+          type: "done",
+          payload: {
+            reply: "Review this draft.",
+            agent_output: {
+              schema: "physical-agent/agent-output/v1",
+              status: "draft",
+              decision: "propose",
+              lifecycle: "draft",
+              actions: [
+                {
+                  id: "draft_001",
+                  robot: "arm_1",
+                  capability: "observe",
+                  params: {},
+                  depends_on: []
+                }
+              ],
+              tasks: []
+            },
+            state: createReadyState()
+          }
+        });
+      }
+    },
+    "look around",
+    calls.handlers
+  );
+
+  assert.deepEqual(calls.transcript, [
+    { role: "assistant", content: "Review this draft." },
+    {
+      role: "draft",
+      content: "[draft output; not Action Board] draft_001 arm_1.observe"
+    }
+  ]);
+  assert.deepEqual(calls.states[0].actions?.pending, []);
+});
+
+test("chat stream keeps legacy action-draft fence as ordinary reply text", async () => {
+  const calls = createChatCalls({ includeTranscript: true });
+  const reply = [
+    "Historical draft:",
+    "```action-draft",
+    '{"id":"legacy_001","robot":"arm_1","capability":"observe","params":{}}',
+    "```"
+  ].join("\n");
+
+  await runTuiChatStream(
+    {
+      sendChatStream: async (_message, onEvent) => {
+        onEvent({ type: "delta", payload: { delta: reply } });
+        onEvent({
+          type: "done",
+          payload: {
+            reply,
+            state: createReadyState()
+          }
+        });
+      }
+    },
+    "show history",
+    calls.handlers
+  );
+
+  assert.deepEqual(calls.transcript, [{ role: "assistant", content: reply }]);
+  assert.deepEqual(calls.states[0].actions?.pending, []);
+});
+
 test("SSE summary state does not overwrite full TUI state", () => {
   const states: AgentState[] = [];
   const result = applyEvent(
@@ -194,6 +322,13 @@ test("idle watch_step summary does not force live refresh churn", () => {
     true
   );
   assert.equal(
+    shouldRefreshFullStateFromEvent({
+      type: "watch_step",
+      payload: { executed: 0, processed: 1, gate_decisions: 1, state_changed: true }
+    }),
+    true
+  );
+  assert.equal(
     shouldUpdateLastRefreshFromEvent({
       type: "state",
       payload: { state: { ok: true, ready: true, chat_messages: 2 } }
@@ -218,22 +353,51 @@ test("SSE thrown error fallback is readable", () => {
   );
 });
 
-test("watch_enabled hello event maps to real watch status", () => {
-  assert.equal(watchStatusFromEvent({ type: "hello", payload: { watch_enabled: true } }), "enabled");
-  assert.equal(watchStatusFromEvent({ type: "hello", payload: { watch_enabled: false } }), "disabled");
-  assert.equal(watchStatusFromEvent({ type: "hello", payload: { watch_enabled: "true" } }), null);
-  assert.equal(watchStatusFromEvent({ type: "state", payload: {} }), null);
+test("executor projection is authoritative and legacy watch flag stays unknown", () => {
+  assert.deepEqual(
+    executorFromEvent({
+      type: "hello",
+      payload: {
+        executor: {
+          mode: "external",
+          status: "active",
+          lease: { active: true, expires_at: "2026-07-10T00:00:00Z" }
+        }
+      }
+    }),
+    {
+      mode: "external",
+      status: "active",
+      lease: { active: true, expires_at: "2026-07-10T00:00:00Z" }
+    }
+  );
+  assert.deepEqual(executorFromEvent({ type: "hello", payload: { watch_enabled: true } }), {
+    mode: "none",
+    status: "unknown",
+    embedded_enabled: true,
+    legacy_watch_configured: true
+  });
+  assert.deepEqual(executorFromEvent({ type: "hello", payload: { watch_enabled: false } }), {
+    mode: "none",
+    status: "stopped",
+    embedded_enabled: false,
+    legacy_watch_configured: false
+  });
+  assert.equal(executorFromEvent({ type: "hello", payload: { watch_enabled: "true" } }), null);
+  assert.equal(executorFromEvent({ type: "state", payload: {} }), null);
 });
 
 function createChatCalls(options: { includeTranscript?: boolean } = {}) {
   const streaming: boolean[] = [];
   const streamingText: string[] = [];
+  const streamingThought: string[] = [];
   const states: AgentState[] = [];
   const notices: string[] = [];
   const transcript: Array<{ role: string; content: string }> = [];
   const result = {
     streaming,
     streamingText,
+    streamingThought,
     states,
     notices,
     transcript,
@@ -244,6 +408,9 @@ function createChatCalls(options: { includeTranscript?: boolean } = {}) {
       setStreamingText(value: string) {
         streamingText.push(value);
       },
+      setStreamingThought(value: string) {
+        streamingThought.push(value);
+      },
       setState(state: AgentState) {
         states.push(state);
       },
@@ -253,6 +420,7 @@ function createChatCalls(options: { includeTranscript?: boolean } = {}) {
     } as {
       setStreaming(value: boolean): void;
       setStreamingText(value: string): void;
+      setStreamingThought(value: string): void;
       setState(state: AgentState): void;
       setNotice(message: string): void;
       appendTranscript?: (role: string, content: string) => void;

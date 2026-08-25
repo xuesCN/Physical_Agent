@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio
+import ast
 import json
 import re
 import shutil
@@ -8,13 +8,12 @@ import tempfile
 from pathlib import Path
 from typing import Any, Protocol
 
+import yaml
 from pydantic import Field
 
 from physical_agent.agent.onboarding import HardwareIntegrationAssistant, IntegrationResult, SourceProfile
-from physical_agent.drivers.loader import load_driver
 from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
-from physical_agent.protocol.schemas import Action, StrictModel
-from physical_agent.protocol.workspace import Workspace
+from physical_agent.protocol.schemas import DriverManifest, StrictModel
 
 
 class ChatClient(Protocol):
@@ -116,14 +115,11 @@ class DriverCodingAgent:
                 candidate = Path(tmp) / "candidate"
                 shutil.copytree(integration.output_path, candidate)
                 _apply_file_updates(candidate, files)
-                validation = _validate_driver_scaffold(candidate, integration.source)
+                validation = _validate_driver_scaffold(candidate)
                 last_validation = validation
                 if validation.get("ok"):
                     _apply_file_updates(integration.output_path, files)
-                    final_validation = _validate_driver_scaffold(
-                        integration.output_path,
-                        integration.source,
-                    )
+                    final_validation = _validate_driver_scaffold(integration.output_path)
                     report_path = integration.output_path / "llm-coding-report.md"
                     report_path.write_text(
                         _render_llm_report(
@@ -364,100 +360,96 @@ def _apply_file_updates(root: Path, updates: dict[str, str]) -> None:
         target.write_text(content.rstrip() + "\n", encoding="utf-8")
 
 
-def _validate_driver_scaffold(path: Path, profile: SourceProfile) -> dict[str, Any]:
+def _validate_driver_scaffold(path: Path) -> dict[str, Any]:
     errors: list[str] = []
     checks: list[str] = []
+    manifest_path = path / "physical_driver.yaml"
     driver_py = path / "driver.py"
+    manifest: DriverManifest | None = None
+
+    if not manifest_path.exists():
+        errors.append("physical_driver.yaml is missing")
+    else:
+        try:
+            manifest_payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+            manifest = DriverManifest.model_validate(manifest_payload)
+            if manifest.schema != "physical-agent/driver/v1":
+                errors.append(f"unsupported driver manifest schema: {manifest.schema}")
+            else:
+                checks.append("physical_driver.yaml matches the v1 manifest contract")
+        except Exception as exc:
+            errors.append(f"physical_driver.yaml failed static validation: {exc}")
+
     if not driver_py.exists():
-        return {"ok": False, "errors": ["driver.py is missing"], "checks": checks}
+        errors.append("driver.py is missing")
+        return {"ok": False, "errors": errors, "checks": checks}
+
+    tree: ast.Module | None = None
     try:
-        compile(driver_py.read_text(encoding="utf-8"), str(driver_py), "exec")
+        source = driver_py.read_text(encoding="utf-8")
+        compile(source, str(driver_py), "exec")
+        tree = ast.parse(source, filename=str(driver_py))
         checks.append("driver.py compiles")
     except SyntaxError as exc:
         errors.append(f"driver.py failed to compile: {exc.msg}")
 
-    if not errors:
-        validation_tmp: tempfile.TemporaryDirectory[str] | None = None
-        try:
-            validation_tmp = tempfile.TemporaryDirectory(prefix="physical-agent-driver-validation-")
-            workspace = Workspace(Path(validation_tmp.name) / "workspace")
-            workspace.initialize(overwrite=True)
-            loaded = load_driver(
-                robot_id="validation_1",
-                driver_ref=str(path),
-                config=_mock_config_for_schema(profile.config_schema),
-                workspace_path=workspace.path,
-                artifacts_path=workspace.artifacts_path,
+    if manifest is not None and tree is not None:
+        if manifest.entrypoint.module != "driver":
+            errors.append(
+                "entrypoint.module must be `driver`; request-side validation does not import arbitrary modules"
             )
-            asyncio.run(loaded.driver.connect())
-            checks.append("driver loads and connects in mock mode")
-            health = asyncio.run(loaded.driver.health())
-            if not health.ok:
-                errors.append(f"driver health is not ok in mock mode: {health.message}")
-            else:
-                checks.append("driver health is ok")
-            observation = asyncio.run(loaded.driver.observe())
-            if not observation.summary:
-                errors.append("driver observe() returned an empty summary")
-            else:
-                checks.append("driver observe() returns a summary")
-            capability_names = [cap.name for cap in loaded.driver.capabilities()]
-            if "observe" in capability_names:
-                result = asyncio.run(
-                    loaded.driver.execute(
-                        Action(
-                            id="act_validation_observe",
-                            robot="validation_1",
-                            capability="observe",
-                            params={},
-                        )
-                    )
+        class_node = next(
+            (
+                node
+                for node in tree.body
+                if isinstance(node, ast.ClassDef)
+                and node.name == manifest.entrypoint.class_name
+            ),
+            None,
+        )
+        if class_node is None:
+            errors.append(
+                f"driver.py does not define entrypoint class {manifest.entrypoint.class_name}"
+            )
+        else:
+            base_names = {_ast_name(base) for base in class_node.bases}
+            if "PhysicalDriver" not in base_names:
+                errors.append(
+                    f"{manifest.entrypoint.class_name} must statically inherit PhysicalDriver"
                 )
-                if result.status not in {"completed", "failed", "cancelled"}:
-                    errors.append("observe action returned an invalid status")
-                else:
-                    checks.append("observe action executes through driver.execute")
-        except Exception as exc:
-            errors.append(f"driver failed mock-mode load validation: {exc}")
-        finally:
-            if validation_tmp is not None:
-                validation_tmp.cleanup()
+            required_methods = {
+                "connect",
+                "disconnect",
+                "health",
+                "observe",
+                "capabilities",
+                "execute",
+            }
+            method_names = {
+                node.name
+                for node in class_node.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
+            missing = sorted(required_methods - method_names)
+            if missing:
+                errors.append(
+                    "entrypoint class is missing required methods: " + ", ".join(missing)
+                )
+            if not missing and "PhysicalDriver" in base_names:
+                checks.append("entrypoint class statically satisfies the PhysicalDriver surface")
+
+    checks.append(
+        "dynamic connect/observe/execute validation deferred to an explicit watch-side conformance run"
+    )
     return {"ok": not errors, "errors": errors, "checks": checks}
 
 
-def _mock_config_for_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
-    required = schema.get("required", []) if isinstance(schema, dict) else []
-    config: dict[str, Any] = {"mode": "mock"}
-    for name in required:
-        if name not in config:
-            config[name] = _sample_value(properties.get(name, {}))
-    return config
-
-
-def _sample_value(schema: dict[str, Any]) -> Any:
-    if not isinstance(schema, dict):
-        return None
-    if "default" in schema:
-        return schema["default"]
-    schema_type = schema.get("type")
-    if schema_type == "string":
-        return "mock"
-    if schema_type == "integer":
-        return int(schema.get("minimum", 1))
-    if schema_type == "number":
-        return float(schema.get("minimum", 0.0))
-    if schema_type == "boolean":
-        return False
-    if schema_type == "array":
-        count = int(schema.get("minItems", 0))
-        item_schema = schema.get("items", {})
-        return [_sample_value(item_schema) for _ in range(count)]
-    if schema_type == "object":
-        props = schema.get("properties", {})
-        required = schema.get("required", [])
-        return {name: _sample_value(props.get(name, {})) for name in required}
-    return None
+def _ast_name(node: ast.expr) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
 
 
 def _render_llm_report(

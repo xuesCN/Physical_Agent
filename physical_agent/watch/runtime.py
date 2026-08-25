@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import os
 from pathlib import Path
 import time
 from typing import Any
+from uuid import uuid4
 
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config
 from physical_agent.drivers.loader import LoadedDriver, load_driver
@@ -14,17 +18,34 @@ from physical_agent.drivers.transport import (
     TransportReconnecting,
 )
 from physical_agent.protocol.expectations import evaluate_expected, normalize_expected_value
+from physical_agent.protocol.agent_output import safety_gate_task_id
 from physical_agent.protocol.schemas import Action, ActionResult, Observation, RobotRuntimeProfile
 from physical_agent.state import StateStore, open_state_store
-from physical_agent.watch.safety import SafetyGate
+from physical_agent.state.safety_policy import (
+    MAX_AGENT_GUIDANCE_CHARS,
+    SafetyPolicyError,
+    SafetyPolicySnapshot,
+    guidance_json_chars,
+)
+from physical_agent.watch.safety import SafetyDecision, SafetyGate
 
 
 ACTION_LEASE_SECONDS = 300
-CLAIM_OWNER = "watch"
+WATCH_LEASE_NAME = "watch-executor"
 
 
 class DriverCallTimeout(Exception):
     """A driver call exceeded its watch-side timeout budget."""
+
+
+class WatchLeaseLostError(RuntimeError):
+    """The runtime no longer owns the workspace hardware executor lease."""
+
+    fatal_watch_error = True
+
+
+class ActionClaimLostError(WatchLeaseLostError):
+    """A stale executor attempted to finalize an action it no longer owns."""
 
 
 async def _call_with_timeout(coro: Any, timeout_s: float, description: str) -> Any:
@@ -45,19 +66,67 @@ class WatchRuntime:
         self.loaded_drivers: dict[str, LoadedDriver] = {}
         self.profiles: dict[str, RobotRuntimeProfile] = {}
         self._heartbeat_failure_counts: dict[str, int] = {}
+        self._heartbeat_unhealthy_robots: set[str] = set()
         self._watchdog_halted_robots: set[str] = set()
         self._last_idle_observe_at: float | None = None
+        self._watch_lease_owner = f"watch_{os.getpid()}_{uuid4().hex}"
+        self._watch_lease_pid = os.getpid()
+        self._watch_lease_acquired = False
+        self._setup_lock = asyncio.Lock()
+        self._step_lock = asyncio.Lock()
+        self.last_step_stats: dict[str, Any] = {
+            "executed": 0,
+            "processed": 0,
+            "gate_decisions": 0,
+            "state_changed": False,
+        }
         self.started = False
 
     async def setup(self) -> None:
+        async with self._setup_lock:
+            await self._setup_once()
+
+    async def _setup_once(self) -> None:
         if self.started:
             return
         self.config = load_config(self.config_path)
+        self.profiles.clear()
+        self._heartbeat_failure_counts.clear()
+        self._heartbeat_unhealthy_robots.clear()
+        self._watchdog_halted_robots.clear()
         self.workspace = open_state_store(self.config, base_dir=self.base_dir)
         self.workspace.initialize()
+        # Every setup session gets a fresh fencing identity. This prevents a
+        # delayed result from an earlier session of the same object from
+        # satisfying action completion CAS checks.
+        self._watch_lease_owner = f"watch_{os.getpid()}_{uuid4().hex}"
+        self._watch_lease_pid = os.getpid()
+        if not self.workspace.acquire_runtime_lease(
+            WATCH_LEASE_NAME,
+            self._watch_lease_owner,
+            ttl_s=self._watch_lease_seconds(),
+        ):
+            raise RuntimeError(
+                "Another physical-agent watch runtime already owns this workspace."
+            )
+        self._watch_lease_acquired = True
+        try:
+            await self._connect_and_publish_drivers()
+        except BaseException:
+            # A partially initialized driver still owns transport resources.
+            # Stop and disconnect it before allowing another runtime to take
+            # the workspace lease.
+            await asyncio.shield(self.shutdown())
+            raise
+        self.started = True
+
+    async def _connect_and_publish_drivers(self) -> None:
+        assert self.config is not None
+        assert self.workspace is not None
         self.workspace.append_log("`physical-agent watch` started.", actor="watch")
 
         for robot_id, robot_config in self.config.robots.items():
+            self._require_watch_lease("while connecting drivers")
             loaded = load_driver(
                 robot_id=robot_id,
                 driver_ref=robot_config.driver,
@@ -66,52 +135,75 @@ class WatchRuntime:
                 artifacts_path=self.workspace.artifacts_path,
                 base_dir=self.base_dir,
             )
-            await loaded.driver.connect()
-            capabilities = loaded.driver.capabilities()
+            # Register before connect so setup failure cleanup can disconnect
+            # a driver whose connect hook raised or timed out.
             self.loaded_drivers[robot_id] = loaded
+            await _call_with_timeout(
+                loaded.driver.connect(),
+                self.config.watch.connect_timeout_s,
+                f"Driver connect for robot `{robot_id}`",
+            )
+            capabilities = loaded.driver.capabilities()
             self._heartbeat_failure_counts[robot_id] = 0
             self._watchdog_halted_robots.discard(robot_id)
             self.profiles[robot_id] = RobotRuntimeProfile(
                 robot_id=robot_id,
                 kind=loaded.manifest.robot.kind,
                 driver=loaded.manifest.name,
+                execution_mode=robot_config.execution_mode,
                 status="connected",
                 capabilities=capabilities,
                 requires_approval=(
                     self.config.watch.require_human_approval
-                    or not loaded.manifest.robot.supports_simulation
+                    or robot_config.execution_mode == "hardware"
                 ),
             )
             self.workspace.append_log(f"`{robot_id}` connected via `{loaded.manifest.name}`.", actor="watch")
+            self._require_watch_lease("after connecting a driver")
 
         self.workspace.write_capabilities(self._capabilities_document())
         await self.update_world()
-        self.started = True
+        self._require_watch_lease("during setup")
 
     async def shutdown(self) -> None:
-        await self._halt_loaded_drivers()
-        for robot_id, loaded in self.loaded_drivers.items():
-            try:
-                await _call_with_timeout(
-                    loaded.driver.disconnect(),
-                    self._halt_timeout_s(),
-                    f"Driver disconnect for robot `{robot_id}`",
-                )
-            except Exception as exc:
-                if self.workspace is not None:
-                    self.workspace.append_log(
-                        f"Driver disconnect failed for `{robot_id}`: "
-                        f"{type(exc).__name__}: {exc}",
-                        actor="watch",
+        if (
+            not self._watch_lease_acquired
+            and not self.loaded_drivers
+            and not self.started
+        ):
+            return
+        owns_lease = self._renew_watch_lease()
+        try:
+            # A stale owner must not send halt commands after a newer Watch
+            # has acquired the workspace. Disconnecting its own transport is
+            # still required to release local resources.
+            if owns_lease:
+                await self._halt_loaded_drivers()
+            for robot_id, loaded in self.loaded_drivers.items():
+                try:
+                    await _call_with_timeout(
+                        loaded.driver.disconnect(),
+                        self._halt_timeout_s(),
+                        f"Driver disconnect for robot `{robot_id}`",
                     )
-        if self.workspace is not None:
-            self.workspace.append_log("`physical-agent watch` stopped.", actor="watch")
-        self.started = False
+                except Exception as exc:
+                    if self.workspace is not None:
+                        self.workspace.append_log(
+                            f"Driver disconnect failed for `{robot_id}`: "
+                            f"{type(exc).__name__}: {exc}",
+                            actor="watch",
+                        )
+            if self.workspace is not None:
+                self.workspace.append_log("`physical-agent watch` stopped.", actor="watch")
+        finally:
+            self._release_watch_lease()
+            self.loaded_drivers.clear()
+            self.started = False
 
     async def run_forever(self) -> None:
-        await self.setup()
-        assert self.config is not None
         try:
+            await self.setup()
+            assert self.config is not None
             while True:
                 await self.tick()
                 await asyncio.sleep(self.config.watch.tick_ms / 1000)
@@ -126,20 +218,108 @@ class WatchRuntime:
         return executed_count
 
     async def step(self, *, setup: bool = True, observe_when_idle: bool = True) -> int:
+        async with self._step_lock:
+            return await self._step_once(
+                setup=setup,
+                observe_when_idle=observe_when_idle,
+            )
+
+    async def _step_once(
+        self,
+        *,
+        setup: bool = True,
+        observe_when_idle: bool = True,
+    ) -> int:
         if setup:
             await self.setup()
+        if not self._renew_watch_lease():
+            raise WatchLeaseLostError(
+                "Watch execution lease was lost; refusing to process actions."
+            )
+        self.last_step_stats = {
+            "executed": 0,
+            "processed": 0,
+            "gate_decisions": 0,
+            "state_changed": False,
+        }
         await self._heartbeat_loaded_drivers()
         workspace = self._workspace()
         workspace.recover_stale_actions(ACTION_LEASE_SECONDS)
         actions_doc = workspace.read_actions()
-        safety_rules = workspace.read_safety()["rules"]
+        baseline_policy = workspace.read_safety_snapshot()
         executed_count = 0
+        await self._reject_impossible_dependency_actions(
+            actions_doc,
+            safety_policy=baseline_policy,
+        )
+        actions_doc = workspace.read_actions()
         initial_pending_count = len(actions_doc["pending"])
+        policy_changed = False
 
         for _ in range(initial_pending_count):
-            action = workspace.claim_next_ready_action(claim_owner=CLAIM_OWNER)
+            # One step may execute many queued actions. Renew between actions
+            # so a long batch cannot outlive the singleton executor lease.
+            self._require_watch_lease("before claiming an action")
+            blocked_robot_ids = (
+                self._heartbeat_unhealthy_robots | self._watchdog_halted_robots
+            )
+            action = workspace.claim_next_ready_action(
+                claim_owner=self._watch_lease_owner,
+                blocked_robot_ids=blocked_robot_ids,
+                hard_policy=baseline_policy.hard,
+            )
             if action is None:
                 break
+            self.last_step_stats["processed"] += 1
+            self.last_step_stats["state_changed"] = True
+            try:
+                current_policy = workspace.read_safety_snapshot()
+            except SafetyPolicyError as exc:
+                await self._reject_claimed_for_policy(
+                    action,
+                    code="safety.policy.invalidated",
+                    message=(
+                        "SAFETY.md became unavailable or invalid after this watch "
+                        f"step began: {exc}"
+                    ),
+                    baseline=baseline_policy,
+                    current=None,
+                    policy_error=exc,
+                    cancel_proposal=True,
+                )
+                policy_changed = True
+                break
+            if current_policy.identity_digest != baseline_policy.identity_digest:
+                await self._reject_claimed_for_policy(
+                    action,
+                    code="safety.policy.changed",
+                    message=(
+                        "SAFETY.md changed after this watch step began; refusing "
+                        "the remainder of the affected proposal."
+                    ),
+                    baseline=baseline_policy,
+                    current=current_policy,
+                    cancel_proposal=True,
+                )
+                policy_changed = True
+                break
+
+            guidance_rejection = _hardware_guidance_rejection(
+                action,
+                profiles=self.profiles,
+                policy=current_policy,
+            )
+            if guidance_rejection is not None:
+                code, message = guidance_rejection
+                await self._reject_claimed_for_policy(
+                    action,
+                    code=code,
+                    message=message,
+                    baseline=baseline_policy,
+                    current=current_policy,
+                    cancel_proposal=False,
+                )
+                continue
             latest_actions = workspace.read_actions()
             completed_ids = {item.id for item in latest_actions["completed"]}
             executed_ids = {
@@ -152,19 +332,32 @@ class WatchRuntime:
                     executed_ids.add(str(action_id))
             gate = SafetyGate(
                 robots=self.profiles,
-                safety_rules=safety_rules,
+                hard_policy=current_policy.hard,
                 completed_action_ids=completed_ids,
                 executed_action_ids=executed_ids,
+                default_action_timeout_s=(
+                    self.config.watch.action_timeout_s
+                    if self.config is not None
+                    else 30.0
+                ),
             )
             decision = gate.validate(action)
+            self._require_watch_lease("before recording a SafetyGate decision")
+            self.last_step_stats["gate_decisions"] += 1
+            self._record_safety_gate_decision(action, decision, current_policy)
             if not decision.ok:
                 result = ActionResult(status="failed", message=decision.message)
-                workspace.mark_action_cancelled(action)
+                self._finalize_claimed_action(action, status="cancelled")
                 await self._record_action_result(action, result)
+                await self._record_expectation_skipped(
+                    action,
+                    f"SafetyGate rejected action before execution: {decision.message}",
+                )
                 continue
 
             loaded = self.loaded_drivers[action.robot]
             timeout_s = self._action_timeout_s(action)
+            self._require_watch_lease("before driver execution")
             try:
                 result = await _call_with_timeout(
                     loaded.driver.execute(action),
@@ -180,14 +373,17 @@ class WatchRuntime:
                     ),
                     result={"error_type": "DriverCallTimeout", "timeout_s": timeout_s},
                 )
-                workspace.mark_action_cancelled(action)
+                # Hardware state is unknown after a timeout. Attempt the
+                # safety mitigation before any result/feedback persistence so
+                # a storage failure cannot suppress the halt.
+                await self._halt_robot_after_timeout(action.robot, loaded)
+                self._finalize_claimed_action(action, status="cancelled")
                 executed_count += 1
                 await self._record_action_result(action, result)
                 await self._record_expectation_skipped(
                     action,
                     f"Action failed before expectation check: {result.message}",
                 )
-                await self._halt_robot_after_timeout(action.robot, loaded)
                 continue
             except (
                 TransportReconnecting,
@@ -196,7 +392,7 @@ class WatchRuntime:
                 TransportClosedError,
             ) as exc:
                 result = _transport_action_failure_result(exc)
-                workspace.mark_action_cancelled(action)
+                self._finalize_claimed_action(action, status="cancelled")
                 executed_count += 1
                 await self._record_action_result(action, result)
                 await self._record_expectation_skipped(
@@ -210,7 +406,7 @@ class WatchRuntime:
                     message=f"Driver execute failed: {type(exc).__name__}: {exc}",
                     result={"error_type": type(exc).__name__},
                 )
-                workspace.mark_action_cancelled(action)
+                self._finalize_claimed_action(action, status="cancelled")
                 executed_count += 1
                 await self._record_action_result(action, result)
                 await self._record_expectation_skipped(
@@ -219,9 +415,9 @@ class WatchRuntime:
                 )
                 continue
             if result.status == "completed":
-                workspace.mark_action_completed(action)
+                self._finalize_claimed_action(action, status="completed")
             else:
-                workspace.mark_action_cancelled(action)
+                self._finalize_claimed_action(action, status="cancelled")
             executed_count += 1
             await self._record_action_result(action, result)
             if result.status != "completed":
@@ -244,8 +440,16 @@ class WatchRuntime:
                 raise
             await self._record_expectation_check(action, world)
 
+        if not policy_changed:
+            await self._reject_impossible_dependency_actions(
+                workspace.read_actions(),
+                safety_policy=baseline_policy,
+            )
         if executed_count == 0 and observe_when_idle:
+            self._require_watch_lease("before idle observation")
             await self.update_world()
+            self.last_step_stats["state_changed"] = True
+        self.last_step_stats["executed"] = executed_count
         return executed_count
 
     async def update_world(self) -> Observation:
@@ -310,6 +514,7 @@ class WatchRuntime:
             document[robot_id] = {
                 "kind": profile.kind,
                 "driver": profile.driver,
+                "execution_mode": profile.execution_mode,
                 "status": profile.status,
                 "requires_approval": profile.requires_approval,
                 "capabilities": [
@@ -321,9 +526,9 @@ class WatchRuntime:
 
     async def _record_action_result(self, action: Action, result: ActionResult) -> None:
         workspace = self._workspace()
-        feedback = workspace.read_feedback()
         latest = {
             "action_id": action.id,
+            "executor_id": self._watch_lease_owner,
             "status": result.status,
             "robot": action.robot,
             "capability": action.capability,
@@ -331,12 +536,231 @@ class WatchRuntime:
             "result": result.result,
             "artifacts": result.artifacts,
         }
-        history = list(feedback["history"])
-        history.append(latest)
-        workspace.write_feedback(latest, history)
+        workspace.append_feedback_event(latest)
         workspace.append_log(
             f"Action `{action.id}` {result.status}: {result.message}",
             actor="watch",
+        )
+
+    async def _reject_impossible_dependency_actions(
+        self,
+        actions_doc: dict[str, Any],
+        *,
+        safety_policy: SafetyPolicySnapshot,
+    ) -> None:
+        pending = list(actions_doc.get("pending") or [])
+        if not pending:
+            return
+        completed_ids = {action.id for action in actions_doc.get("completed") or []}
+        known_ids = {
+            action.id
+            for status in ("pending", "in_progress", "completed", "cancelled")
+            for action in actions_doc.get(status) or []
+        }
+        unavailable_ids = {
+            action.id for action in actions_doc.get("cancelled") or []
+        }
+        rejected: list[Action] = []
+        remaining = list(pending)
+        changed = True
+        while changed:
+            changed = False
+            next_remaining: list[Action] = []
+            for action in remaining:
+                impossible = [
+                    dependency
+                    for dependency in action.depends_on
+                    if dependency not in known_ids or dependency in unavailable_ids
+                ]
+                if impossible:
+                    unavailable_ids.add(action.id)
+                    rejected.append(action)
+                    changed = True
+                else:
+                    next_remaining.append(action)
+            remaining = next_remaining
+
+        for action in rejected:
+            gate = SafetyGate(
+                robots=self.profiles,
+                hard_policy=safety_policy.hard,
+                completed_action_ids=completed_ids,
+                executed_action_ids=set(),
+                default_action_timeout_s=(
+                    self.config.watch.action_timeout_s
+                    if self.config is not None
+                    else 30.0
+                ),
+            )
+            decision = gate.validate(action)
+            if decision.ok:
+                # Defensive fallback: the action was classified impossible
+                # from the same snapshot and must never become executable.
+                decision = SafetyDecision(
+                    False,
+                    f"Action {action.id} has an impossible dependency.",
+                    code="safety.dependencies.completed",
+                )
+            self.last_step_stats["processed"] += 1
+            self.last_step_stats["gate_decisions"] += 1
+            self.last_step_stats["state_changed"] = True
+            self._record_safety_gate_decision(action, decision, safety_policy)
+            self._workspace().mark_action_cancelled(action)
+            result = ActionResult(status="failed", message=decision.message)
+            await self._record_action_result(action, result)
+            await self._record_expectation_skipped(
+                action,
+                f"Dependency made action impossible before execution: {decision.message}",
+            )
+
+    def _record_safety_gate_decision(
+        self,
+        action: Action,
+        decision: SafetyDecision,
+        safety_policy: SafetyPolicySnapshot,
+    ) -> None:
+        metadata = action.metadata if isinstance(action.metadata, dict) else {}
+        correlation = metadata.get("correlation")
+        proposal_id = (
+            str(correlation.get("proposal_id"))
+            if isinstance(correlation, dict) and correlation.get("proposal_id")
+            else None
+        )
+        status = "passed" if decision.ok else "rejected"
+        checks = [check.model_dump(mode="json") for check in decision.checks]
+        latest = {
+            "event": "safety_gate",
+            "task_id": safety_gate_task_id(action.id),
+            "action_id": action.id,
+            "proposal_id": proposal_id,
+            "status": status,
+            "decision": decision.outcome,
+            "code": decision.code,
+            "actor": "watch",
+            "owner": "watch",
+            "executor_id": self._watch_lease_owner,
+            "mandatory": True,
+            "policy_source": "SAFETY.md",
+            "robot": action.robot,
+            "capability": action.capability,
+            "message": decision.message,
+            "checks": checks,
+            "action_digest": _stable_digest(action.model_dump(mode="json")),
+            "policy_revision": safety_policy.hard.revision,
+            "policy_digest": _sha256_digest(safety_policy.hard.digest),
+            "guidance_digest": _sha256_digest(safety_policy.guidance_digest),
+            "policy_identity_digest": _sha256_digest(safety_policy.identity_digest),
+            "result": {
+                "decision": decision.outcome,
+                "code": decision.code,
+                "check_count": len(checks),
+            },
+            "artifacts": [],
+        }
+        self._record_feedback_event(
+            latest,
+            f"Safety gate for `{action.id}` {status}: {decision.message}",
+        )
+
+    async def _reject_claimed_for_policy(
+        self,
+        action: Action,
+        *,
+        code: str,
+        message: str,
+        baseline: SafetyPolicySnapshot,
+        current: SafetyPolicySnapshot | None,
+        policy_error: SafetyPolicyError | None = None,
+        cancel_proposal: bool,
+    ) -> None:
+        cancelled_siblings: list[Action] = []
+        if cancel_proposal:
+            self._require_watch_lease("before invalidating a policy-drift batch")
+            affected = self._workspace().cancel_claimed_action_and_pending_by_proposal(
+                action,
+                claim_owner=self._watch_lease_owner,
+            )
+            if not affected:
+                raise ActionClaimLostError(
+                    f"Action `{action.id}` is no longer claimed by this Watch; "
+                    "refusing stale policy-drift terminalization."
+                )
+            cancelled_siblings = affected[1:]
+        else:
+            self._finalize_claimed_action(action, status="cancelled")
+            affected = [action]
+        self.last_step_stats["processed"] += len(cancelled_siblings)
+        self.last_step_stats["state_changed"] = True
+        for rejected_action in affected:
+            self._record_policy_preflight_rejection(
+                rejected_action,
+                code=code,
+                message=message,
+                baseline=baseline,
+                current=current,
+                policy_error=policy_error,
+                cancelled_action_ids=[item.id for item in affected],
+            )
+            result = ActionResult(
+                status="failed",
+                message=message,
+                result={"error_type": "SafetyPolicyError", "code": code},
+            )
+            await self._record_action_result(rejected_action, result)
+            await self._record_expectation_skipped(
+                rejected_action,
+                f"SAFETY policy preflight rejected action before execution: {message}",
+            )
+
+    def _record_policy_preflight_rejection(
+        self,
+        action: Action,
+        *,
+        code: str,
+        message: str,
+        baseline: SafetyPolicySnapshot,
+        current: SafetyPolicySnapshot | None,
+        policy_error: SafetyPolicyError | None,
+        cancelled_action_ids: list[str],
+    ) -> None:
+        latest = {
+            "event": "safety_policy_preflight",
+            "action_id": action.id,
+            "proposal_id": _proposal_id(action),
+            "status": "rejected",
+            "decision": "deny",
+            "code": code,
+            "actor": "watch",
+            "owner": "watch",
+            "executor_id": self._watch_lease_owner,
+            "policy_source": "SAFETY.md",
+            "robot": action.robot,
+            "capability": action.capability,
+            "message": message,
+            "action_digest": _stable_digest(action.model_dump(mode="json")),
+            "policy_revision": baseline.hard.revision,
+            "policy_digest": _sha256_digest(baseline.hard.digest),
+            "guidance_digest": _sha256_digest(baseline.guidance_digest),
+            "policy_identity_digest": _sha256_digest(baseline.identity_digest),
+            "result": {
+                "decision": "deny",
+                "code": code,
+                "cancelled_action_ids": cancelled_action_ids,
+                "baseline": _policy_identity_payload(baseline),
+                "current": (
+                    _policy_identity_payload(current) if current is not None else None
+                ),
+                "policy_error": (
+                    {"code": policy_error.code, "message": str(policy_error)}
+                    if policy_error is not None
+                    else None
+                ),
+            },
+            "artifacts": [],
+        }
+        self._record_feedback_event(
+            latest,
+            f"SAFETY policy preflight for `{action.id}` rejected: {message}",
         )
 
     async def _record_expectation_check(self, action: Action, world: Observation) -> None:
@@ -347,6 +771,7 @@ class WatchRuntime:
         latest = {
             "event": "expectation_check",
             "action_id": action.id,
+            "executor_id": self._watch_lease_owner,
             "status": evaluation["status"],
             "robot": action.robot,
             "capability": action.capability,
@@ -383,6 +808,7 @@ class WatchRuntime:
         latest = {
             "event": "expectation_check",
             "action_id": action.id,
+            "executor_id": self._watch_lease_owner,
             "status": "skipped",
             "robot": action.robot,
             "capability": action.capability,
@@ -409,7 +835,9 @@ class WatchRuntime:
         if self.config is None or not self.config.watch.heartbeat_enabled:
             return
         heartbeat_timeout_s = self.config.watch.heartbeat_timeout_s
+        capabilities_changed = False
         for robot_id, loaded in self.loaded_drivers.items():
+            self._require_watch_lease("before driver heartbeat")
             try:
                 await _call_with_timeout(
                     loaded.driver.heartbeat(),
@@ -417,6 +845,11 @@ class WatchRuntime:
                     f"Driver heartbeat for robot `{robot_id}`",
                 )
             except Exception as exc:
+                self._heartbeat_unhealthy_robots.add(robot_id)
+                profile = self.profiles.get(robot_id)
+                if profile is not None and profile.status != "degraded":
+                    profile.status = "degraded"
+                    capabilities_changed = True
                 failure_count = self._heartbeat_failure_counts.get(robot_id, 0) + 1
                 self._heartbeat_failure_counts[robot_id] = failure_count
                 self._record_driver_hook_failure(
@@ -434,9 +867,17 @@ class WatchRuntime:
             else:
                 previous_failure_count = self._heartbeat_failure_counts.get(robot_id, 0)
                 self._heartbeat_failure_counts[robot_id] = 0
+                self._heartbeat_unhealthy_robots.discard(robot_id)
                 self._watchdog_halted_robots.discard(robot_id)
+                profile = self.profiles.get(robot_id)
+                if profile is not None and profile.status != "connected":
+                    profile.status = "connected"
+                    capabilities_changed = True
                 if previous_failure_count > 0:
                     self._record_heartbeat_recovered(robot_id, previous_failure_count)
+        if capabilities_changed:
+            self._workspace().write_capabilities(self._capabilities_document())
+            self.last_step_stats["state_changed"] = True
 
     async def _halt_loaded_drivers(self) -> None:
         if self.config is None or not self.config.watch.halt_on_shutdown:
@@ -452,6 +893,7 @@ class WatchRuntime:
                 self._record_driver_hook_failure(robot_id, "halt", exc)
 
     async def _halt_robot_after_timeout(self, robot_id: str, loaded: LoadedDriver) -> None:
+        self._require_watch_lease("before timeout halt")
         try:
             await _call_with_timeout(
                 loaded.driver.halt(),
@@ -474,12 +916,82 @@ class WatchRuntime:
         if profile is None:
             return default_timeout
         for capability in profile.capabilities:
-            if capability.name == action.capability and capability.timeout_s:
+            if capability.name == action.capability and capability.timeout_s is not None:
                 return float(capability.timeout_s)
         return default_timeout
 
     def _halt_timeout_s(self) -> float:
         return self.config.watch.halt_timeout_s if self.config is not None else 5.0
+
+    def _watch_lease_seconds(self) -> float:
+        if self.config is None:
+            return 60.0
+        action_timeouts = [float(self.config.watch.action_timeout_s)]
+        for profile in self.profiles.values():
+            action_timeouts.extend(
+                float(capability.timeout_s)
+                for capability in profile.capabilities
+                if capability.timeout_s is not None
+            )
+        operation_budget = (
+            max(action_timeouts)
+            + float(self.config.watch.connect_timeout_s)
+            + float(self.config.watch.observe_timeout_s)
+            + float(self.config.watch.heartbeat_timeout_s)
+            + float(self.config.watch.halt_timeout_s)
+            + 15.0
+        )
+        return max(60.0, operation_budget)
+
+    def _renew_watch_lease(self) -> bool:
+        if (
+            not self._watch_lease_acquired
+            or self.workspace is None
+            or self._watch_lease_pid != os.getpid()
+        ):
+            return False
+        return self.workspace.renew_runtime_lease(
+            WATCH_LEASE_NAME,
+            self._watch_lease_owner,
+            ttl_s=self._watch_lease_seconds(),
+        )
+
+    def _require_watch_lease(self, phase: str) -> None:
+        if not self._renew_watch_lease():
+            raise WatchLeaseLostError(
+                f"Watch execution lease was lost {phase}; refusing hardware I/O."
+            )
+
+    def _finalize_claimed_action(self, action: Action, *, status: str) -> None:
+        self._require_watch_lease("before finalizing an action")
+        workspace = self._workspace()
+        if status == "completed":
+            changed = workspace.mark_action_completed(
+                action,
+                claim_owner=self._watch_lease_owner,
+            )
+        elif status == "cancelled":
+            changed = workspace.mark_action_cancelled(
+                action,
+                claim_owner=self._watch_lease_owner,
+            )
+        else:
+            raise ValueError(f"Unsupported claimed action status: {status}")
+        if not changed:
+            raise ActionClaimLostError(
+                f"Action `{action.id}` is no longer claimed by this Watch; "
+                "discarding the stale execution result."
+            )
+
+    def _release_watch_lease(self) -> None:
+        if not self._watch_lease_acquired or self.workspace is None:
+            return
+        if self._watch_lease_pid == os.getpid():
+            self.workspace.release_runtime_lease(
+                WATCH_LEASE_NAME,
+                self._watch_lease_owner,
+            )
+        self._watch_lease_acquired = False
 
     def _observe_interval_ms(self) -> int:
         if self.config is None:
@@ -539,8 +1051,13 @@ class WatchRuntime:
             )
             return
 
+        self._require_watch_lease("before watchdog halt")
         try:
-            await loaded.driver.halt()
+            await _call_with_timeout(
+                loaded.driver.halt(),
+                self._halt_timeout_s(),
+                f"Watchdog halt for robot `{robot_id}`",
+            )
         except Exception as halt_exc:
             self._record_watchdog_halt(
                 robot_id=robot_id,
@@ -667,10 +1184,7 @@ class WatchRuntime:
 
     def _record_feedback_event(self, latest: dict[str, Any], message: str) -> None:
         workspace = self._workspace()
-        feedback = workspace.read_feedback()
-        history = list(feedback["history"])
-        history.append(latest)
-        workspace.write_feedback(latest, history)
+        workspace.append_feedback_event(latest)
         workspace.append_log(message, actor="watch")
 
     def _workspace(self) -> StateStore:
@@ -730,6 +1244,61 @@ def _expected_checks(action: Action) -> list[dict[str, Any]]:
     if "expected" not in metadata:
         return []
     return normalize_expected_value(metadata.get("expected"))
+
+
+def _stable_digest(value: Any) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
+def _sha256_digest(value: str) -> str:
+    return value if value.startswith("sha256:") else f"sha256:{value}"
+
+
+def _proposal_id(action: Action) -> str | None:
+    metadata = action.metadata if isinstance(action.metadata, dict) else {}
+    correlation = metadata.get("correlation")
+    if not isinstance(correlation, dict) or not correlation.get("proposal_id"):
+        return None
+    return str(correlation["proposal_id"])
+
+
+def _policy_identity_payload(policy: SafetyPolicySnapshot) -> dict[str, Any]:
+    return {
+        "revision": policy.hard.revision,
+        "policy_digest": _sha256_digest(policy.hard.digest),
+        "guidance_digest": _sha256_digest(policy.guidance_digest),
+        "policy_identity_digest": _sha256_digest(policy.identity_digest),
+    }
+
+
+def _hardware_guidance_rejection(
+    action: Action,
+    *,
+    profiles: dict[str, RobotRuntimeProfile],
+    policy: SafetyPolicySnapshot,
+) -> tuple[str, str] | None:
+    profile = profiles.get(action.robot)
+    if profile is None or profile.execution_mode != "hardware":
+        return None
+    if policy.agent_guidance is None:
+        return (
+            "safety.guidance.missing",
+            "Hardware execution requires non-empty `## Agent Guidance` in SAFETY.md.",
+        )
+    actual_chars = guidance_json_chars(policy.agent_guidance)
+    if actual_chars > MAX_AGENT_GUIDANCE_CHARS:
+        return (
+            "safety.guidance.budget_exceeded",
+            "Hardware execution requires Agent Guidance within the configured "
+            f"{MAX_AGENT_GUIDANCE_CHARS}-character safety budget; got {actual_chars}.",
+        )
+    return None
 
 
 def _transport_action_failure_result(exc: Exception) -> ActionResult:

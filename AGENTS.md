@@ -12,7 +12,7 @@
 ## 开工中
 
 - 新能力默认关闭或向后兼容；小步可回滚。
-- 改动必须带测试；两个状态后端（markdown/sqlite）的行为改动要过 backend 矩阵测试。
+- 改动必须带测试；SQLite 运行态行为改动要过 state/backend 回归，SAFETY/LOG sidecar 或 legacy fail-closed 行为改动要过对应矩阵测试。
 - driver 内阻塞调用必须带超时或走 `asyncio.to_thread`（W5 守则）。
 - 不确定的设计决策：先查 `docs/REFACTORING.zh-CN.md` §3 有无先例，再做取舍并记录。
 
@@ -20,8 +20,18 @@
 
 1. 全量测试通过（`pytest`；改前端则加 `tsc -b && vite build`）。
 2. 更新 SPEC §4 对应行状态；REFACTORING §1 表格追加一行，实现要点并入 §2 小节，新决策/教训补 §3/§4。
-3. **不写独立 handoff 文档**（历史上堆出过 33 份）——收工总结的家就是 REFACTORING；本轮 brief 用完即删（升级为 `specs/00X/` 的大条目除外，可在目录内留完整记录）。
-4. commit 全部改动并 push。
+3. **按改动层复核 `docs/agent-architecture-vnext.zh-CN.md`**——只复核被触发的章节，不做全文核查：
+
+   | 本轮改动涉及 | 复核 |
+   | --- | --- |
+   | `physical_agent/watch/` | vnext §4 |
+   | `physical_agent/state/` | vnext §5、§5.1 |
+   | `physical_agent/protocol/` | vnext §3 |
+   | `physical_agent/api/`，或任何改变对外 API/SSE wire 契约的改动 | vnext §7 |
+
+   一处都没触发就不复核。该文件的 frozen registry 部分（§6、§8，以及 §9 的 VNext-3A/3B2/4/5/6 子节）**不在本规则覆盖范围内**——它们记录刻意未建之物，不随代码演进，修改需经解冻流程。
+4. **不写独立 handoff 文档**（历史上堆出过 33 份）——收工总结的家就是 REFACTORING；本轮 brief 用完即删（升级为 `specs/00X/` 的大条目除外，可在目录内留完整记录）。
+5. commit 全部改动并 push。
 
 ## 文档纪律（三条约定）
 
@@ -38,6 +48,14 @@ physical-agent api --watch          # 启动后端（项目根目录）
 cd frontend && npm run dev          # 前端开发模式
 cd frontend && npm run build        # 重建 dist（FastAPI 托管产物）
 ```
+
+## 环境注意：Linux 沙盒执行者
+
+**仅适用于通过 Linux 沙盒挂载本仓库的 agent**（Cowork 等把 Windows 工作目录 bind-mount 进 Linux 容器的形态）。在 Windows 本机或普通 Linux checkout 上工作的执行者忽略本节。
+
+1. **不要从沙盒侧跑 git。** 挂载不允许在 `.git/` 内 unlink，`git status` 一类只读命令也会尝试刷新索引并留下无法清理的 `.git/index.lock`，随后 Windows 侧所有 `git add`/`git commit` 报 `Unable to create '.git/index.lock': File exists`。已发生过一次（2026-08-14）。需要 git 就走 Windows 侧执行；若已卡住，手动删 `.git/index.lock` 即可恢复。
+2. **沙盒看到的 diff 不是真相。** 本机 `core.autocrlf=true`，工作树是 CRLF 而 index 是 LF；沙盒 git 的 `autocrlf` 未设，会把整棵树报成「已修改」。`.gitattributes` 已声明 `* text=auto`（`75163d8`）消除该偏差，但判断改动范围前仍应确认自己看到的是真实改动，必要时用 `git diff --ignore-all-space` 交叉验证。
+3. 读写文件、跑 pytest/npm 用沙盒没问题；受影响的只有 git 与其他需要写 `.git/` 的操作。
 
 ## 红线速查
 

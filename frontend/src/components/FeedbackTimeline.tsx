@@ -21,6 +21,7 @@ import {
   statusColor,
   statusText
 } from "./readableFormatters";
+import { useMessages } from "../locales/context";
 
 interface FeedbackTimelineProps {
   feedback: AgentState["feedback"] | undefined;
@@ -64,6 +65,7 @@ export function FeedbackTimeline({
   chat,
   onOpenAction
 }: FeedbackTimelineProps) {
+  const labels = useMessages();
   const actionIndex = new Map(allActions(actions).map((action) => [action.id, action]));
   const entries = [
     ...feedbackEntries(feedback, actionIndex),
@@ -72,7 +74,7 @@ export function FeedbackTimeline({
   ].slice(-30);
 
   if (!entries.length) {
-    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No feedback" />;
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={labels.feedbackTimeline.noFeedback} />;
   }
 
   return (
@@ -97,8 +99,9 @@ function FeedbackTimelineItem({
   entry: TimelineEntry;
   onOpenAction?: (actionId: string) => void;
 }) {
+  const labels = useMessages();
   return (
-    <Space direction="vertical" size={4} className="full-width feedback-timeline-item">
+    <Space direction="vertical" size={4} className="full-width feedback-timeline-item feedback-history-item">
       <Space size={6} wrap>
         <Typography.Text strong>{entry.title}</Typography.Text>
         <FeedbackStatusTag status={entry.status} />
@@ -121,7 +124,7 @@ function FeedbackTimelineItem({
         {entry.capability && <Tag>{entry.capability}</Tag>}
         {entry.source && <Tag color="blue">source {entry.source}</Tag>}
       </Space>
-      {isNonEmptyRecord(entry.raw) && <JsonSummaryLine label="Raw" value={entry.raw} />}
+      {isNonEmptyRecord(entry.raw) && <JsonSummaryLine label={labels.feedbackTimeline.raw} value={entry.raw} collapsible />}
     </Space>
   );
 }

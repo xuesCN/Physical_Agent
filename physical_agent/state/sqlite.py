@@ -21,8 +21,9 @@ from physical_agent.protocol.retrieval import (
     query_memory_chunks as score_memory_chunks,
 )
 from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, Observation
-from physical_agent.protocol.workspace import Workspace
-from physical_agent.state.audit import export_audit_documents, read_markdown_log_entries
+from physical_agent.state.audit import export_audit_documents
+from physical_agent.state.safety_policy import HardSafetyPolicy, SafetyPolicySnapshot
+from physical_agent.state.sidecars import StateSidecars
 
 
 DOC_SCHEMAS = {
@@ -59,7 +60,11 @@ REQUIRED_TABLES = {
     "memory_notes",
 }
 
-SQLITE_SCHEMA_TABLES = REQUIRED_TABLES | {"upload_metadata", "memory_chunks"}
+SQLITE_SCHEMA_TABLES = REQUIRED_TABLES | {
+    "upload_metadata",
+    "memory_chunks",
+    "runtime_leases",
+}
 
 DEFAULT_ACTION_LEASE_SECONDS = 300
 DEFAULT_CLAIM_OWNER = "watch"
@@ -111,20 +116,63 @@ MEMORY_CHUNK_COLUMNS = {
 }
 
 
-class SqliteStateStore:
-    filenames = Workspace.filenames
+class ActiveRuntimeLeaseError(RuntimeError):
+    """Raised when destructive workspace reset would erase a live executor lease."""
 
-    def __init__(self, path: str | Path):
+
+LOGICAL_DOCUMENT_FILENAMES = {
+    "task": "TASK.md",
+    "capabilities": "CAPABILITIES.md",
+    "world": "WORLD.md",
+    "actions": "ACTIONS.md",
+    "feedback": "FEEDBACK.md",
+    "safety": "SAFETY.md",
+    "log": "LOG.md",
+    "chat": "CHAT.md",
+    "plan": "PLAN.md",
+    "memory": "MEMORY.md",
+}
+
+
+class SqliteStateStore:
+    filenames = LOGICAL_DOCUMENT_FILENAMES
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        safety_template_path: str | Path | None = None,
+    ):
         self.path = Path(path).resolve()
         self.artifacts_path = self.path / "artifacts"
         self.uploads_path = self.path / "uploads"
         self.db_path = self.path / "state.db"
-        self._file_workspace = Workspace(self.path)
+        self._sidecars = StateSidecars(
+            self.path,
+            safety_template_path=safety_template_path,
+        )
 
     def file(self, name: str) -> Path:
         return self.path / self.filenames[name]
 
     def initialize(self, *, overwrite: bool = False) -> None:
+        database_preexisting = self._database_files_exist()
+        preserved_safety: SafetyPolicySnapshot | None = None
+        if database_preexisting:
+            # Validate the file truth before schema maintenance or destructive
+            # reset. Existing workspaces must never self-heal a missing or
+            # malformed SAFETY policy.
+            preserved_safety = self.read_safety_snapshot()
+        else:
+            # SAFETY creation is allowed only while establishing a fresh
+            # workspace. Validate/copy the optional project template before
+            # creating state.db so a bad template cannot strand a database
+            # without its policy source.
+            self._sidecars.initialize(
+                overwrite=overwrite,
+                create_safety_if_missing=True,
+            )
+
         self.path.mkdir(parents=True, exist_ok=True)
         self.artifacts_path.mkdir(parents=True, exist_ok=True)
         self.uploads_path.mkdir(parents=True, exist_ok=True)
@@ -135,12 +183,11 @@ class SqliteStateStore:
             self._create_schema(conn)
             self._ensure_default_documents(conn)
 
-        if overwrite or not self.file("safety").exists():
-            self._file_workspace.write_safety()
-        if overwrite or not self.file("log").exists():
-            self.file("log").write_text(
-                _render_log_file(),
-                encoding="utf-8",
+        if database_preexisting:
+            self._sidecars.initialize(
+                overwrite=overwrite,
+                create_safety_if_missing=False,
+                preserved_safety=preserved_safety,
             )
 
     def exists(self) -> bool:
@@ -270,6 +317,12 @@ class SqliteStateStore:
                     capabilities=capabilities,
                     safety_rules=safety_rules,
                 ),
+                "in_progress": self._read_actions_by_status(
+                    conn,
+                    "in_progress",
+                    capabilities=capabilities,
+                    safety_rules=safety_rules,
+                ),
                 "completed": self._read_actions_by_status(
                     conn,
                     "completed",
@@ -284,53 +337,90 @@ class SqliteStateStore:
                 ),
             }
 
+    def read_action_claim_owners(self) -> dict[str, str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, claim_owner
+                FROM actions
+                WHERE claim_owner IS NOT NULL
+                ORDER BY seq
+                """
+            ).fetchall()
+        return {
+            str(row["id"]): str(row["claim_owner"])
+            for row in rows
+        }
+
     def append_pending_action(self, action: Action | dict[str, Any]) -> Action:
+        return self.append_pending_actions([action])[0]
+
+    def append_pending_actions(
+        self,
+        actions: list[Action | dict[str, Any]],
+    ) -> list[Action]:
+        if not actions:
+            return []
+
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             capabilities = self._read_document_conn(conn, "capabilities")
             safety_rules = self.read_safety().get("rules", {})
-            parsed = _with_backend_approval_metadata(
-                _coerce_action(action),
-                capabilities=capabilities,
-                safety_rules=safety_rules,
-            )
+            parsed_actions: list[Action] = []
+            for action in actions:
+                submitted = _coerce_action(action)
+                submitted_metadata = dict(submitted.metadata or {})
+                # Proposal ingress is not an approval authority. Approval
+                # decisions can only be written by the atomic
+                # approve_action/reject_action mutations below.
+                submitted_metadata.pop("approval", None)
+                submitted = _replace_action_metadata(submitted, submitted_metadata)
+                parsed_actions.append(
+                    _with_backend_approval_metadata(
+                        submitted,
+                        capabilities=capabilities,
+                        safety_rules=safety_rules,
+                    )
+                )
+
             revision = self._next_revision_conn(conn, "actions")
             seq = self._next_action_seq_conn(conn)
             timestamp = _now()
-            conn.execute(
-                """
-                INSERT INTO actions(
-                    id, robot, capability, params, reason, depends_on,
-                    metadata, status, result, seq, created_at, updated_at,
-                    claimed_at, claim_owner, attempts
+            for offset, parsed in enumerate(parsed_actions):
+                conn.execute(
+                    """
+                    INSERT INTO actions(
+                        id, robot, capability, params, reason, depends_on,
+                        metadata, status, result, seq, created_at, updated_at,
+                        claimed_at, claim_owner, attempts
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        parsed.id,
+                        parsed.robot,
+                        parsed.capability,
+                        _json_dumps(parsed.params),
+                        parsed.reason,
+                        _json_dumps(parsed.depends_on),
+                        _json_dumps(parsed.metadata),
+                        "pending",
+                        _json_dumps({}),
+                        seq + offset,
+                        timestamp,
+                        timestamp,
+                        None,
+                        None,
+                        0,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    parsed.id,
-                    parsed.robot,
-                    parsed.capability,
-                    _json_dumps(parsed.params),
-                    parsed.reason,
-                    _json_dumps(parsed.depends_on),
-                    _json_dumps(parsed.metadata),
-                    "pending",
-                    _json_dumps({}),
-                    seq,
-                    timestamp,
-                    timestamp,
-                    None,
-                    None,
-                    0,
-                ),
-            )
             self._upsert_document_conn(
                 conn,
                 "actions",
                 {"metadata": self._metadata("actions", revision)},
                 revision,
             )
-        return parsed
+        return parsed_actions
 
     def approve_action(
         self,
@@ -468,7 +558,13 @@ class SqliteStateStore:
             )
             return action
 
-    def claim_next_ready_action(self, *, claim_owner: str = DEFAULT_CLAIM_OWNER) -> Action | None:
+    def claim_next_ready_action(
+        self,
+        *,
+        claim_owner: str = DEFAULT_CLAIM_OWNER,
+        blocked_robot_ids: set[str] | None = None,
+        hard_policy: HardSafetyPolicy | None = None,
+    ) -> Action | None:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             self._recover_stale_actions_conn(
@@ -487,7 +583,23 @@ class SqliteStateStore:
                 return None
 
             capabilities = self._read_document_conn(conn, "capabilities")
-            safety_rules = self.read_safety().get("rules", {})
+            safety_rules = (
+                dict(hard_policy.rules)
+                if hard_policy is not None
+                else self.read_safety().get("rules", {})
+            )
+            completed_action_ids = {
+                str(item["id"])
+                for item in conn.execute(
+                    "SELECT id FROM actions WHERE status = 'completed'"
+                ).fetchall()
+            }
+            busy_robot_ids = {
+                str(item["robot"])
+                for item in conn.execute(
+                    "SELECT DISTINCT robot FROM actions WHERE status = 'in_progress'"
+                ).fetchall()
+            }
             timestamp = _now()
             row = None
             action = None
@@ -508,6 +620,24 @@ class SqliteStateStore:
                     )
                     metadata_changed = True
                 if _approval_required(candidate_action) and not _approval_approved(candidate_action):
+                    continue
+                if (
+                    blocked_robot_ids is not None
+                    and candidate_action.robot in blocked_robot_ids
+                ):
+                    continue
+                if candidate_action.robot in busy_robot_ids:
+                    # The SQLite transaction serializes this check with claim.
+                    # Different watch processes may run, but one robot must
+                    # never receive overlapping physical actions.
+                    continue
+                if any(
+                    dependency not in completed_action_ids
+                    for dependency in candidate_action.depends_on
+                ):
+                    # Dependencies are a scheduling prerequisite. SafetyGate
+                    # checks them again after claim as defense in depth, but a
+                    # merely waiting action must never be cancelled as unsafe.
                     continue
                 row = candidate
                 action = candidate_action
@@ -547,6 +677,170 @@ class SqliteStateStore:
             )
             return action
 
+    def cancel_pending_actions_by_proposal(self, proposal_id: str) -> list[Action]:
+        normalized_proposal_id = str(proposal_id).strip()
+        if not normalized_proposal_id:
+            raise ValueError("proposal_id must not be blank")
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT id, robot, capability, params, reason, depends_on, metadata
+                FROM actions
+                WHERE status = 'pending'
+                ORDER BY seq, id
+                """
+            ).fetchall()
+            matched: list[Action] = []
+            for row in rows:
+                action = _action_from_row(row)
+                correlation = (
+                    action.metadata.get("correlation")
+                    if isinstance(action.metadata, dict)
+                    else None
+                )
+                persisted_proposal_id = (
+                    str(correlation.get("proposal_id")).strip()
+                    if isinstance(correlation, dict) and correlation.get("proposal_id")
+                    else ""
+                )
+                if persisted_proposal_id == normalized_proposal_id:
+                    matched.append(action)
+
+            if not matched:
+                return []
+
+            timestamp = _now()
+            conn.executemany(
+                """
+                UPDATE actions
+                SET status = 'cancelled',
+                    claimed_at = NULL,
+                    claim_owner = NULL,
+                    updated_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                [(timestamp, action.id) for action in matched],
+            )
+            revision = self._next_revision_conn(conn, "actions")
+            self._upsert_document_conn(
+                conn,
+                "actions",
+                {"metadata": self._metadata("actions", revision)},
+                revision,
+            )
+            return matched
+
+    def cancel_claimed_action_and_pending_by_proposal(
+        self,
+        action: Action | dict[str, Any],
+        *,
+        claim_owner: str,
+    ) -> list[Action]:
+        """Atomically invalidate one claimed action and its pending proposal siblings.
+
+        An empty result means executor fencing rejected the claimed-action update.
+        The method deliberately uses only persisted action correlation and never
+        rereads SAFETY.md, which may be malformed at this point.
+        """
+
+        parsed = _coerce_action(action)
+        normalized_owner = str(claim_owner).strip()
+        if not normalized_owner:
+            raise ValueError("claim_owner must not be blank")
+
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            claimed_row = conn.execute(
+                """
+                SELECT id, robot, capability, params, reason, depends_on, metadata,
+                       status, claim_owner
+                FROM actions
+                WHERE id = ?
+                """,
+                (parsed.id,),
+            ).fetchone()
+            if (
+                claimed_row is None
+                or claimed_row["status"] != "in_progress"
+                or claimed_row["claim_owner"] != normalized_owner
+            ):
+                return []
+            claimed_action = _action_from_row(claimed_row)
+            claimed_correlation = (
+                claimed_action.metadata.get("correlation")
+                if isinstance(claimed_action.metadata, dict)
+                else None
+            )
+            normalized_proposal_id = (
+                str(claimed_correlation.get("proposal_id")).strip()
+                if isinstance(claimed_correlation, dict)
+                and claimed_correlation.get("proposal_id")
+                else ""
+            )
+
+            matched: list[Action] = []
+            if normalized_proposal_id:
+                rows = conn.execute(
+                    """
+                    SELECT id, robot, capability, params, reason, depends_on, metadata
+                    FROM actions
+                    WHERE status = 'pending'
+                    ORDER BY seq, id
+                    """
+                ).fetchall()
+                for row in rows:
+                    sibling = _action_from_row(row)
+                    correlation = (
+                        sibling.metadata.get("correlation")
+                        if isinstance(sibling.metadata, dict)
+                        else None
+                    )
+                    sibling_proposal_id = (
+                        str(correlation.get("proposal_id")).strip()
+                        if isinstance(correlation, dict)
+                        and correlation.get("proposal_id")
+                        else ""
+                    )
+                    if sibling_proposal_id == normalized_proposal_id:
+                        matched.append(sibling)
+
+            timestamp = _now()
+            cursor = conn.execute(
+                """
+                UPDATE actions
+                SET status = 'cancelled',
+                    claimed_at = NULL,
+                    claim_owner = ?,
+                    updated_at = ?
+                WHERE id = ? AND status = 'in_progress' AND claim_owner = ?
+                """,
+                (normalized_owner, timestamp, parsed.id, normalized_owner),
+            )
+            if cursor.rowcount != 1:
+                return []
+            if matched:
+                conn.executemany(
+                    """
+                    UPDATE actions
+                    SET status = 'cancelled',
+                        claimed_at = NULL,
+                        claim_owner = NULL,
+                        updated_at = ?
+                    WHERE id = ? AND status = 'pending'
+                    """,
+                    [(timestamp, sibling.id) for sibling in matched],
+                )
+            revision = self._next_revision_conn(conn, "actions")
+            self._upsert_document_conn(
+                conn,
+                "actions",
+                {"metadata": self._metadata("actions", revision)},
+                revision,
+            )
+            return [claimed_action, *matched]
+
     def recover_stale_actions(
         self,
         max_age_s: float,
@@ -561,11 +855,119 @@ class SqliteStateStore:
                 claim_owner=claim_owner,
             )
 
-    def mark_action_completed(self, action: Action | dict[str, Any]) -> None:
-        self._mark_action_status(action, "completed")
+    def acquire_runtime_lease(
+        self,
+        name: str,
+        owner: str,
+        *,
+        ttl_s: float,
+    ) -> bool:
+        if ttl_s <= 0:
+            raise ValueError("ttl_s must be positive")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            now = _lease_timestamp()
+            expires_at = _lease_timestamp(seconds=ttl_s)
+            cursor = conn.execute(
+                """
+                INSERT INTO runtime_leases(name, owner, expires_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    owner = excluded.owner,
+                    expires_at = excluded.expires_at,
+                    updated_at = excluded.updated_at
+                WHERE runtime_leases.owner = excluded.owner
+                   OR runtime_leases.expires_at <= ?
+                """,
+                (name, owner, expires_at, now, now),
+            )
+            return cursor.rowcount == 1
 
-    def mark_action_cancelled(self, action: Action | dict[str, Any]) -> None:
-        self._mark_action_status(action, "cancelled")
+    def renew_runtime_lease(
+        self,
+        name: str,
+        owner: str,
+        *,
+        ttl_s: float,
+    ) -> bool:
+        if ttl_s <= 0:
+            raise ValueError("ttl_s must be positive")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            now = _lease_timestamp()
+            cursor = conn.execute(
+                """
+                UPDATE runtime_leases
+                SET expires_at = ?, updated_at = ?
+                WHERE name = ? AND owner = ? AND expires_at > ?
+                """,
+                (
+                    _lease_timestamp(seconds=ttl_s),
+                    now,
+                    name,
+                    owner,
+                    now,
+                ),
+            )
+            return cursor.rowcount == 1
+
+    def read_runtime_lease(self, name: str) -> dict[str, Any] | None:
+        """Return a read-only lease projection, including expiry state."""
+
+        with self._connect() as conn:
+            table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'runtime_leases'"
+            ).fetchone()
+            if table_exists is None:
+                return None
+            row = conn.execute(
+                "SELECT name, owner, expires_at, updated_at "
+                "FROM runtime_leases WHERE name = ?",
+                (name,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "name": str(row["name"]),
+            "owner": str(row["owner"]),
+            "expires_at": str(row["expires_at"]),
+            "updated_at": str(row["updated_at"]),
+            "active": str(row["expires_at"]) > _lease_timestamp(),
+        }
+
+    def release_runtime_lease(self, name: str, owner: str) -> bool:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                "DELETE FROM runtime_leases WHERE name = ? AND owner = ?",
+                (name, owner),
+            )
+            return cursor.rowcount == 1
+
+    def mark_action_completed(
+        self,
+        action: Action | dict[str, Any],
+        *,
+        claim_owner: str | None = None,
+    ) -> bool:
+        return self._mark_action_status(
+            action,
+            "completed",
+            claim_owner=claim_owner,
+        )
+
+    def mark_action_cancelled(
+        self,
+        action: Action | dict[str, Any],
+        *,
+        claim_owner: str | None = None,
+    ) -> bool:
+        return self._mark_action_status(
+            action,
+            "cancelled",
+            claim_owner=claim_owner,
+        )
 
     def write_feedback(
         self,
@@ -583,6 +985,25 @@ class SqliteStateStore:
             revision=revision,
         )
 
+    def append_feedback_event(self, event: dict[str, Any]) -> None:
+        latest = _as_plain(event)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = self._read_document_conn(conn, "feedback")
+            history = list(current.get("history") or [])
+            history.append(latest)
+            revision = self._next_revision_conn(conn, "feedback")
+            self._upsert_document_conn(
+                conn,
+                "feedback",
+                {
+                    "metadata": self._metadata("feedback", revision),
+                    "latest": latest,
+                    "history": history,
+                },
+                revision,
+            )
+
     def read_feedback(self) -> dict[str, Any]:
         payload = self._read_document("feedback")
         payload.setdefault("latest", {})
@@ -590,13 +1011,13 @@ class SqliteStateStore:
         return payload
 
     def write_safety(self, rules: dict[str, Any] | None = None) -> None:
-        self.path.mkdir(parents=True, exist_ok=True)
-        self._file_workspace.write_safety(rules)
+        self._sidecars.write_safety(rules)
 
     def read_safety(self) -> dict[str, Any]:
-        if not self.file("safety").exists():
-            self.write_safety()
-        return self._file_workspace.read_safety()
+        return self._sidecars.read_safety()
+
+    def read_safety_snapshot(self) -> SafetyPolicySnapshot:
+        return self._sidecars.read_safety_snapshot()
 
     def write_chat(
         self,
@@ -865,6 +1286,10 @@ class SqliteStateStore:
     def append_log(self, message: str, *, actor: str | None = None) -> None:
         timestamp = _now()
         with self._connect() as conn:
+            # Revision allocation and the log row belong to one serialized
+            # transaction. Without this, concurrent appenders can all persist
+            # the same document revision even though every row is retained.
+            conn.execute("BEGIN IMMEDIATE")
             revision = self._next_revision_conn(conn, "log")
             conn.execute(
                 """
@@ -879,7 +1304,22 @@ class SqliteStateStore:
                 {"metadata": self._metadata("log", revision)},
                 revision,
             )
-        self._file_workspace.append_log(message, actor=actor)
+        try:
+            self._sync_log_mirror()
+        except Exception:
+            # SQLite is the log truth. A stale/missing human mirror remains
+            # visible through validate_log_mirror()/doctor, but must not turn
+            # an already committed state or control-flow mutation into failure.
+            pass
+
+    def validate_log_mirror(self) -> dict[str, Any]:
+        """Validate that the human LOG mirror matches SQLite's committed revision."""
+        expected = self._read_document("log").get("metadata", {})
+        try:
+            expected_revision = int(expected.get("revision") or 1)
+        except (TypeError, ValueError):
+            expected_revision = 1
+        return self._sidecars.validate_log(expected_revision=expected_revision)
 
     def export_human_view(self, out_dir: Path | None = None) -> dict[str, Any]:
         documents = {
@@ -899,7 +1339,7 @@ class SqliteStateStore:
             backend="sqlite",
             workspace_path=self.path,
             documents=documents,
-            safety_source=self.file("safety"),
+            safety_source=self._sidecars.safety_path,
             out_dir=out_dir,
         )
 
@@ -955,6 +1395,16 @@ class SqliteStateStore:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_actions_status_claimed_at ON actions(status, claimed_at)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_leases (
+                name TEXT PRIMARY KEY,
+                owner TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
         )
         conn.execute(
             """
@@ -1053,6 +1503,25 @@ class SqliteStateStore:
             return
         try:
             with self._connect() as conn:
+                # Serialize reset with lease acquire/renew and fail closed. A
+                # reset that drops runtime_leases while Watch is connected
+                # would erase executor ownership and permit split brain.
+                conn.execute("BEGIN EXCLUSIVE")
+                lease_table_exists = conn.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'runtime_leases'"
+                ).fetchone()
+                if lease_table_exists is not None:
+                    live_lease = conn.execute(
+                        "SELECT name, owner FROM runtime_leases "
+                        "WHERE expires_at > ? LIMIT 1",
+                        (_lease_timestamp(),),
+                    ).fetchone()
+                    if live_lease is not None:
+                        raise ActiveRuntimeLeaseError(
+                            "Workspace reset refused while runtime lease "
+                            f"`{live_lease['name']}` is active. Stop Watch first."
+                        )
                 names = [
                     str(row["name"])
                     for row in conn.execute(
@@ -1062,6 +1531,12 @@ class SqliteStateStore:
                 ]
                 for name in names:
                     conn.execute(f'DROP TABLE IF EXISTS "{name}"')
+        except ActiveRuntimeLeaseError:
+            raise
+        except sqlite3.OperationalError:
+            # A busy/locked live database must never be unlinked as a reset
+            # fallback. Surface the error so the caller can retry safely.
+            raise
         except sqlite3.Error:
             self._unlink_database_files()
 
@@ -1163,8 +1638,16 @@ class SqliteStateStore:
         ):
             for item in items:
                 seq += 1
+                submitted = _coerce_action(item)
+                if status == "pending":
+                    submitted_metadata = dict(submitted.metadata or {})
+                    submitted_metadata.pop("approval", None)
+                    submitted = _replace_action_metadata(
+                        submitted,
+                        submitted_metadata,
+                    )
                 action = _with_backend_approval_metadata(
-                    _coerce_action(item),
+                    submitted,
                     capabilities=capabilities,
                     safety_rules=safety_rules,
                 )
@@ -1200,25 +1683,41 @@ class SqliteStateStore:
         row = conn.execute("SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM actions").fetchone()
         return int(row["next_seq"] or 1)
 
-    def _mark_action_status(self, action: Action | dict[str, Any], status: str) -> None:
+    def _mark_action_status(
+        self,
+        action: Action | dict[str, Any],
+        status: str,
+        *,
+        claim_owner: str | None = None,
+    ) -> bool:
         if status not in {"completed", "cancelled"}:
             raise ValueError(f"Unsupported action status: {status}")
         parsed = _coerce_action(action)
         timestamp = _now()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            capabilities = self._read_document_conn(conn, "capabilities")
-            safety_rules = self.read_safety().get("rules", {})
-            parsed = _with_backend_approval_metadata(
-                parsed,
-                capabilities=capabilities,
-                safety_rules=safety_rules,
-            )
-            revision = self._next_revision_conn(conn, "actions")
+            if claim_owner is None:
+                capabilities = self._read_document_conn(conn, "capabilities")
+                safety_rules = self.read_safety().get("rules", {})
+                parsed = _with_backend_approval_metadata(
+                    parsed,
+                    capabilities=capabilities,
+                    safety_rules=safety_rules,
+                )
             existing = conn.execute(
-                "SELECT seq, created_at FROM actions WHERE id = ?",
+                "SELECT seq, created_at, status, claim_owner FROM actions WHERE id = ?",
                 (parsed.id,),
             ).fetchone()
+            if claim_owner is not None and (
+                existing is None
+                or existing["status"] != "in_progress"
+                or existing["claim_owner"] != claim_owner
+            ):
+                # Executor fencing: a stale Watch must not overwrite an action
+                # recovered or reclaimed by a newer lease owner.
+                return False
+
+            revision = self._next_revision_conn(conn, "actions")
             if existing is None:
                 conn.execute(
                     """
@@ -1248,8 +1747,26 @@ class SqliteStateStore:
                     ),
                 )
             else:
-                conn.execute(
-                    """
+                owner_predicate = ""
+                values: list[Any] = [
+                    parsed.robot,
+                    parsed.capability,
+                    _json_dumps(parsed.params),
+                    parsed.reason,
+                    _json_dumps(parsed.depends_on),
+                    _json_dumps(parsed.metadata),
+                    status,
+                    claim_owner,
+                    timestamp,
+                    parsed.id,
+                ]
+                if claim_owner is not None:
+                    owner_predicate = (
+                        " AND status = 'in_progress' AND claim_owner = ?"
+                    )
+                    values.append(claim_owner)
+                cursor = conn.execute(
+                    f"""
                     UPDATE actions
                     SET robot = ?,
                         capability = ?,
@@ -1259,28 +1776,22 @@ class SqliteStateStore:
                         metadata = ?,
                         status = ?,
                         claimed_at = NULL,
-                        claim_owner = NULL,
+                        claim_owner = ?,
                         updated_at = ?
                     WHERE id = ?
+                    {owner_predicate}
                     """,
-                    (
-                        parsed.robot,
-                        parsed.capability,
-                        _json_dumps(parsed.params),
-                        parsed.reason,
-                        _json_dumps(parsed.depends_on),
-                        _json_dumps(parsed.metadata),
-                        status,
-                        timestamp,
-                        parsed.id,
-                    ),
+                    values,
                 )
+                if cursor.rowcount != 1:
+                    return False
             self._upsert_document_conn(
                 conn,
                 "actions",
                 {"metadata": self._metadata("actions", revision)},
                 revision,
             )
+            return True
 
     def _ensure_action_claim_columns(self, conn: sqlite3.Connection) -> None:
         existing = {
@@ -1525,127 +2036,19 @@ class SqliteStateStore:
             )
         return recovered
 
-    def _replace_actions_with_revision(
-        self,
-        pending: list[Action | dict[str, Any]],
-        completed: list[Action | dict[str, Any]],
-        cancelled: list[Action | dict[str, Any]],
-        *,
-        revision: int,
-    ) -> None:
-        with self._connect() as conn:
-            self._replace_actions_conn(conn, pending, completed, cancelled)
-            self._upsert_document_conn(
-                conn,
-                "actions",
-                {"metadata": self._metadata("actions", revision)},
-                revision,
-            )
-
-    def _replace_chat_with_revision(
-        self,
-        messages: list[ChatMessage | dict[str, Any]],
-        *,
-        running_summary: str,
-        revision: int,
-    ) -> None:
-        normalized = [
-            item if isinstance(item, ChatMessage) else ChatMessage.model_validate(item)
-            for item in messages
-        ]
-        with self._connect() as conn:
-            conn.execute("DELETE FROM chat_messages")
-            for item in normalized:
-                conn.execute(
-                    """
-                    INSERT INTO chat_messages(role, content, created_at, metadata)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (
-                        item.role,
-                        item.content,
-                        item.created_at,
-                        _json_dumps(item.metadata),
-                    ),
-                )
-            self._upsert_document_conn(
-                conn,
-                "chat",
-                {
-                    "metadata": self._metadata("chat", revision),
-                    "running_summary": running_summary,
-                },
-                revision,
-            )
-
-    def _replace_memory_with_revision(
-        self,
-        notes: list[dict[str, Any]],
-        *,
-        revision: int,
-    ) -> None:
-        with self._connect() as conn:
-            conn.execute("DELETE FROM memory_notes")
-            conn.execute("DELETE FROM memory_chunks WHERE source_type = 'memory'")
-            for note in notes:
-                normalized = self._insert_memory_note_conn(conn, note)
-                self._insert_memory_note_chunks_conn(conn, normalized)
-            self._upsert_document_conn(
-                conn,
-                "memory",
-                {"metadata": self._metadata("memory", revision)},
-                revision,
-            )
-
-    def _replace_uploads_with_revision(
-        self,
-        uploads: list[dict[str, Any]],
-        *,
-        revision: int,
-    ) -> None:
-        with self._connect() as conn:
-            conn.execute("DELETE FROM upload_metadata")
-            for upload in uploads:
-                self._insert_upload_metadata_conn(conn, upload)
-            self._upsert_document_conn(
-                conn,
-                "uploads",
-                {"metadata": self._metadata("uploads", revision)},
-                revision,
-            )
-
-    def _replace_log_entries(self, entries: list[dict[str, Any]], *, revision: int = 1) -> None:
-        with self._connect() as conn:
-            conn.execute("DELETE FROM log_entries")
-            for entry in entries:
-                conn.execute(
-                    """
-                    INSERT INTO log_entries(ts, actor, message)
-                    VALUES (?, ?, ?)
-                    """,
-                    (
-                        entry.get("ts"),
-                        entry.get("actor"),
-                        str(entry.get("message") or ""),
-                    ),
-                )
-            self._upsert_document_conn(
-                conn,
-                "log",
-                {"metadata": self._metadata("log", revision)},
-                revision,
-            )
-
     def _read_log_document(self) -> dict[str, Any]:
         with self._connect() as conn:
-            metadata = self._read_metadata_conn(conn, "log")
-            rows = conn.execute(
-                """
-                SELECT id, ts, actor, message
-                FROM log_entries
-                ORDER BY id
-                """
-            ).fetchall()
+            return self._read_log_document_conn(conn)
+
+    def _read_log_document_conn(self, conn: sqlite3.Connection) -> dict[str, Any]:
+        metadata = self._read_metadata_conn(conn, "log")
+        rows = conn.execute(
+            """
+            SELECT id, ts, actor, message
+            FROM log_entries
+            ORDER BY id
+            """
+        ).fetchall()
         return {
             "metadata": metadata,
             "entries": [
@@ -1662,6 +2065,18 @@ class SqliteStateStore:
                 for row in rows
             ],
         }
+
+    def _sync_log_mirror(self) -> None:
+        with self._connect() as conn:
+            # This second write transaction serializes snapshot/read/publish
+            # across processes. Every waiter therefore rebuilds from the
+            # latest committed log instead of overwriting it with stale state.
+            conn.execute("BEGIN IMMEDIATE")
+            snapshot = self._read_log_document_conn(conn)
+            self._sidecars.write_log_snapshot(
+                metadata=snapshot["metadata"],
+                entries=snapshot["entries"],
+            )
 
     def _read_actions_by_status(
         self,
@@ -1781,76 +2196,6 @@ class SqliteStateStore:
             return int((payload.get("metadata") or {}).get("revision"))
         except (TypeError, ValueError):
             return None
-
-
-def migrate_markdown_workspace_to_sqlite(
-    workspace_path: str | Path,
-    *,
-    overwrite: bool = False,
-) -> dict[str, Any]:
-    from physical_agent.state.legacy_markdown import LegacyMarkdownWorkspaceReader
-
-    source = LegacyMarkdownWorkspaceReader(workspace_path)
-    if not source.exists():
-        raise FileNotFoundError(f"Markdown workspace is not initialized at {source.path}.")
-
-    task = source.read_task()
-    capabilities = source.read_capabilities()
-    world = source.read_world()
-    actions = source.read_actions()
-    feedback = source.read_feedback()
-    source.read_safety()
-    chat = source.read_chat()
-    plan = source.read_plan()
-    memory = source.read_memory()
-    uploads = source.read_uploads()
-    log_entries, log_metadata = read_markdown_log_entries(source.file("log"))
-
-    target = SqliteStateStore(source.path)
-    if target._database_files_exist():
-        if not overwrite:
-            raise FileExistsError(
-                f"{target.db_path} already exists. Re-run with --overwrite to replace it."
-            )
-        target._unlink_database_files()
-
-    target.initialize(overwrite=False)
-    target._replace_document("task", task, revision=_payload_revision(task))
-    target._replace_document("capabilities", capabilities, revision=_payload_revision(capabilities))
-    target._replace_document("world", world, revision=_payload_revision(world))
-    target._replace_actions_with_revision(
-        actions["pending"],
-        actions["completed"],
-        actions["cancelled"],
-        revision=_payload_revision(actions),
-    )
-    target._replace_document("feedback", feedback, revision=_payload_revision(feedback))
-    target._replace_chat_with_revision(
-        chat["messages"],
-        running_summary=chat.get("running_summary", ""),
-        revision=_payload_revision(chat),
-    )
-    target._replace_document("plan", plan, revision=_payload_revision(plan))
-    target._replace_memory_with_revision(memory["notes"], revision=_payload_revision(memory))
-    target._replace_uploads_with_revision(
-        uploads.get("uploads", []),
-        revision=_payload_revision(uploads),
-    )
-    target._replace_log_entries(log_entries, revision=_metadata_revision(log_metadata))
-
-    return {
-        "workspace_path": str(source.path),
-        "db_path": str(target.db_path),
-        "actions": {
-            "pending": len(actions["pending"]),
-            "completed": len(actions["completed"]),
-            "cancelled": len(actions["cancelled"]),
-        },
-        "chat_messages": len(chat["messages"]),
-        "memory_notes": len(memory["notes"]),
-        "uploads": len(uploads.get("uploads", [])),
-        "log_entries": len(log_entries),
-    }
 
 
 def _coerce_action(value: Action | dict[str, Any]) -> Action:
@@ -2036,20 +2381,6 @@ def _coerce_observation(value: Observation | dict[str, Any]) -> Observation:
     return Observation.model_validate(value)
 
 
-def _payload_revision(payload: dict[str, Any]) -> int:
-    try:
-        return int((payload.get("metadata") or {}).get("revision") or 1)
-    except (TypeError, ValueError):
-        return 1
-
-
-def _metadata_revision(metadata: dict[str, Any]) -> int:
-    try:
-        return int(metadata.get("revision") or 1)
-    except (TypeError, ValueError):
-        return 1
-
-
 def _optional_str(value: Any) -> str:
     return "" if value is None else str(value)
 
@@ -2099,12 +2430,8 @@ def _seconds_ago(seconds: float) -> str:
     return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _render_log_file() -> str:
-    return (
-        "---\n"
-        "schema: physical-agent/log/v1\n"
-        "owner: system\n"
-        "revision: 1\n"
-        "---\n"
-        "# Physical Agent Log\n"
-    )
+def _lease_timestamp(*, seconds: float = 0.0) -> str:
+    """Microsecond-resolution UTC timestamp used for executor lease fencing."""
+
+    value = datetime.now(UTC) + timedelta(seconds=seconds)
+    return value.isoformat(timespec="microseconds").replace("+00:00", "Z")

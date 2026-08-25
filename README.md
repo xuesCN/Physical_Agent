@@ -2,7 +2,7 @@
 
 [Chinese version](README.zh-CN.md)
 
-Physical Agent is a safe runtime for physical-world agents with a SQLite active state backend and Markdown audit / migration compatibility.
+Physical Agent is a safe runtime for physical-world agents with one SQLite active state backend, a human-owned `SAFETY.md` source, and a readable `LOG.md` mirror.
 
 For the current GitHub Actions and testing policy, see [`docs/CI.zh-CN.md`](docs/CI.zh-CN.md).
 
@@ -20,12 +20,30 @@ The v1 principle is:
 Agent can propose actions. Watch decides whether and how they touch the physical world.
 ```
 
-## Architecture
-
-Physical Agent separates cognition from physical execution with a two-process runtime.
+The canonical Chat-to-hardware path is:
 
 ```text
-physical-agent watch
+Chat -> rule/LLM action intents -> normalize stable IDs/dependencies
+  -> trusted PlanCompiler -> structured AgentOutput / ChatPlan.agent_output
+  -> API/SSE/assistant metadata -> structured draft
+     -> React/Web actionable Draft card -> user Add to Actions -> pending
+     -> TUI/CLI structured display only
+Explicit tool_loop -> proposal-only tool -> pending
+Task/manual/run proposal paths -> pending
+pending -> approval when required
+  -> watch SafetyGate -> driver.execute -> canonical feedback/read model
+```
+
+The rule/LLM chat path produces a structured draft. React/Web renders actionable Draft cards whose Add to Actions control creates pending actions; TUI/CLI only displays the structured draft and has no direct Add control. Explicit `tool_loop` is the exception: proposal-only tools can submit pending actions directly, but they never approve or execute them. Existing task/manual/run proposal paths can also create pending actions directly. Assistant replies remain user-facing text, and none of these submission paths implies approval, SafetyGate success, or execution.
+
+## Architecture
+
+Physical Agent separates cognition from physical execution with two trust zones and
+an independently owned watch lifecycle. The watch may run as the standalone CLI
+service or be embedded by `api --watch` / `gui`. Request/proposal paths never load drivers. Watch is the only path that connects drivers, owns their operational lifecycle, and calls `driver.execute(action)`.
+
+```text
+physical-agent watch (standalone or embedded)
   owns hardware or simulator
   owns driver lifecycle
   owns observation loop
@@ -43,7 +61,7 @@ physical-agent run
   writes structured action intent
 ```
 
-`physical-agent run` never imports hardware drivers or SDKs. It only sees StateStore documents. `physical-agent watch` is the only runtime that loads drivers and calls `driver.execute(action)`.
+`physical-agent run` never imports hardware drivers or SDKs. It only sees StateStore documents. `physical-agent doctor` is an operator-only inert loadability diagnostic: it may import and instantiate drivers, but never connects them or calls `driver.execute`. This diagnostic exception does not change watch's exclusive connection, lifecycle, SafetyGate, or execution ownership.
 
 ## Quick Start
 
@@ -85,7 +103,7 @@ This command will:
 If you already manage your own Python environment, you can run the manual path:
 
 ```bash
-pip install -e .[dev]
+pip install -e .[dev,server]
 physical-agent setup --smoke-test
 ```
 
@@ -106,13 +124,20 @@ The GUI is the easiest way to see the workspace state change:
 physical-agent gui
 ```
 
-The browser will open a local console. In the GUI you can:
+The command starts the official FastAPI + React Dashboard and an embedded watch
+service. In the Dashboard you can:
 
-1. click setup or reset to prepare the workspace
-2. click watch start to connect the mock robot
-3. click quick demo to submit the pick/place task
-4. click step or auto-step to let watch execute actions
-5. inspect robots, world, actions, and feedback
+1. safely initialize a missing config/workspace without overwriting an existing config
+2. see whether the executor is waiting, embedded, external, or not running
+3. chat or submit a task, review its draft, and add it to the pending Action Board
+4. approve or reject execution and inspect robots, world, feedback, safety, and events
+5. scaffold or generate a driver draft and register its robot configuration
+
+The browser no longer owns watch start/stop/step controls. Use
+`physical-agent watch` for a standalone executor, `physical-agent api --watch`
+for an API-hosted executor, or `physical-agent gui --no-watch` for a Dashboard
+process without an embedded executor. The deterministic demo is
+`physical-agent setup --smoke-test`.
 
 If the browser does not open automatically, visit:
 
@@ -208,6 +233,7 @@ The default `physical-agent.yaml` configures one mock arm:
 robots:
   arm_1:
     driver: mock_arm
+    execution_mode: simulation
     config:
       objects:
         red_block:
@@ -245,21 +271,37 @@ After quickstart works:
 
 ## Local GUI
 
-`physical-agent gui` starts a dependency-free local web console backed by Python's standard library HTTP server.
+`physical-agent gui` is a thin launcher for the same FastAPI application and
+packaged React Dashboard used by `physical-agent api`. Install the server extra
+when working from source:
+
+```bash
+pip install -e .[server]
+```
+
+By default the launcher runs the embedded watch service. It does not implement
+a second controller or a second set of HTTP endpoints.
 
 The console provides:
 
-- project setup
+- safe first-time project initialization
 - workspace reset
-- watch runtime connection
-- one-step action execution
+- actual executor status (waiting, embedded, external, or stopped)
+- configured hardware/simulation execution mode
 - multi-turn chat
 - English and Chinese UI switching
 - hardware integration scaffold and LLM driver draft generation
 - task submission
-- pick/place quick demo
-- doctor checks
+- draft-to-pending and execution approval/rejection
+- upload, memory search, audit export, state-check, and LLM settings
 - robot, world, action board, and feedback views
+
+Watch lifecycle controls, manual stepping, the hard-coded demo, per-message
+planner selection, browser code-skill output, and the raw browser doctor are
+intentionally not duplicated in the Dashboard. Use, respectively,
+`physical-agent watch` / `physical-agent api --watch`,
+`physical-agent setup --smoke-test`, `physical-agent chat --planner ...`,
+`physical-agent chat --show-code-result`, and `physical-agent doctor`.
 
 The GUI remembers your language choice in the browser. Use the `English` / `中文` buttons in the top bar to switch modes.
 
@@ -275,7 +317,14 @@ Run without opening a browser automatically:
 physical-agent gui --no-open
 ```
 
-The Hardware integration panel accepts a local SDK path, a GitHub repository URL, or an importable Python package name. Choose `Scaffold` for a deterministic watch-side driver template, or `LLM draft` to let the configured OpenAI-compatible model read SDK context and update `driver.py`. Both modes keep hardware execution outside the browser; the LLM draft is validated in mock mode before it is written back.
+Run the Dashboard without an embedded executor (for example when a standalone
+`physical-agent watch` already owns the workspace lease):
+
+```bash
+physical-agent gui --no-watch
+```
+
+The Hardware integration panel accepts a local SDK path, a GitHub repository URL, or an importable Python package name. Choose `Scaffold` for a deterministic watch-side driver template, or `LLM draft` to let the configured OpenAI-compatible model read SDK context and update `driver.py`. Both modes keep hardware execution outside the browser. Request-side LLM draft validation is limited to static manifest/Python/interface validation and never imports, connects, or executes generated driver code; dynamic conformance belongs in an explicit watch-side workflow.
 
 ## StateStore And Workspace Protocol
 
@@ -299,50 +348,15 @@ workspace/
 
 `export-audit` creates a read-only audit view under `workspace/audit/`. It is not a second backend.
 
-Legacy Markdown workspaces can be converted for one version cycle:
-
-```bash
-physical-agent migrate-md-to-sqlite --config physical-agent.yaml
-```
-
-Then set `workspace.backend: sqlite` in `physical-agent.yaml` before starting CLI/API/GUI/watch. The migration reader is one-way and migration-only; runtime Markdown backend is retired.
-
-Old Markdown protocol files used YAML front matter, Markdown prose, and fenced YAML blocks for machine-readable data:
-
-```text
-workspace/
-  TASK.md
-  CAPABILITIES.md
-  WORLD.md
-  ACTIONS.md
-  FEEDBACK.md
-  SAFETY.md
-  LOG.md
-  CHAT.md
-  PLAN.md
-  MEMORY.md
-  artifacts/
-```
-
-In the retired format, `TASK.md` recorded the active task and human constraints.
-
-`CAPABILITIES.md` was written by watch from loaded driver capabilities. The agent treated it as read-only.
-
-`WORLD.md` was written by watch from driver observations. It contained robot state, objects, environment data, and artifact paths.
-
-`ACTIONS.md` was written by the agent. It contained pending, completed, and cancelled action boards. Watch read pending actions and moved them after execution or safety rejection.
-
-`FEEDBACK.md` was written by watch. It recorded latest execution feedback and history for the agent to read.
-
-`SAFETY.md` is still owned by humans and enforced by watch. The agent can read it but cannot bypass it.
-
-`LOG.md` is still a human-readable log mirror for review.
-
-`CHAT.md` stored chat history between the human and the agent.
-
-`PLAN.md` stored the current chat intent, proposed steps, and proposed actions.
-
-`MEMORY.md` stored small persistent notes that the chat agent should remember across turns.
+The current executable no longer contains the retired Markdown workspace
+migrator or full-workspace parser. An old workspace is rejected fail-closed so
+that SQLite is never created beside an ambiguous legacy source. If rescue is
+required, use an independent worktree at historical commit
+`9072b4e9fb600e505668aeb6076eb6cb85e5ff82` to run that checkout's migrator,
+then return to the current version and run `physical-agent init` without
+`--force`, followed by `physical-agent state-check`. See
+[`docs/state-backends.zh-CN.md`](docs/state-backends.zh-CN.md) for the guarded
+procedure.
 
 Static configuration belongs in `physical-agent.yaml`. Dynamic state belongs in `workspace/state.db`.
 
@@ -392,9 +406,9 @@ physical-agent chat --planner llm --message "帮我接入这个 SDK ./vendor_sdk
 physical-agent chat --message "帮我接入 ./vendor_sdk --llm"
 ```
 
-LLM driver coding uses the same `.env` settings as chat and planning. It first creates the safe scaffold, then sends SDK snippets plus the scaffold to the model, accepts only a small allowlist of generated files, validates the candidate in mock mode, and writes `llm-coding-report.md`. If the API fails or the draft does not validate, the safe scaffold remains in place.
+LLM driver coding uses the same `.env` settings as chat and planning. It first creates the safe scaffold, then sends SDK snippets plus the scaffold to the model, accepts only a small allowlist of generated files, performs static manifest/Python/interface validation, and writes `llm-coding-report.md`. Request-side validation never imports, connects, or executes generated driver code; dynamic conformance belongs in an explicit watch-side workflow. If the API fails or the draft does not validate, the safe scaffold remains in place.
 
-The generated driver stays in mock mode first. When LLM coding is enabled, Physical Agent can draft the SDK calls, but the runtime boundary stays the same: the generated driver is loaded only by watch, and actions still go through StateStore, safety validation, and `driver.execute(action)`. The LLM does not execute hardware.
+The generated driver stays in mock mode first. When LLM coding is enabled, Physical Agent can draft the SDK calls, but request/proposal paths still do not load the generated driver. Watch alone connects it, owns its operational lifecycle, and may call `driver.execute(action)` after StateStore submission and safety validation. Operator `doctor` may only import and instantiate it for inert loadability diagnostics; it never connects or executes the driver. The LLM does not execute hardware.
 
 For a hardware onboarding example based on a Xiaozhi MCP bridge, see:
 
@@ -408,8 +422,11 @@ Use it from `physical-agent.yaml`:
 robots:
   arm_1:
     driver: ./my_arm_driver
+    execution_mode: hardware
     config: {}
 ```
+
+`execution_mode` describes the current robot instance, not what the driver could support. It defaults to `hardware` for fail-safe compatibility; simulated instances must opt in to `simulation` explicitly.
 
 The example shows a safe path from `mode: mock` to `mode: http`, with a `.env.example` file for `XIAOZHI_MCP_ENDPOINT` and optional `XIAOZHI_MCP_TOKEN`.
 
@@ -471,7 +488,18 @@ produces a `pick` action followed by a dependent `place` action.
 
 ## OpenAI-Compatible API Planner
 
-Physical Agent can use an OpenAI-compatible Chat Completions endpoint for planning while keeping the same safety boundary: the LLM only writes proposed actions to StateStore; watch still validates and executes them.
+Physical Agent can use an OpenAI-compatible Chat Completions endpoint for planning and chat while keeping the same safety boundary. Direct task/run and MCP proposal paths submit pending actions to the Action Board. The ordinary rule/LLM chat path produces a structured draft without creating pending actions: TUI/CLI only displays that draft; React/Web can submit it with Add to Actions. Explicit `--planner tool_loop` may submit pending actions through proposal-only tools. None of these proposal paths approve or execute actions; watch only validates and executes actions already in the Action Board.
+
+### Upgrade note: Chat action-draft wire
+
+Actionable Chat Drafts now travel only through structured `AgentOutput.actions`; assistant replies are ordinary user-facing text and no longer generate or parse the legacy `action-draft` fence. Persisted fence-only chat from older versions remains readable as Markdown, but it will not recover a Draft card or Add to Actions control. Existing pending or approved actions in the Action Board are unaffected. No compatibility migration layer was added, and approval/SafetyGate behavior is unchanged.
+
+Proposal/chat/task responses, including MCP `submit_task`, also no longer duplicate actions in top-level `action`, `actions`, or `draft_actions` convenience fields; callers must read `agent_output.actions`. Approval/rejection mutation responses still return `action`, and `/api/state.actions` remains the Action Board read model.
+
+`ChatPlan` likewise no longer exposes the redundant `plan.actions` list; use
+`plan.agent_output.actions`. Older persisted plan payloads may contain that extra
+field, but the current reader ignores it and rebuilds active actions from the
+SQLite board. The OpenAPI 200-response schemas publish these retained boundaries.
 
 Create a local `.env` file. It is ignored by git.
 
@@ -519,17 +547,17 @@ physical-agent setup --force
 physical-agent chat
 ```
 
-`physical-agent chat` is the single everyday entrypoint: start it once, then type normally. It can answer, remember notes, propose physical actions, and route code requests into skills that edit files and run tests.
+`physical-agent chat` is the single everyday entrypoint: start it once, then type normally. It can answer, remember notes, draft physical actions for display, and route code requests into skills that edit files and run tests. Ordinary chat does not submit those drafts by default.
 
 Or send one message and exit:
 
 ```bash
 physical-agent chat --message "What can you see right now?"
 physical-agent chat "write a tiny square example under test and run it"
-physical-agent chat --planner llm --auto-step --message "Please pick the red block and place it on the tray."
+physical-agent chat --planner llm --message "Please pick the red block and place it on the tray."
 ```
 
-The chat command defaults to `--planner auto`: it uses the LLM planner when `.env` contains API settings and falls back to rule-based chat otherwise. The chat agent reads chat, memory, capabilities, world, and feedback from StateStore. It writes replies, current intent, and proposed actions back to StateStore. Watch still validates and executes those actions.
+The chat command defaults to `--planner auto`: it uses the LLM planner when `.env` contains API settings and falls back to rule-based chat otherwise. The chat agent reads chat, memory, capabilities, world, and feedback from StateStore. The ordinary rule/LLM path persists replies, current intent, and a structured draft, but it does not create pending Action Board actions. TUI/CLI only displays that draft; React/Web can submit it with Add to Actions. Explicit `--planner tool_loop` may instead submit pending actions through proposal-only tools, but it still cannot approve or execute them.
 
 When a chat message looks like a code task, the same `physical-agent chat` entry automatically switches into the code skill. That means prompts such as "modify this file", "write tests", "fix this bug", or "help me integrate this SDK" can trigger repository edits, local test runs, and persistent lessons in `.physical-agent/code/LESSONS.md` without creating a separate command. The physical execution boundary does not change: only `watch` can touch hardware.
 
@@ -546,9 +574,9 @@ Use `physical-agent llm-test --model <model-name>` to verify a candidate model. 
 
 If you want chat to behave like a code-first assistant inside the current repository, ask it to edit files or fix tests directly. The chat runtime will route those requests into the code skill, apply changes under the repository root, run tests, and report the changed files plus test output.
 
-By default, chat keeps code skill output conversational and stores the structured result in chat metadata and the GUI code result panel. For debugging, add `--show-code-result` to print the full structured code result after the natural reply.
+By default, chat keeps code skill output conversational and stores the structured result in chat metadata. The Dashboard deliberately does not expose the repository-editing code skill; for debugging, add `--show-code-result` to the CLI to print the full structured result after the natural reply.
 
-Execute the proposed actions by running watch in another terminal:
+Watch only processes actions that have already been submitted to the Action Board. A draft shown by ordinary CLI chat is not in the Action Board and is therefore invisible to watch; starting watch does not submit or execute it. Use React/Web Add to Actions, task/manual/run, or explicit `--planner tool_loop` to submit an action first, then run watch in another terminal:
 
 ```bash
 physical-agent watch
@@ -571,7 +599,7 @@ agent:
 
 ## Clean-Room Implementation
 
-Physical Agent is an independent implementation. It uses general public architecture ideas such as embodied-agent layering, watchdog/runtime separation, declarative driver manifests, Markdown workspace protocols, and MCP-style tool facades. It does not include third-party competitor code, copied file contents, copied README wording, copied CLI design, copied example task suites, or copied implementation details.
+Physical Agent is an independent implementation. It uses general public architecture ideas such as embodied-agent layering, watchdog/runtime separation, declarative driver manifests, structured state stores, and MCP-style tool facades. It does not include third-party competitor code, copied file contents, copied README wording, copied CLI design, copied example task suites, or copied implementation details.
 
 ## Development Checks
 
@@ -581,6 +609,6 @@ Run the full test suite:
 pytest -q
 ```
 
-Current coverage includes Markdown protocol parsing/rendering for SAFETY/LOG/audit/migration, SQLite workspace lifecycle, driver manifest and loader behavior, hardware onboarding scaffold generation, safety validation, mock drivers, rule-based planning, watch runtime stepping, the end-to-end SQLite loop, one-command setup, doctor checks, and GUI HTTP endpoints.
+Current coverage includes SAFETY/LOG sidecar behavior, legacy workspace fail-closed detection and historical rescue, SQLite workspace lifecycle, driver manifest and loader behavior, hardware onboarding scaffold generation, safety validation, mock drivers, rule-based planning, watch runtime stepping, the end-to-end SQLite loop, one-command setup, doctor checks, and FastAPI/Dashboard contracts.
 
-It also covers the chat protocol, chat memory, chat action proposals, chat auto-step execution, and the GUI chat endpoint.
+It also covers the chat protocol, chat memory, proposal-only chat boundaries, and the Dashboard chat endpoint.

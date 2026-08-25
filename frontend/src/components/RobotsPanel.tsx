@@ -2,7 +2,7 @@ import { RobotOutlined } from "@ant-design/icons";
 import { Card, Empty, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useMessages } from "../locales/context";
-import type { AgentState } from "../types";
+import type { AgentState, ConfigResponse } from "../types";
 
 interface RobotRow {
   key: string;
@@ -18,6 +18,7 @@ interface RobotRow {
 
 interface RobotsPanelProps {
   state: AgentState | null;
+  config: ConfigResponse | null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -37,24 +38,36 @@ function firstString(source: Record<string, unknown>, keys: string[]): string {
   return "-";
 }
 
-export function RobotsPanel({ state }: RobotsPanelProps) {
+export function RobotsPanel({ state, config }: RobotsPanelProps) {
   const labels = useMessages();
   const worldRobots = asRecord(asRecord(state?.world).robots);
+  const capabilityRobots = state?.capabilities?.robots ?? {};
+  const configRobots = config?.config?.robots ?? {};
+  const ids = new Set([
+    ...Object.keys(capabilityRobots),
+    ...Object.keys(worldRobots),
+    ...Object.keys(configRobots)
+  ]);
 
-  const rows: RobotRow[] = Object.entries(state?.capabilities?.robots ?? {}).map(
-    ([id, robot]) => {
+  const rows: RobotRow[] = Array.from(ids).sort().map(
+    (id) => {
+      const robot = capabilityRobots[id];
+      const configured = configRobots[id];
       const worldInfo = asRecord(worldRobots[id]);
       return {
         key: id,
         id,
-        kind: robot.kind ?? "robot",
-        driver: robot.driver ?? "-",
-        status: robot.status ?? "unknown",
+        kind: robot?.kind ?? "robot",
+        driver: robot?.driver ?? configured?.driver ?? "-",
+        status: robot?.status ?? (configured ? "configured" : "unknown"),
         worldStatus: firstString(worldInfo, ["status", "state"]),
         endpoint: firstString(worldInfo, ["endpoint", "url", "port", "serial_port", "address"]),
-        mode: firstString(worldInfo, ["mode", "transport"]),
+        mode:
+          robot?.execution_mode ??
+          configured?.execution_mode ??
+          firstString(worldInfo, ["mode", "transport"]),
         capabilities:
-          robot.capabilities?.map((capability) => capability.name ?? "").filter(Boolean) ?? []
+          robot?.capabilities?.map((capability) => capability.name ?? "").filter(Boolean) ?? []
       };
     }
   );
@@ -99,7 +112,7 @@ export function RobotsPanel({ state }: RobotsPanelProps) {
           <Typography.Text code>{value}</Typography.Text>
         )
     },
-    { title: "Mode", dataIndex: "mode", width: 100 },
+    { title: labels.config.executionMode, dataIndex: "mode", width: 130 },
     {
       title: "Capabilities",
       dataIndex: "capabilities",

@@ -1,6 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { AgentState, UploadMetadata, UploadResponse } from "../types.js";
+import { SectionTitle } from "./SectionTitle.js";
 
 interface UploadsPanelProps {
   state: AgentState | null;
@@ -11,7 +12,7 @@ export function UploadsPanel({ state, lastUpload }: UploadsPanelProps) {
   const uploads = state?.uploads?.uploads ?? [];
   return (
     <Box flexDirection="column" paddingX={1}>
-      <Text color="cyan">uploads</Text>
+      <SectionTitle title="uploads" />
       {lastUpload ? <UploadResult response={lastUpload} /> : null}
       {uploads.length ? (
         uploads.slice(-8).reverse().map((upload, index) => (

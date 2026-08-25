@@ -29,7 +29,7 @@ export function RawDebug({ state, raw }: RawDebugProps) {
       {hasRawFields ? (
         <AntdRawDebugTree value={debugValue} />
       ) : (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No raw debug fields" />
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={labels.panels.noRawDebug} />
       )}
     </Card>
   );

@@ -359,8 +359,8 @@ physical-agent setup --config examples/xiaozhi_mcp_hardware/physical-agent.yaml 
 
 先检查：
 
-- 页面里是否已经点了 `启动 watch`
-- 发送消息时是否勾选了 `执行一次 watch step`
+- Dashboard 顶部 executor 状态是否为 embedded 或 external
+- 独立运行时，`physical-agent watch` 是否仍在前台工作
 - `physical-agent.yaml` 是否仍然指向当前小智配置
 - 终端里的 `watch` 或 GUI 后台是否有报错
 
@@ -371,9 +371,9 @@ physical-agent setup --config examples/xiaozhi_mcp_hardware/physical-agent.yaml 
 
 1. `physical-agent doctor`
 2. `physical-agent inspect`
-3. `workspace/CAPABILITIES.md`
-4. `workspace/ACTIONS.md`
-5. `workspace/FEEDBACK.md`
+3. `physical-agent inspect`
+4. Dashboard 的 Actions 与 Events
+5. `physical-agent export-audit`
 
 常见原因：
 

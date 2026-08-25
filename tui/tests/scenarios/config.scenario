@@ -9,7 +9,7 @@
       "events": {
         "behavior": "idle",
         "items": [
-          { "type": "hello", "payload": { "watch_enabled": true } }
+          { "type": "hello", "payload": { "executor": { "mode": "external", "status": "active", "lease": { "active": true } } } }
         ]
       },
       "responses": {
@@ -35,9 +35,9 @@
           "expectOutput": ["View: config", "config schema:"]
         },
         {
-          "input": "/register-robot {\"robot_id\":\"sim_1\",\"driver\":\"mock_arm\",\"config\":{\"mode\":\"sim\"}}",
+          "input": "/register-robot {\"robot_id\":\"sim_1\",\"driver\":\"mock_arm\",\"execution_mode\":\"simulation\",\"config\":{\"mode\":\"sim\"}}",
           "covers": ["/register-robot"],
-          "expectOutput": ["Robot sim_1 registered.", "sim_1", "mock_arm"],
+          "expectOutput": ["Robot sim_1 registered.", "sim_1", "mock_arm", "mode simulation"],
           "expectCalls": { "registerRobot": 1 },
           "expectConfig": { "config.robots.sim_1.driver": "mock_arm" }
         },

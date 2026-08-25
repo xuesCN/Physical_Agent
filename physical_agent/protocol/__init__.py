@@ -11,19 +11,22 @@ from physical_agent.protocol.schemas import (
     RobotRuntimeProfile,
     WorkspaceDocument,
 )
-from physical_agent.protocol.workspace import Workspace
+from physical_agent.protocol.agent_output import AgentOutput, AgentTask
+
+ChatPlan.model_rebuild(_types_namespace={"AgentOutput": AgentOutput})
 
 __all__ = [
     "Action",
     "ActionResult",
     "ChatMessage",
     "ChatPlan",
+    "AgentOutput",
+    "AgentTask",
     "Capability",
     "DriverContext",
     "DriverManifest",
     "HealthStatus",
     "Observation",
     "RobotRuntimeProfile",
-    "Workspace",
     "WorkspaceDocument",
 ]

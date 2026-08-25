@@ -9,7 +9,7 @@
       "events": {
         "behavior": "idle",
         "items": [
-          { "type": "hello", "payload": { "watch_enabled": true } }
+          { "type": "hello", "payload": { "executor": { "mode": "external", "status": "active", "lease": { "active": true } } } }
         ]
       },
       "initialExpectOutput": ["Physical Agent TUI", "Ready."],

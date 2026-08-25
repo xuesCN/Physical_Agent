@@ -6,6 +6,8 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
+from physical_agent.application.output_projection import materialize_agent_output
+from physical_agent.application.plan_compiler import compile_agent_output
 from physical_agent.config import load_config, write_default_config
 from physical_agent.drivers.transport import (
     TransportClosedError,
@@ -14,7 +16,7 @@ from physical_agent.drivers.transport import (
 )
 from physical_agent.protocol.schemas import Action, Observation
 from physical_agent.state import open_state_store
-from physical_agent.watch.runtime import WatchRuntime
+from physical_agent.watch.runtime import WatchLeaseLostError, WatchRuntime
 
 
 def _write_config_backend(config_path, backend: str):
@@ -80,6 +82,79 @@ def test_watch_runtime_step_executes_action(tmp_path):
     assert actions["pending"] == []
     assert actions["completed"][0].id == "act_001"
     assert store.read_feedback()["latest"]["status"] == "completed"
+    gate_event = _feedback_events(store, "safety_gate")[0]
+    assert gate_event["status"] == "passed"
+    assert gate_event["decision"] == "allow"
+    assert gate_event["task_id"] == "task:safety_gate:act_001"
+    assert gate_event["actor"] == "watch"
+    assert gate_event["policy_source"] == "SAFETY.md"
+    assert gate_event["checks"]
+    assert gate_event["action_digest"].startswith("sha256:")
+    assert runtime.last_step_stats == {
+        "executed": 1,
+        "processed": 1,
+        "gate_decisions": 1,
+        "state_changed": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("configured_mode", "global_approval", "expected_mode", "expected_approval"),
+    [
+        pytest.param("hardware", False, "hardware", True, id="hardware"),
+        pytest.param("simulation", False, "simulation", False, id="simulation"),
+        pytest.param("simulation", True, "simulation", True, id="global-policy"),
+        pytest.param(None, False, "hardware", True, id="legacy-fails-closed"),
+    ],
+)
+def test_execution_mode_drives_approval_independent_of_manifest_support(
+    tmp_path,
+    configured_mode,
+    global_approval,
+    expected_mode,
+    expected_approval,
+):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data["watch"]["require_human_approval"] = global_approval
+    if configured_mode is None:
+        data["robots"]["arm_1"].pop("execution_mode", None)
+    else:
+        data["robots"]["arm_1"]["execution_mode"] = configured_mode
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+
+    runtime = WatchRuntime(config_path)
+    try:
+        asyncio.run(runtime.setup())
+        profile = runtime.profiles["arm_1"]
+        assert runtime.loaded_drivers["arm_1"].manifest.robot.supports_simulation is True
+        assert profile.execution_mode == expected_mode
+        assert profile.requires_approval is expected_approval
+
+        store = open_state_store(config_path=config_path)
+        capabilities = store.read_capabilities()["robots"]["arm_1"]
+        assert capabilities["execution_mode"] == expected_mode
+        assert capabilities["requires_approval"] is expected_approval
+
+        store.append_pending_action(
+            Action(
+                id=f"act_{expected_mode}_{global_approval}_{configured_mode}",
+                robot="arm_1",
+                capability="observe",
+                params={},
+            )
+        )
+        pending = store.read_actions()["pending"][0]
+        assert pending.metadata["approval"]["required"] is expected_approval
+        expected_status = "pending" if expected_approval else "not_required"
+        assert pending.metadata["approval"]["status"] == expected_status
+        if expected_approval:
+            assert asyncio.run(runtime.step(setup=False)) == 0
+            assert [item.id for item in store.read_actions()["pending"]] == [
+                pending.id
+            ]
+    finally:
+        asyncio.run(runtime.shutdown())
 
 
 def test_watch_runtime_records_verified_expectation_after_world_update(tmp_path):
@@ -262,7 +337,7 @@ def test_watch_runtime_records_skipped_expectation_for_driver_failure(tmp_path):
     assert "Action failed before expectation check" in event["message"]
 
 
-def test_watch_runtime_does_not_check_expectation_when_safety_gate_rejects(tmp_path, monkeypatch):
+def test_watch_runtime_records_skipped_expectation_when_safety_gate_rejects(tmp_path, monkeypatch):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     _write_config_backend(config_path, "sqlite")
 
@@ -298,10 +373,341 @@ def test_watch_runtime_does_not_check_expectation_when_safety_gate_rejects(tmp_p
         asyncio.run(runtime.shutdown())
 
     assert count == 0
-    assert _expectation_events(store) == []
-    feedback = store.read_feedback()["latest"]
-    assert feedback["action_id"] == "act_gate_expected"
-    assert feedback["status"] == "failed"
+    expectation = _expectation_events(store)[0]
+    assert expectation["status"] == "skipped"
+    assert "SafetyGate rejected" in expectation["message"]
+    action_result = next(
+        item
+        for item in store.read_feedback()["history"]
+        if item.get("action_id") == "act_gate_expected" and not item.get("event")
+    )
+    assert action_result["status"] == "failed"
+    gate_event = _feedback_events(store, "safety_gate")[0]
+    assert gate_event["status"] == "rejected"
+    assert gate_event["decision"] == "deny"
+    assert gate_event["code"] == "safety.params.schema"
+    assert runtime.last_step_stats == {
+        "executed": 0,
+        "processed": 1,
+        "gate_decisions": 1,
+        "state_changed": True,
+    }
+
+
+def test_failed_dependency_terminalizes_downstream_action_in_same_step(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    submitted = [
+        Action(
+            id="act_bad_upstream",
+            robot="arm_1",
+            capability="move_to",
+            params={"x": 99.0, "y": 0.0, "z": 0.4},
+        ),
+        Action(
+            id="act_downstream",
+            robot="arm_1",
+            capability="observe",
+            depends_on=["act_bad_upstream"],
+        ),
+    ]
+    store.write_actions(
+        submitted,
+        [],
+        [],
+    )
+
+    try:
+        assert asyncio.run(runtime.step(setup=False)) == 0
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert store.read_actions()["pending"] == []
+    assert {action.id for action in store.read_actions()["cancelled"]} == {
+        "act_bad_upstream",
+        "act_downstream",
+    }
+    downstream_gate = next(
+        item
+        for item in _feedback_events(store, "safety_gate")
+        if item["action_id"] == "act_downstream"
+    )
+    assert downstream_gate["status"] == "rejected"
+    assert downstream_gate["code"] == "safety.dependencies.completed"
+    projected = materialize_agent_output(
+        compile_agent_output(
+            submitted,
+            status="waiting_execution",
+            decision="propose",
+            lifecycle="submitted",
+            message="Exercise dependency terminalization.",
+        ),
+        actions=store.read_actions(),
+        feedback=store.read_feedback(),
+        claim_owners=store.read_action_claim_owners(),
+    )
+    downstream_tasks = {
+        task.kind: task
+        for task in projected.tasks
+        if task.action_id == "act_downstream"
+    }
+    assert downstream_tasks["safety_gate"].status == "rejected"
+    assert "projection_error" not in downstream_tasks["safety_gate"].details
+    assert downstream_tasks["physical_action"].status == "skipped"
+
+
+def test_watch_hardware_action_requires_agent_guidance_before_gate(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    data["robots"]["arm_1"]["execution_mode"] = "hardware"
+    data["watch"]["halt_on_shutdown"] = False
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    store.append_pending_action(
+        Action(id="act_hardware_without_guidance", robot="arm_1", capability="observe")
+    )
+    store.approve_action("act_hardware_without_guidance")
+    execute_calls = []
+
+    async def fail_execute(action):
+        execute_calls.append(action.id)
+        raise AssertionError("hardware action must be rejected before driver.execute")
+
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "execute", fail_execute)
+    try:
+        assert asyncio.run(runtime.step(setup=False)) == 0
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert execute_calls == []
+    assert [item.id for item in store.read_actions()["cancelled"]] == [
+        "act_hardware_without_guidance"
+    ]
+    events = _feedback_events(store, "safety_policy_preflight")
+    assert events[-1]["code"] == "safety.guidance.missing"
+    assert _feedback_events(store, "safety_gate") == []
+
+
+def test_watch_simulation_action_keeps_legacy_compatibility_without_guidance(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    store.append_pending_action(
+        Action(id="act_simulation_without_guidance", robot="arm_1", capability="observe")
+    )
+    try:
+        assert asyncio.run(runtime.step(setup=False)) == 1
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert [item.id for item in store.read_actions()["completed"]] == [
+        "act_simulation_without_guidance"
+    ]
+    assert _feedback_events(store, "safety_policy_preflight") == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["revision", "hard_digest", "guidance_digest", "malformed"],
+)
+def test_watch_policy_drift_cancels_only_same_proposal_without_halt(
+    tmp_path,
+    monkeypatch,
+    mutation,
+):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_watch_config(config_path, halt_on_shutdown=False)
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    original_safety_text = store.file("safety").read_text(encoding="utf-8")
+    baseline_snapshot = store.read_safety_snapshot()
+    changed_snapshot = None
+    proposal_id = "proposal_policy_drift"
+
+    def correlated(action_id, correlated_proposal_id=proposal_id):
+        return Action(
+            id=action_id,
+            robot="arm_1",
+            capability="observe",
+            metadata={
+                "correlation": {
+                    "session_id": "workspace",
+                    "proposal_id": correlated_proposal_id,
+                }
+            },
+        )
+
+    store.write_actions(
+        [
+            correlated("act_drift_first"),
+            correlated("act_drift_second"),
+            correlated("act_drift_third"),
+            correlated("act_other_proposal", "proposal_other"),
+        ],
+        [],
+        [],
+    )
+    original_execute = runtime.loaded_drivers["arm_1"].driver.execute
+    execute_calls = []
+    halt_calls = []
+
+    async def mutate_policy_after_first(action):
+        nonlocal changed_snapshot
+        execute_calls.append(action.id)
+        result = await original_execute(action)
+        if len(execute_calls) == 1:
+            if mutation == "revision":
+                store.write_safety(store.read_safety()["rules"])
+            elif mutation == "hard_digest":
+                text = store.file("safety").read_text(encoding="utf-8")
+                store.file("safety").write_text(
+                    text.replace(
+                        "allow_autonomous_execution: true",
+                        "allow_autonomous_execution: false",
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+            elif mutation == "guidance_digest":
+                text = store.file("safety").read_text(encoding="utf-8")
+                store.file("safety").write_text(
+                    text + "\n## Agent Guidance\n\nPolicy changed without a revision bump.\n",
+                    encoding="utf-8",
+                )
+            else:
+                store.file("safety").write_text("not a safety policy\n", encoding="utf-8")
+            if mutation != "malformed":
+                changed_snapshot = store.read_safety_snapshot()
+        return result
+
+    async def halt():
+        halt_calls.append("halt")
+
+    monkeypatch.setattr(
+        runtime.loaded_drivers["arm_1"].driver,
+        "execute",
+        mutate_policy_after_first,
+    )
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "halt", halt)
+    try:
+        assert asyncio.run(runtime.step(setup=False)) == 1
+        assert halt_calls == []
+    finally:
+        if mutation == "malformed":
+            store.file("safety").write_text(original_safety_text, encoding="utf-8")
+        asyncio.run(runtime.shutdown())
+
+    assert execute_calls == ["act_drift_first"]
+    actions = store.read_actions()
+    assert [item.id for item in actions["completed"]] == ["act_drift_first"]
+    assert {item.id for item in actions["cancelled"]} == {
+        "act_drift_second",
+        "act_drift_third",
+    }
+    assert [item.id for item in actions["pending"]] == ["act_other_proposal"]
+    events = _feedback_events(store, "safety_policy_preflight")
+    assert {event["action_id"] for event in events} == {
+        "act_drift_second",
+        "act_drift_third",
+    }
+    expected_code = (
+        "safety.policy.invalidated" if mutation == "malformed" else "safety.policy.changed"
+    )
+    assert {event["code"] for event in events} == {expected_code}
+    assert all(event["result"]["baseline"] for event in events)
+    assert all(event["result"]["cancelled_action_ids"] for event in events)
+    expected_baseline = {
+        "revision": baseline_snapshot.hard.revision,
+        "policy_digest": f"sha256:{baseline_snapshot.hard.digest}",
+        "guidance_digest": f"sha256:{baseline_snapshot.guidance_digest}",
+        "policy_identity_digest": f"sha256:{baseline_snapshot.identity_digest}",
+    }
+    assert all(event["result"]["baseline"] == expected_baseline for event in events)
+    assert all(event["policy_revision"] == baseline_snapshot.hard.revision for event in events)
+    assert all(
+        event["policy_digest"] == f"sha256:{baseline_snapshot.hard.digest}"
+        for event in events
+    )
+    assert all(
+        event["guidance_digest"] == f"sha256:{baseline_snapshot.guidance_digest}"
+        for event in events
+    )
+    assert all(
+        event["policy_identity_digest"]
+        == f"sha256:{baseline_snapshot.identity_digest}"
+        for event in events
+    )
+    if mutation == "malformed":
+        assert all(event["result"]["current"] is None for event in events)
+        assert all(
+            event["result"]["policy_error"]["code"] == "safety.policy.invalid"
+            for event in events
+        )
+    else:
+        assert changed_snapshot is not None
+        expected_current = {
+            "revision": changed_snapshot.hard.revision,
+            "policy_digest": f"sha256:{changed_snapshot.hard.digest}",
+            "guidance_digest": f"sha256:{changed_snapshot.guidance_digest}",
+            "policy_identity_digest": f"sha256:{changed_snapshot.identity_digest}",
+        }
+        assert all(event["result"]["current"] == expected_current for event in events)
+        assert all(event["result"]["policy_error"] is None for event in events)
+
+
+def test_watch_policy_drift_on_legacy_action_cancels_only_current_action(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_watch_config(config_path, halt_on_shutdown=False)
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    store.write_actions(
+        [
+            Action(id="act_legacy_drift", robot="arm_1", capability="observe"),
+            Action(id="act_legacy_other", robot="arm_1", capability="observe"),
+        ],
+        [],
+        [],
+    )
+    original_read = runtime.workspace.read_safety_snapshot
+    read_count = 0
+    execute_calls = []
+
+    def change_policy_on_fresh_read():
+        nonlocal read_count
+        read_count += 1
+        if read_count == 2:
+            store.write_safety(store.read_safety()["rules"])
+        return original_read()
+
+    async def fail_execute(action):
+        execute_calls.append(action.id)
+        raise AssertionError("legacy drift must reject before driver.execute")
+
+    monkeypatch.setattr(runtime.workspace, "read_safety_snapshot", change_policy_on_fresh_read)
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "execute", fail_execute)
+    try:
+        assert asyncio.run(runtime.step(setup=False)) == 0
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert execute_calls == []
+    actions = store.read_actions()
+    assert [item.id for item in actions["cancelled"]] == ["act_legacy_drift"]
+    assert [item.id for item in actions["pending"]] == ["act_legacy_other"]
+    event = _feedback_events(store, "safety_policy_preflight")[-1]
+    assert event["proposal_id"] is None
+    assert event["result"]["cancelled_action_ids"] == ["act_legacy_drift"]
 
 
 def test_update_world_observes_robots_concurrently(tmp_path, monkeypatch):
@@ -483,7 +889,9 @@ def test_watch_runtime_driver_exception_cancels_sqlite_action(tmp_path, monkeypa
             """,
             ("Action `act_boom` failed%",),
         ).fetchone()[0]
-    assert row == ("cancelled", None, None)
+    assert row[:2] == ("cancelled", None)
+    assert row[2] == runtime._watch_lease_owner
+    assert store.read_action_claim_owners() == {"act_boom": row[2]}
     assert "Action `act_boom` failed" in log_message
     assert "boom" in log_message
 
@@ -672,6 +1080,52 @@ def test_watch_runtime_step_calls_driver_heartbeat(tmp_path, monkeypatch):
     assert calls == ["heartbeat"]
 
 
+def test_watch_runtime_enforces_single_workspace_executor_lease(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    first = WatchRuntime(config_path)
+    second = WatchRuntime(config_path)
+    asyncio.run(first.setup())
+
+    try:
+        with pytest.raises(RuntimeError, match="already owns"):
+            asyncio.run(second.setup())
+    finally:
+        asyncio.run(first.shutdown())
+
+    asyncio.run(second.setup())
+    asyncio.run(second.shutdown())
+
+
+def test_watch_runtime_lease_loss_is_fatal_without_stale_halt(tmp_path, monkeypatch):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    halt_calls = []
+
+    async def halt():
+        halt_calls.append("halt")
+
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "halt", halt)
+    assert store.release_runtime_lease(
+        "watch-executor",
+        runtime._watch_lease_owner,
+    ) is True
+    assert store.acquire_runtime_lease(
+        "watch-executor",
+        "replacement-watch",
+        ttl_s=30,
+    ) is True
+
+    with pytest.raises(WatchLeaseLostError, match="lease was lost"):
+        asyncio.run(runtime.step(setup=False))
+    asyncio.run(runtime.shutdown())
+
+    assert halt_calls == []
+
+
 def test_watch_runtime_heartbeat_failure_is_audited(tmp_path, monkeypatch):
     config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
     _write_config_backend(config_path, "sqlite")
@@ -809,6 +1263,61 @@ def test_watch_runtime_watchdog_halt_triggers_once_at_threshold(
             ("%Heartbeat watchdog threshold reached%",),
         ).fetchone()[0]
     assert "halt_status=completed" in log_message
+
+
+def test_heartbeat_failure_blocks_new_action_until_robot_recovers(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    _write_config_backend(config_path, "sqlite")
+    _write_watch_config(
+        config_path,
+        halt_on_shutdown=False,
+        heartbeat_failure_threshold=1,
+    )
+    runtime = WatchRuntime(config_path)
+    asyncio.run(runtime.setup())
+    store = open_state_store(config_path=config_path)
+    store.append_pending_action(
+        Action(
+            id="act_after_heartbeat",
+            robot="arm_1",
+            capability="pick",
+            params={"object_id": "red_block"},
+        )
+    )
+    heartbeat_calls = 0
+    execute_calls = []
+    original_execute = runtime.loaded_drivers["arm_1"].driver.execute
+
+    async def heartbeat():
+        nonlocal heartbeat_calls
+        heartbeat_calls += 1
+        if heartbeat_calls == 1:
+            raise RuntimeError("pulse lost")
+
+    async def execute(action):
+        execute_calls.append(action.id)
+        return await original_execute(action)
+
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "heartbeat", heartbeat)
+    monkeypatch.setattr(runtime.loaded_drivers["arm_1"].driver, "execute", execute)
+
+    try:
+        assert asyncio.run(runtime.step(setup=False)) == 0
+        assert execute_calls == []
+        assert [action.id for action in store.read_actions()["pending"]] == [
+            "act_after_heartbeat"
+        ]
+        assert runtime.profiles["arm_1"].status == "degraded"
+
+        assert asyncio.run(runtime.step(setup=False)) == 1
+    finally:
+        asyncio.run(runtime.shutdown())
+
+    assert execute_calls == ["act_after_heartbeat"]
+    assert runtime.profiles["arm_1"].status == "connected"
 
 
 def test_watch_runtime_heartbeat_recovery_resets_count_and_audits(

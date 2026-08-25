@@ -8,10 +8,11 @@ import {
 } from "@ant-design/icons";
 import { Bubble, Sender } from "@ant-design/x";
 import { Alert, Button, Card, Descriptions, Empty, Popconfirm, Space, Tag, Typography } from "antd";
-import { useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { parseActionDrafts } from "../actionDraft";
+import { structuredDraftActions } from "../agentOutput";
 import { useMessages } from "../locales/context";
+import { splitMarkdownBlocks } from "../markdownBlocks";
 import type { ActionItem, ChatMessage } from "../types";
 import { JsonSummaryLine } from "./JsonSummary";
 import { expectedSummary } from "./readableFormatters";
@@ -42,6 +43,19 @@ export function ChatPanel({
   const labels = useMessages();
   const [draft, setDraft] = useState("");
   const [submittingDraft, setSubmittingDraft] = useState<string | null>(null);
+  // Stable across renders so memoized MessageContent items can bail out; without
+  // it every streaming token would re-parse the markdown of the whole history.
+  const handleAddDraft = useCallback(
+    async (action: ActionItem, key: string) => {
+      setSubmittingDraft(key);
+      try {
+        await onAddDraft(action);
+      } finally {
+        setSubmittingDraft(null);
+      }
+    },
+    [onAddDraft]
+  );
   const items = useMemo(
     () =>
       messages.map((message, index) => {
@@ -56,20 +70,13 @@ export function ChatPanel({
               originalMessage={originalMessage}
               submittingDraft={submittingDraft}
               disabled={loading || actionLoading}
-              onAddDraft={async (action, key) => {
-                setSubmittingDraft(key);
-                try {
-                  await onAddDraft(action);
-                } finally {
-                  setSubmittingDraft(null);
-                }
-              }}
+              onAddDraft={handleAddDraft}
               onEditDraft={onEditDraft}
             />
           )
         };
       }),
-    [actionLoading, loading, messages, onAddDraft, onEditDraft, submittingDraft]
+    [actionLoading, loading, messages, handleAddDraft, onEditDraft, submittingDraft]
   );
 
   async function submit(value: string) {
@@ -100,7 +107,7 @@ export function ChatPanel({
           onConfirm={() => void onReset()}
         >
           <Button
-            aria-label="Clear chat history"
+            aria-label={labels.chat.clearChatAria}
             data-testid="reset-chat-button"
             disabled={loading || messages.length === 0}
             icon={<DeleteOutlined />}
@@ -172,7 +179,7 @@ interface MessageContentProps {
   onEditDraft: (action: ActionItem) => void;
 }
 
-function MessageContent({
+const MessageContent = memo(function MessageContent({
   message,
   messageIndex,
   originalMessage,
@@ -182,14 +189,34 @@ function MessageContent({
   onEditDraft
 }: MessageContentProps) {
   const labels = useMessages();
-  const parsed = message.role === "assistant" ? parseActionDrafts(message.content) : null;
-  const markdown = parsed?.markdown ?? message.content;
+  const reasoningSummary =
+    message.role === "assistant"
+      ? reasoningSummaryFromMetadata(message.metadata)
+      : null;
+  const drafts =
+    message.role === "assistant"
+      ? (structuredDraftActions(message.metadata?.agent_output) ?? [])
+      : [];
   return (
     <div className="chat-message-content">
-      <div className="markdown-body">
-        <ReactMarkdown>{markdown}</ReactMarkdown>
-      </div>
-      {parsed?.drafts.map((draft, draftIndex) => {
+      {reasoningSummary && (
+        <details className="reasoning-summary" data-testid="reasoning-summary">
+          <summary>
+            <Typography.Text strong>{labels.chat.reasoningSummary}</Typography.Text>
+            <Typography.Text type="secondary">
+              {labels.chat.reasoningDisclaimer}
+            </Typography.Text>
+          </summary>
+          <Typography.Paragraph
+            className="reasoning-summary-body"
+            data-testid="reasoning-summary-body"
+          >
+            {reasoningSummary}
+          </Typography.Paragraph>
+        </details>
+      )}
+      <MarkdownBody content={message.content} />
+      {drafts.map((draft, draftIndex) => {
         const key = `${message.created_at ?? messageIndex}-${draftIndex}`;
         const action = withDraftMetadata(draft, {
           originalMessage,
@@ -210,6 +237,41 @@ function MessageContent({
       })}
     </div>
   );
+});
+
+/**
+ * Renders the reply text as independently memoized top-level blocks. While a
+ * message streams, only the trailing block changes, so completed blocks keep
+ * their rendered output instead of re-parsing Markdown on every token. It also
+ * insulates the text from draft interaction state: toggling `submittingDraft`
+ * re-renders the message but leaves every block's content identical.
+ */
+function MarkdownBody({ content }: { content: string }) {
+  const blocks = useMemo(() => splitMarkdownBlocks(content), [content]);
+  return (
+    <div className="markdown-body">
+      {blocks.map((block, index) => (
+        // Blocks are only ever appended or edited in place at the tail, never
+        // reordered, so the index is a stable identity here.
+        <MarkdownBlock key={index} content={block} />
+      ))}
+    </div>
+  );
+}
+
+const MarkdownBlock = memo(function MarkdownBlock({ content }: { content: string }) {
+  return <ReactMarkdown>{content}</ReactMarkdown>;
+});
+
+function reasoningSummaryFromMetadata(
+  metadata: Record<string, unknown> | undefined
+): string | null {
+  const value = metadata?.reasoning_summary;
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized || null;
 }
 
 interface DraftActionCardProps {
@@ -234,7 +296,7 @@ function DraftActionCard({
   const expected = action.metadata?.expected;
   const expectedText = expectedSummary(expected);
   return (
-    <Card size="small" className="draft-action-card">
+    <Card size="small" className="draft-action-card" data-testid="draft-action-card">
       <Space direction="vertical" size={8} className="full-width">
         <Space wrap>
           <Tag color="blue">{labels.chat.draft}</Tag>
@@ -269,6 +331,7 @@ function DraftActionCard({
         </Descriptions>
         <Space wrap>
           <Button
+            data-testid="add-draft-to-actions"
             type="primary"
             size="small"
             icon={<PlusOutlined />}

@@ -9,12 +9,13 @@
       "events": {
         "behavior": "idle",
         "items": [
-          { "type": "hello", "payload": { "watch_enabled": true } }
+          { "type": "hello", "payload": { "executor": { "mode": "embedded", "status": "active", "lease": { "active": true } } } }
         ]
       },
       "responses": {
         "submitTask": [
-          { "message": "Task accepted: pick the red block.", "state": "afterTask" }
+          { "message": "Task accepted: pick the red block.", "state": "beforeCompleted" },
+          { "message": "Action act_done completed.", "state": "afterCompleted" }
         ],
         "approveAction": [
           { "message": "Action act_001 approved.", "state": "afterApprove" }
@@ -23,33 +24,50 @@
           { "message": "Action act_002 rejected.", "state": "afterReject" }
         ]
       },
-      "initialExpectOutput": ["Physical Agent TUI", "act_001"],
+      "initialExpectOutput": ["Physical Agent TUI", "Safety Gate · Execution approval", "/approve act_001", "等待人工批准"],
       "steps": [
         {
           "input": "/task pick the red block",
           "covers": ["/task"],
-          "expectOutput": ["Task accepted: pick the red block.", "act_task", "approval unknown"],
+          "expectOutput": ["Task accepted: pick the red block.", "/approve act_001", "等待人工批准"],
+          "rejectOutput": ["approval unknown", "arm_1.move_to(x=120, y=45, z=0)", "⎿ done"],
           "expectCalls": { "submitTask": 1 },
           "expectState": { "actions.pending.2.id": "act_task" }
         },
         {
           "input": "/approve act_001",
           "covers": ["/approve"],
-          "expectOutput": ["Action act_001 approved.", "act_001", "approved"],
+          "expectOutput": ["Action act_001 approved.", "/approve act_002", "等待人工批准"],
+          "rejectOutput": ["approval unknown"],
           "expectCalls": { "approveAction": 1 },
           "expectState": { "actions.pending.0.metadata.approval.status": "approved" }
         },
         {
           "input": "/reject act_002 unsafe workspace",
           "covers": ["/reject"],
-          "expectOutput": ["Action act_002 rejected.", "act_002", "rejected"],
+          "expectOutput": ["Action act_002 rejected.", "⏺ arm_1.observe()", "⎿ rejected"],
           "expectCalls": { "rejectAction": 1 },
           "expectState": { "actions.cancelled.0.id": "act_002" }
         },
         {
+          "input": "/task record completed move",
+          "expectOutput": ["Action act_done completed.", "⏺ arm_1.move_to(x=120, y=45, z=0)", "⎿ done"],
+          "expectCalls": { "submitTask": 2 },
+          "expectState": { "actions.completed.0.id": "act_done" }
+        },
+        {
           "input": "/view actions",
           "covers": ["/view actions"],
-          "expectOutput": ["actions", "act_001", "act_task"]
+          "expectOutput": ["actions", "act_001", "act_task", "act_done", "done", "rejected"],
+          "expectLatestOutput": [
+            "agent output: propose / failed / submitted",
+            "failed safety_gate act_done owner=watch mandatory watch gate",
+            "SAFETY.md 1 checks",
+            "wait act_001 arm_1.pick approved",
+            "wait act_task arm_1.pick approval unknown",
+            "done act_done arm_1.move_to approval unknown",
+            "stop act_002 arm_1.observe rejected"
+          ]
         }
       ]
     }

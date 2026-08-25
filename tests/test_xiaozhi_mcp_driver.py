@@ -1,15 +1,21 @@
 import asyncio
+from pathlib import Path
 
 from physical_agent.drivers import xiaozhi_mcp as xiaozhi_mcp_module
 from physical_agent.drivers.loader import load_driver
 from physical_agent.drivers.transport import WebSocketTransport
 from physical_agent.protocol.schemas import Action
-from physical_agent.protocol.workspace import Workspace
+
+
+def _driver_paths(tmp_path: Path) -> tuple[Path, Path]:
+    workspace_path = tmp_path / "workspace"
+    artifacts_path = workspace_path / "artifacts"
+    artifacts_path.mkdir(parents=True, exist_ok=True)
+    return workspace_path, artifacts_path
 
 
 def test_xiaozhi_mcp_mock_mode(tmp_path):
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
+    workspace_path, artifacts_path = _driver_paths(tmp_path)
     loaded = load_driver(
         robot_id="xiaozhi_1",
         driver_ref="xiaozhi_mcp",
@@ -24,8 +30,8 @@ def test_xiaozhi_mcp_mock_mode(tmp_path):
                 "stop": "self.otto.stop",
             },
         },
-        workspace_path=workspace.path,
-        artifacts_path=workspace.artifacts_path,
+        workspace_path=workspace_path,
+        artifacts_path=artifacts_path,
     )
 
     asyncio.run(loaded.driver.connect())
@@ -35,14 +41,13 @@ def test_xiaozhi_mcp_mock_mode(tmp_path):
 
 
 def test_xiaozhi_mcp_mock_volume_and_motion(tmp_path):
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
+    workspace_path, artifacts_path = _driver_paths(tmp_path)
     loaded = load_driver(
         robot_id="xiaozhi_1",
         driver_ref="xiaozhi_mcp",
         config={"mode": "mock"},
-        workspace_path=workspace.path,
-        artifacts_path=workspace.artifacts_path,
+        workspace_path=workspace_path,
+        artifacts_path=artifacts_path,
     )
 
     asyncio.run(loaded.driver.connect())
@@ -114,8 +119,7 @@ def test_xiaozhi_mcp_ws_mode(monkeypatch, tmp_path):
 
     monkeypatch.setattr(xiaozhi_mcp_module, "XiaozhiMcpWebSocketClient", FakeWsClient)
 
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
+    workspace_path, artifacts_path = _driver_paths(tmp_path)
     loaded = load_driver(
         robot_id="xiaozhi_1",
         driver_ref="xiaozhi_mcp",
@@ -126,8 +130,8 @@ def test_xiaozhi_mcp_ws_mode(monkeypatch, tmp_path):
             "port": 8080,
             "path": "/ws",
         },
-        workspace_path=workspace.path,
-        artifacts_path=workspace.artifacts_path,
+        workspace_path=workspace_path,
+        artifacts_path=artifacts_path,
     )
 
     async def scenario():
@@ -201,8 +205,7 @@ def test_xiaozhi_mcp_ws_reconnect_refreshes_session_and_tools(monkeypatch, tmp_p
 
     monkeypatch.setattr(xiaozhi_mcp_module, "XiaozhiMcpWebSocketClient", FakeWsClient)
 
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
+    workspace_path, artifacts_path = _driver_paths(tmp_path)
     loaded = load_driver(
         robot_id="xiaozhi_1",
         driver_ref="xiaozhi_mcp",
@@ -214,8 +217,8 @@ def test_xiaozhi_mcp_ws_reconnect_refreshes_session_and_tools(monkeypatch, tmp_p
             "path": "/ws",
             "reconnect_policy": {"enabled": True, "max_retries": 1},
         },
-        workspace_path=workspace.path,
-        artifacts_path=workspace.artifacts_path,
+        workspace_path=workspace_path,
+        artifacts_path=artifacts_path,
     )
 
     async def scenario():
@@ -266,8 +269,7 @@ def test_xiaozhi_mcp_ws_fire_and_forget(monkeypatch, tmp_path):
 
     monkeypatch.setattr(xiaozhi_mcp_module, "XiaozhiMcpWebSocketClient", FakeWsClient)
 
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
+    workspace_path, artifacts_path = _driver_paths(tmp_path)
     loaded = load_driver(
         robot_id="xiaozhi_1",
         driver_ref="xiaozhi_mcp",
@@ -278,8 +280,8 @@ def test_xiaozhi_mcp_ws_fire_and_forget(monkeypatch, tmp_path):
             "port": 8080,
             "path": "/ws",
         },
-        workspace_path=workspace.path,
-        artifacts_path=workspace.artifacts_path,
+        workspace_path=workspace_path,
+        artifacts_path=artifacts_path,
     )
 
     async def scenario():

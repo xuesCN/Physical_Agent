@@ -26,7 +26,7 @@ agent / gui / chat / api
 ## 当前状态
 
 - 新项目默认使用 SQLite backend，运行态状态写入 `workspace/state.db`。
-- `workspace.backend: markdown` 已退役；显式配置会被拒绝，并提示先运行 `migrate-md-to-sqlite` 再改成 `workspace.backend: sqlite`。
+- `workspace.backend: markdown` 已退役；显式配置会被拒绝。旧 workspace 只能按 `docs/state-backends.zh-CN.md` 使用 `9072b4e` 独立 worktree 救援，当前 executable 不含 migrator。
 - 如果配置省略 `workspace.backend`，且目标 workspace 已存在完整 legacy Markdown 协议文件，当前代码也会拒绝自动探测，不会打开旧 backend。
 - `SAFETY.md` 仍是文件真源。即使默认状态 backend 是 SQLite，watch 执行前仍读取并强制执行 `SAFETY.md`。
 - GUI/API/agent/chat 只提交动作提案，不直接执行硬件。
@@ -115,7 +115,7 @@ FastAPI 后端，默认不启动 watch：
 
 ## Watch 启动
 
-真实硬件前，先确认 `physical-agent.yaml` 指向正确 driver、workspace 和 backend。然后单独终端启动：
+真实硬件前，先确认 `physical-agent.yaml` 指向正确 driver、workspace 和 backend，并为实机 robot 显式写入 `execution_mode: hardware`（模拟实例才写 `simulation`）。然后单独终端启动：
 
 ```powershell
 .\.venv\Scripts\physical-agent.exe watch --config physical-agent.yaml
@@ -153,10 +153,44 @@ FastAPI 后端，默认不启动 watch：
 
 1. 启动 `watch`。
 2. 先只做 `observe`、`status`、`stop`、`health` 这类低风险能力。
-3. 看 `inspect`、`FEEDBACK` 和日志，确认 watch 写回正常。
+3. 看 `inspect`、Dashboard Events 或 `export-audit`，确认 watch 已把 feedback/log 写入 SQLite。
 4. 再做小幅、单步、人工确认动作，例如单关节很小角度、夹爪小范围开合、音量/灯光/说话等低风险 tool。
 5. 每次只提交一个动作，观察完成后再继续。
 6. 禁止一上来跑大幅运动、复杂 pick/place、多步任务、自动循环任务或带不确定目标的自然语言任务。
+
+## car_agent 小车准备小节
+
+参考：
+
+- `car_agent/README.zh-CN.md`
+- `car_agent/physical-agent.yaml`
+- `car_agent/physical_driver.yaml`
+
+配置重点：
+
+- 将 `host: REPLACE_WITH_CAR_IP` 替换为小车当前 DHCP 地址；默认 TCP 端口为 `8080`。
+- 样例故意不配置 `max_abs_speed` 与 `max_duration_ms`，因此首次连接只发布 `observe` 和 `stop`。
+- `max_abs_speed` 与 `max_duration_ms` 必须在轮子离地标定后同时填写；只填一项会被 manifest 拒绝。
+- driver 只接受 `protocol: moce-physical-agent/v1`、`device: moce-car`、`project: car_agent` 的固件身份。
+- 小车与上位机必须处于同一个可信 2.4GHz 网络；固件没有鉴权或 TLS，同一时刻只运行一个控制客户端。
+- 当前 driver 只通过 scripted TCP fake 与 Watch/SafetyGate 集成测试，尚未完成真实小车连接或运动验收。
+
+首次连接顺序：
+
+```powershell
+.\.venv\Scripts\physical-agent.exe init --config car_agent\physical-agent.yaml
+.\.venv\Scripts\physical-agent.exe state-check --config car_agent\physical-agent.yaml
+.\.venv\Scripts\physical-agent.exe doctor --config car_agent\physical-agent.yaml
+.\.venv\Scripts\physical-agent.exe watch --config car_agent\physical-agent.yaml
+```
+
+在另一个终端运行：
+
+```powershell
+.\.venv\Scripts\physical-agent.exe inspect --config car_agent\physical-agent.yaml
+```
+
+第一阶段只验证连接、`observe`、`stop`、watchdog/TOF 字段和审计记录。确认轮子离地固定、物理断电可立即触达、方向和最低稳定 PWM 后，再同时加入保守的运动上限并重启 watch。第一次 `drive_for` 应为单条、短时、低 PWM、人工审批动作；软件 `stop`、800 ms watchdog 和 TOF 观察均不能替代硬件急停或断电。
 
 ## 小智 xiaozhi 准备小节
 

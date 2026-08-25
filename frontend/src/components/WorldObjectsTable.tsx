@@ -13,6 +13,7 @@ import {
   omitKeys,
   pickFirstString
 } from "./readableFormatters";
+import { useMessages } from "../locales/context";
 
 interface WorldObjectsTableProps {
   world: AgentState["world"] | undefined;
@@ -46,6 +47,7 @@ const OBJECT_KNOWN_KEYS = [
 ];
 
 export function WorldObjectsTable({ world }: WorldObjectsTableProps) {
+  const labels = useMessages();
   const worldRecord = asRecord(world);
   const state = asRecord(worldRecord.state);
   const objects = asRecord(state.objects ?? worldRecord.objects);
@@ -69,29 +71,29 @@ export function WorldObjectsTable({ world }: WorldObjectsTableProps) {
           scroll={{ x: 940 }}
         />
       ) : (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No world objects" />
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={labels.overview.noWorldObjects} />
       )}
       <WorldDescriptions
-        title="Environment"
+        title={labels.world.environment}
         icon={<CompassOutlined />}
         value={environment}
         emptyText="No environment fields"
       />
       <WorldDescriptions
-        title="Robots in world"
+        title={labels.world.robotsInWorld}
         icon={<ApartmentOutlined />}
         value={robots}
         emptyText="No robot world fields"
       />
       {Array.isArray(artifacts) && artifacts.length > 0 && (
         <Space size={5} wrap>
-          <Typography.Text type="secondary">Artifacts</Typography.Text>
+          <Typography.Text type="secondary">{labels.world.artifacts}</Typography.Text>
           {artifacts.map((item) => (
             <Tag key={String(item)}>{String(item)}</Tag>
           ))}
         </Space>
       )}
-      {isNonEmptyRecord(raw) && <JsonSummaryLine label="Raw" value={raw} />}
+      {isNonEmptyRecord(raw) && <JsonSummaryLine label={labels.world.raw} value={raw} />}
     </Space>
   );
 }

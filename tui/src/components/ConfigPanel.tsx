@@ -3,6 +3,7 @@ import { Box, Text } from "ink";
 import type { AgentState, ConfigResponse } from "../types.js";
 import { buildRobotViewModels, summarizeCapabilities } from "../formatters/robot.js";
 import { compactJson, recordOrEmpty, summarizeRecord } from "../formatters/schema.js";
+import { SectionTitle } from "./SectionTitle.js";
 
 interface ConfigPanelProps {
   config: ConfigResponse | null;
@@ -22,7 +23,7 @@ export function ConfigPanel({ config, state, error }: ConfigPanelProps) {
   if (!effectiveConfig) {
     return (
       <Box flexDirection="column" paddingX={1}>
-        <Text color="gray">config</Text>
+        <SectionTitle title="config" />
         <Text color="yellow">Config snapshot not loaded. Use /config or /refresh.</Text>
       </Box>
     );
@@ -35,7 +36,7 @@ export function ConfigPanel({ config, state, error }: ConfigPanelProps) {
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      <Text color="cyan">config</Text>
+      <SectionTitle title="config" />
       <Text>path: <Text color="gray">{config.config_path ?? "-"}</Text></Text>
       <Text>
         workspace: {String(effectiveConfig.workspace?.path ?? "-")}{" "}

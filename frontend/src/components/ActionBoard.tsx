@@ -1,8 +1,11 @@
 import {
   CheckCircleOutlined,
   ClockCircleOutlined,
+  DownOutlined,
+  RightOutlined,
   StopOutlined,
-  SafetyCertificateOutlined
+  SafetyCertificateOutlined,
+  WarningOutlined
 } from "@ant-design/icons";
 import { Button, Card, Popconfirm, Segmented, Space, Table, Tag, Typography } from "antd";
 import { useMemo, useState } from "react";
@@ -14,19 +17,23 @@ import {
   formatObjectValue
 } from "./readableFormatters";
 
-type BoardKey = "pending" | "completed" | "cancelled";
+type BoardKey = "pending" | "in_progress" | "completed" | "cancelled";
 
 const STATUS_ICON = {
   pending: <ClockCircleOutlined />,
+  in_progress: <ClockCircleOutlined spin />,
   completed: <CheckCircleOutlined />,
   cancelled: <StopOutlined />
 };
 
 const STATUS_COLOR = {
   pending: "gold",
+  in_progress: "blue",
   completed: "green",
   cancelled: "red"
 };
+
+const ACTION_BOARD_COLLAPSED_STORAGE_KEY = "physical-agent-action-board-collapsed:v1";
 
 interface ActionBoardProps {
   actions: AgentState["actions"] | undefined;
@@ -43,45 +50,111 @@ export function ActionBoard({
 }: ActionBoardProps) {
   const labels = useMessages();
   const [active, setActive] = useState<BoardKey>("pending");
+  const [collapsedPreference, setCollapsedPreference] = useState(
+    readActionBoardCollapsedPreference
+  );
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  const rows = actions?.[active] ?? [];
+  const approvalRequiredCount = (actions?.pending ?? []).filter(
+    (action) => action.metadata?.approval?.required
+  ).length;
+  const totalActions = totalActionCount(actions);
+  const approvalForcesOpen = approvalRequiredCount > 0;
+  const collapsed = approvalForcesOpen ? false : collapsedPreference;
+  const visibleActive: BoardKey = approvalForcesOpen ? "pending" : active;
+  const rows = actions?.[visibleActive] ?? [];
   const data = useMemo(
     () => rows.map((item) => ({ ...item, key: item.id })),
     [rows]
   );
 
+  function toggleCollapsed() {
+    if (approvalForcesOpen) {
+      return;
+    }
+    setCollapsedPreference((current) => {
+      const next = !current;
+      writeActionBoardCollapsedPreference(next);
+      return next;
+    });
+  }
+
   return (
     <Card
-      className="panel action-board"
+      className={`panel action-board${
+        approvalForcesOpen ? " action-board-approval-required" : ""
+      }`}
       data-testid="action-board"
       title={
-        <Space>
+        <Space wrap data-testid="action-board-summary">
+          {approvalForcesOpen && <WarningOutlined className="action-board-warning-icon" />}
           <Typography.Text strong>{labels.actions.title}</Typography.Text>
-          <Tag icon={STATUS_ICON[active]} color={STATUS_COLOR[active]}>
-            {rows.length}
-          </Tag>
+          {approvalForcesOpen ? (
+            <Typography.Text className="action-board-warning-copy">
+              {approvalRequiredCount === 1
+                ? labels.actions.waitingApprovalOne.replace(
+                    "{count}",
+                    String(approvalRequiredCount)
+                  )
+                : labels.actions.waitingApprovalMany.replace(
+                    "{count}",
+                    String(approvalRequiredCount)
+                  )}
+            </Typography.Text>
+          ) : totalActions === 0 ? (
+            <Typography.Text type="secondary">{labels.actions.noPendingActions}</Typography.Text>
+          ) : null}
+          {totalActions > 0 && (
+            <>
+              <Tag icon={STATUS_ICON.pending} color={STATUS_COLOR.pending}>
+                {labels.actions.pending} {actions?.pending?.length ?? 0}
+              </Tag>
+              <Tag icon={STATUS_ICON.completed} color={STATUS_COLOR.completed}>
+                {labels.actions.completed} {actions?.completed?.length ?? 0}
+              </Tag>
+            </>
+          )}
         </Space>
       }
       extra={
-        <Segmented
-          size="small"
-          value={active}
-          options={[
-            { label: `${labels.actions.pending} ${actions?.pending?.length ?? 0}`, value: "pending" },
-            { label: `${labels.actions.completed} ${actions?.completed?.length ?? 0}`, value: "completed" },
-            { label: `${labels.actions.cancelled} ${actions?.cancelled?.length ?? 0}`, value: "cancelled" }
-          ]}
-          onChange={(value) => setActive(value as BoardKey)}
-        />
+        approvalForcesOpen ? null : (
+          <Button
+            data-testid="action-board-toggle"
+            size="small"
+            type="text"
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? labels.actions.expandBoard : labels.actions.collapseBoard}
+            icon={collapsed ? <RightOutlined /> : <DownOutlined />}
+            onClick={toggleCollapsed}
+          />
+        )
       }
     >
-      <Table<ActionItem & { key: string }>
+      {!collapsed && (
+        <div data-testid="action-board-body" className="action-board-body">
+          <Segmented
+            size="small"
+            value={visibleActive}
+            disabled={approvalForcesOpen}
+            options={[
+              { label: `${labels.actions.pending} ${actions?.pending?.length ?? 0}`, value: "pending" },
+              { label: `${labels.actions.running} ${actions?.in_progress?.length ?? 0}`, value: "in_progress" },
+              { label: `${labels.actions.completed} ${actions?.completed?.length ?? 0}`, value: "completed" },
+              { label: `${labels.actions.cancelled} ${actions?.cancelled?.length ?? 0}`, value: "cancelled" }
+            ]}
+            onChange={(value) => setActive(value as BoardKey)}
+          />
+          <Table<ActionItem & { key: string }>
         size="small"
         pagination={false}
         dataSource={data}
         tableLayout="fixed"
         scroll={{ x: 1520, y: 260 }}
-        locale={{ emptyText: labels.actions.noActions.replace("{status}", labels.actions[active]) }}
+        locale={{
+          emptyText: labels.actions.noActions.replace(
+            "{status}",
+            visibleActive === "in_progress" ? "running" : labels.actions[visibleActive]
+          )
+        }}
         columns={[
           {
             title: labels.actions.id,
@@ -154,7 +227,7 @@ export function ActionBoard({
             width: 190,
             fixed: "right",
             render: (_, record) => {
-              if (active !== "pending") {
+              if (visibleActive !== "pending") {
                 return rejectedReason(record);
               }
               return (
@@ -191,9 +264,37 @@ export function ActionBoard({
             }
           }
         ]}
-      />
+          />
+        </div>
+      )}
     </Card>
   );
+}
+
+function totalActionCount(actions: AgentState["actions"] | undefined): number {
+  return (
+    (actions?.pending?.length ?? 0) +
+    (actions?.in_progress?.length ?? 0) +
+    (actions?.completed?.length ?? 0) +
+    (actions?.cancelled?.length ?? 0)
+  );
+}
+
+function readActionBoardCollapsedPreference(): boolean {
+  try {
+    const stored = localStorage.getItem(ACTION_BOARD_COLLAPSED_STORAGE_KEY);
+    return stored === null ? true : stored !== "false";
+  } catch {
+    return true;
+  }
+}
+
+function writeActionBoardCollapsedPreference(collapsed: boolean) {
+  try {
+    localStorage.setItem(ACTION_BOARD_COLLAPSED_STORAGE_KEY, String(collapsed));
+  } catch {
+    // UI preferences are best-effort when storage is unavailable.
+  }
 }
 
 function ApprovalBadge({

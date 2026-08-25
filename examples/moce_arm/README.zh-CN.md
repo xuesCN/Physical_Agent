@@ -32,19 +32,16 @@
 
 ### Workspace 相关
 
-当前 workspace 就是本目录：
+首次初始化会创建这一运行目录：
 
 ```text
 workspace-partial-hardware/
 ```
 
-重要文件：
-
-- `WORLD.md`：当前舵机状态
-- `ACTIONS.md`：动作板
-- `FEEDBACK.md`：执行反馈
-- `LOG.md`：审计日志
-- `CHAT.md`：GUI/Chat 对话记录
+运行态真源是 `workspace-partial-hardware/state.db`；仓库不再附带旧 Markdown
+运行态快照。使用 `physical-agent inspect`
+查看 world/capabilities/actions，使用 Dashboard Events 或 `physical-agent export-audit`
+查看 feedback/log；`SAFETY.md` 仍是人工安全规则真源，`LOG.md` 只是人类可读镜像。
 
 ## 2. 当前控制能力
 
@@ -247,11 +244,11 @@ http://127.0.0.1:8765
 
 ### 8.2 GUI 中推荐操作顺序
 
-1. 点击 `初始化`
-2. 点击 `Start watch`
-3. 在左侧 `Chat` 输入自然语言
-4. 勾选 `Run one watch step`
-5. 点击 `Send`
+1. workspace 尚未初始化时点击 `Initialize`
+2. 在左侧 `Chat` 输入自然语言并发送
+3. 检查结构化 Draft，点击 `Add to Actions` 创建 pending action
+4. 若 Actions 页提示需要审批，点击 `Approve execution`
+5. `physical-agent gui` 内嵌的 watch 会继续执行 SafetyGate；通过后才调用 driver
 
 ### 8.3 GUI 中当前建议输入的自然语言
 
@@ -346,10 +343,11 @@ groups
 
 ## 12. 当前建议的最小工作流
 
+不要使用 `chmod 777` 放宽串口权限。请把当前用户加入 `dialout` 组（组变更后需要注销并重新登录），或为设备配置 udev 规则；确认权限已经生效后再运行：
+
 ```bash
 cd /home/houzhinan/Physical_Agent/Physical_Agent
 source .venv/bin/activate
-sudo chmod 777 /dev/ttyACM1
 physical-agent watch --config examples/moce_arm/physical-agent.partial-hardware.yaml
 ```
 

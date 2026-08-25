@@ -1,0 +1,40 @@
+project:
+  name: car-agent-level0
+
+workspace:
+  path: ./workspace
+  backend: sqlite
+
+watch:
+  tick_ms: 250
+  observe_interval_ms: 500
+  require_human_approval: false
+  heartbeat_enabled: true
+  halt_on_shutdown: true
+  action_timeout_s: 30
+  connect_timeout_s: 3
+  observe_timeout_s: 2
+  heartbeat_timeout_s: 2
+  halt_timeout_s: 2
+
+agent:
+  planner: llm
+  model: fake/local
+  max_steps: 8
+  feedback_timeout_s: 30
+
+robots:
+  car_1:
+    driver: .
+    execution_mode: hardware
+    config:
+      host: REPLACE_WITH_CAR_IP
+      port: 8080
+      connect_timeout_s: 2
+      request_timeout_s: 0.5
+      refresh_interval_ms: 250
+
+      # Motion is deliberately disabled in this committed sample. After a
+      # wheels-up calibration, add BOTH values below to publish drive_for:
+      # max_abs_speed: 10
+      # max_duration_ms: 250

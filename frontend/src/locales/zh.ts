@@ -10,13 +10,12 @@ export const zh = {
     refresh: "刷新"
   },
   nav: {
+    chat: "对话",
     overview: "概览",
     actions: "动作",
-    world: "世界",
-    robots: "机器人",
+    state: "状态",
     hardware: "硬件",
     memory: "记忆",
-    safety: "安全",
     events: "事件",
     settings: "设置"
   },
@@ -26,8 +25,12 @@ export const zh = {
     workspace: "工作区",
     ready: "就绪",
     notReady: "未就绪",
-    enabled: "已启用",
-    off: "关闭",
+    executor: "执行器",
+    executorWaiting: "等待初始化",
+    executorEmbedded: "内嵌",
+    executorExternal: "外部",
+    executorNone: "未运行",
+    executorUnknown: "状态未知",
     sseConnected: "SSE 已连接",
     sseDisconnected: "SSE 已断开；轮询降级已启用"
   },
@@ -42,7 +45,7 @@ export const zh = {
     showTour: "重新显示引导",
     dangerZone: "危险区",
     resetTitle: "工作区重置",
-    resetDescription: "清空 world、actions、memory、chat 和上传内容，并恢复默认 SAFETY。physical-agent.yaml 和 LLM 设置会保留。",
+    resetDescription: "清空 world、actions、memory、chat 和上传内容。SAFETY 硬规则会恢复为默认值，同时保留 Agent Guidance；physical-agent.yaml 和 LLM 设置不变。若还要恢复默认配置，请运行 `physical-agent setup --force`。",
     resetConfirmTitle: "重置整个工作区？",
     resetConfirmDescription: "World、actions、memory、chat 和上传内容会被清空。此操作不可撤销。",
     resetOk: "重置工作区",
@@ -51,12 +54,30 @@ export const zh = {
     plan: "计划",
     exportAudit: "导出审计视图",
     save: "保存",
-    testConnection: "测试连接"
+    testConnection: "测试连接",
+    backend: "后端",
+    workspace: "工作区",
+    config: "配置",
+    workspacePath: "工作区路径",
+    message: "消息",
+    task: "任务",
+    stateCheck: "状态检查",
+    sourceOfTruth: "事实来源",
+    payload: "载荷",
+    humanView: "人类视图",
+    safetySource: "安全来源",
+    sqliteSchema: "SQLite 架构",
+    switching: "切换",
+    baseUrl: "Base URL",
+    apiKey: "API 密钥",
+    model: "模型",
+    apiMode: "API 模式"
   },
   actions: {
     ...en.actions,
     title: "动作板",
     pending: "待处理",
+    running: "运行中",
     completed: "已完成",
     cancelled: "已取消",
     target: "目标",
@@ -67,6 +88,11 @@ export const zh = {
     source: "来源",
     review: "复核",
     noActions: "暂无{status}动作",
+    noPendingActions: "暂无待处理动作",
+    waitingApprovalOne: "{count} 条动作等待你审批",
+    waitingApprovalMany: "{count} 条动作等待你审批",
+    expandBoard: "展开动作板",
+    collapseBoard: "收起动作板",
     noParams: "无参数",
     approvalUnknown: "审批未知",
     approvalRequired: "需要执行审批",
@@ -92,7 +118,8 @@ export const zh = {
     rawDebug: "原始调试",
     noSafetyRules: "暂无安全规则",
     noRobots: "暂无机器人",
-    noRobotsConfigured: "暂无已配置机器人"
+    noRobotsConfigured: "暂无已配置机器人",
+    noRawDebug: "暂无原始调试字段"
   },
   tour: {
     setupTitle: "先配置",
@@ -111,6 +138,7 @@ export const zh = {
     clearTitle: "清空聊天历史？",
     clearDescription: "Actions、feedback、memory 和 uploads 会保持不变。",
     clearOk: "清空",
+    clearChatAria: "清空聊天历史",
     draft: "草案",
     task: "任务",
     action: "动作",
@@ -120,6 +148,8 @@ export const zh = {
     addToActions: "加入动作板",
     edit: "编辑",
     noParams: "无参数",
+    reasoningSummary: "模型推理摘要",
+    reasoningDisclaimer: "仅供参考，不是决策依据",
     sseDisconnected: "聊天进行时 SSE 断开。",
     stopped: "聊天流已停止。",
     endedEarly: "聊天流在完成前结束。",
@@ -128,7 +158,7 @@ export const zh = {
   hardware: {
     ...en.hardware,
     proposalOnly: "仅提案侧",
-    proposalOnlyDescription: "生成 driver 文件并在 mock 模式验证。只有 watch 运行时会加载 driver 并触碰硬件。",
+    proposalOnlyDescription: "生成 driver 文件并仅做静态 manifest/Python/interface 校验。请求侧绝不 import、连接或执行候选 driver；动态一致性验证只允许通过显式 watch 侧工作流进行。",
     source: "来源（SDK 文件夹、仓库路径或 URL）",
     sourceRequired: "来源必填",
     driverName: "Driver 名称（可选）",
@@ -143,7 +173,12 @@ export const zh = {
     registerDescription: "向 physical-agent.yaml 追加 robots 条目。watch 重启后才会连接它；此处不会触碰硬件。",
     robotId: "Robot ID",
     driver: "Driver（名称或路径）",
-    addToConfig: "添加到配置"
+    addToConfig: "添加到配置",
+    outputPath: "输出路径",
+    detectedTransport: "检测到的传输",
+    robotKind: "机器人类型",
+    resultTitle: "标题",
+    modelPlaceholder: "留空则使用已配置模型"
   },
   config: {
     ...en.config,
@@ -151,10 +186,87 @@ export const zh = {
     configFile: "配置文件",
     workspace: "工作区",
     robot: "机器人",
+    executionMode: "执行模式",
     config: "配置",
     noConfig: "无配置"
   },
+  initialization: {
+    title: "工作区尚未就绪",
+    description: "先安全创建缺失的项目配置与工作区，再提交提案。",
+    action: "初始化项目",
+    success: "项目已初始化"
+  },
   drawer: {
-    title: "任务 / 动作提案"
+    title: "任务 / 动作提案",
+    open: "展开提案栏",
+    collapse: "收起提案栏"
+  },
+  proposal: {
+    ...en.proposal,
+    title: "任务 / 动作提案",
+    task: "任务",
+    submitTask: "提交任务",
+    robot: "机器人",
+    capability: "能力",
+    actionId: "动作 ID",
+    paramsJson: "参数 JSON",
+    reason: "原因",
+    dependsOn: "依赖于"
+  },
+  overview: {
+    ...en.overview,
+    systemStatus: "系统状态",
+    backend: "后端",
+    workspace: "工作区",
+    message: "消息",
+    robots: "机器人",
+    capabilities: "能力",
+    worldObjects: "世界对象",
+    workspaceBounds: "工作区边界",
+    noRobots: "暂无机器人",
+    noCapabilities: "暂无能力",
+    noWorldObjects: "暂无世界对象"
+  },
+  capability: {
+    ...en.capability,
+    params: "参数",
+    constraints: "约束",
+    raw: "原始",
+    noCapabilities: "暂无能力"
+  },
+  world: {
+    ...en.world,
+    environment: "环境",
+    robotsInWorld: "世界中的机器人",
+    artifacts: "工件",
+    raw: "原始"
+  },
+  taskGraph: {
+    ...en.taskGraph,
+    title: "Agent 输出任务",
+    decision: "决策",
+    noCompiledTasks: "暂无已编译任务",
+    noCompiledOutput: "暂无已编译 AgentOutput"
+  },
+  feedbackTimeline: {
+    ...en.feedbackTimeline,
+    noFeedback: "暂无反馈",
+    raw: "原始"
+  },
+  events: {
+    ...en.events,
+    title: "事件",
+    payload: "载荷",
+    noEvents: "暂无事件"
+  },
+  memorySearch: {
+    ...en.memorySearch,
+    title: "记忆 / 检索",
+    noResults: "暂无结果"
+  },
+  upload: {
+    ...en.upload,
+    title: "上传",
+    drop: "拖入文本文件"
   }
 } as const;

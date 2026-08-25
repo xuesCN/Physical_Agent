@@ -3,63 +3,73 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Literal
+from uuid import uuid4
+
+from pydantic import Field
 
 from physical_agent.agent.code_runtime import CodeSkillRuntime
 from physical_agent.agent.code_router import CodeIntentRouter
-from physical_agent.agent.context_builder import build_context
+from physical_agent.agent.context_builder import (
+    SafetyGuidanceContextError,
+    build_context,
+)
 from physical_agent.agent.driver_coder import DriverCodingAgent
-from physical_agent.agent.llm_planner import _normalize_depends_on
+from physical_agent.agent.llm_contracts import CHAT_RESPONSE_SCHEMA, ChatLLMResponse
 from physical_agent.agent.onboarding import HardwareIntegrationAssistant
 from physical_agent.agent.rule_based import RuleBasedPlanner
 from physical_agent.agent.skills import SkillRouter
 from physical_agent.agent.tool_loop import OpenAIToolLoop
+from physical_agent.application.plan_compiler import compile_agent_output, task_graph_steps
+from physical_agent.application.output_projection import materialize_agent_output
 from physical_agent.config import DEFAULT_CONFIG_NAME, PhysicalAgentConfig, load_config, write_default_config
-from physical_agent.llm import OpenAICompatibleClient, OpenAICompatibleSettings
-from physical_agent.protocol.expectations import EXPECTED_JSON_SCHEMA
+from physical_agent.llm import (
+    OpenAICompatibleClient,
+    OpenAICompatibleSettings,
+    ProviderRefusalError,
+    StreamChunk,
+    StructuredOutputError,
+)
+from physical_agent.protocol.agent_output import AgentOutput
+from physical_agent.protocol.actions import (
+    parse_action_metadata,
+)
 from physical_agent.protocol.retrieval import retrieved_context_payload
-from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, CodeTaskResult
+from physical_agent.protocol.schemas import Action, ChatMessage, ChatPlan, CodeTaskResult, StrictModel
 from physical_agent.state import StateStore, open_state_store
-from physical_agent.watch.runtime import WatchRuntime
 
 
-CHAT_RESPONSE_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-        "required": ["reply", "intent", "steps", "actions", "memory"],
-        "properties": {
-            "reply": {"type": "string"},
-            "intent": {"type": "string", "enum": ["chat", "inspect", "act", "remember"]},
-            "steps": {"type": "array", "items": {"type": "string"}},
-            "refusal_reason": {"type": "string"},
-            "actions": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["robot", "capability", "params", "reason", "depends_on"],
-                "properties": {
-                    "robot": {"type": "string"},
-                    "capability": {"type": "string"},
-                    "params": {"type": "object", "additionalProperties": True},
-                    "reason": {"type": "string"},
-                    "depends_on": {
-                        "type": "array",
-                        "items": {"type": ["string", "integer"]},
-                    },
-                    "metadata": {
-                        "type": "object",
-                        "additionalProperties": True,
-                        "properties": {
-                            "expected": EXPECTED_JSON_SCHEMA,
-                        },
-                    },
-                },
-            },
-        },
-        "memory": {"type": "array", "items": {"type": "string"}},
-    },
-}
+class ChatReplyTurn(StrictModel):
+    kind: Literal["reply"] = "reply"
+    reply: str
+    intent: str
+    steps: list[str]
+    memory: list[str]
+    refusal_reason: str | None = None
+    agent_output: None = None
+
+
+class ChatDraftTurn(StrictModel):
+    kind: Literal["draft_proposal"] = "draft_proposal"
+    reply: str
+    intent: str
+    steps: list[str]
+    memory: list[str]
+    refusal_reason: str | None = None
+    agent_output: AgentOutput
+
+
+class ChatSubmittedTurn(StrictModel):
+    kind: Literal["submitted_proposal"] = "submitted_proposal"
+    reply: str
+    intent: str
+    steps: list[str]
+    memory: list[str] = Field(default_factory=list)
+    refusal_reason: str | None = None
+    agent_output: AgentOutput
+
+
+ChatTurn = ChatReplyTurn | ChatDraftTurn | ChatSubmittedTurn
 
 
 class ChatRuntime:
@@ -92,7 +102,7 @@ class ChatRuntime:
         self.workspace = open_state_store(self.config, base_dir=self.base_dir)
         self.workspace.initialize()
 
-    def respond(self, message: str, *, auto_step: bool = False) -> dict[str, Any]:
+    def respond(self, message: str) -> dict[str, Any]:
         self.setup()
         workspace = self._workspace()
         continuation_message = self._code_continuation_message(message)
@@ -112,7 +122,6 @@ class ChatRuntime:
                         f"Generated files: {', '.join(code_result.changed_files) or 'none'}",
                         f"Tests run: {', '.join(code_result.tests_run) or 'none'}",
                     ],
-                    actions=[],
                     needs_watch=False,
                 )
                 workspace.write_plan(plan)
@@ -124,7 +133,6 @@ class ChatRuntime:
                         "integration": integration,
                         "code_result": code_result_data,
                         "needs_watch": False,
-                        "executed": 0,
                     },
                 )
                 workspace.append_log("Chat assistant generated an integration plan.", actor="agent")
@@ -132,10 +140,8 @@ class ChatRuntime:
                     "ok": code_result.ok,
                     "mode": "integration",
                     "reply": assistant.content,
-                    "actions": [],
                     "memory": [],
                     "plan": plan.model_dump(mode="json"),
-                    "executed": 0,
                     "feedback": workspace.read_feedback(),
                     "code_result": code_result_data,
                     "skills": self._skills_summary(),
@@ -158,10 +164,8 @@ class ChatRuntime:
                 "ok": code_result.ok,
                 "mode": "code",
                 "reply": assistant.content,
-                "actions": [],
                 "memory": [],
                 "plan": None,
-                "executed": 0,
                 "feedback": workspace.read_feedback(),
                 "code_result": code_result_data,
                 "skills": self._skills_summary(),
@@ -169,15 +173,12 @@ class ChatRuntime:
 
         if self.enable_hardware_integration and self._looks_like_integration_request(message):
             response = self._respond_with_integration(message)
-            actions: list[Action] = []
             notes: list[str] = []
-            executed = 0
             plan = ChatPlan(
                 status="answered",
                 intent="integrate",
                 summary=response["reply"],
                 steps=response.get("steps", []),
-                actions=[],
                 needs_watch=False,
             )
             workspace.write_plan(plan)
@@ -188,7 +189,6 @@ class ChatRuntime:
                     "intent": plan.intent,
                     "integration": response.get("integration", {}),
                     "needs_watch": False,
-                    "executed": 0,
                 },
             )
             workspace.append_log("Chat assistant generated an integration plan.", actor="agent")
@@ -196,10 +196,8 @@ class ChatRuntime:
                 "ok": True,
                 "mode": "integration",
                 "reply": assistant.content,
-                "actions": actions,
                 "memory": notes,
                 "plan": plan.model_dump(mode="json"),
-                "executed": executed,
                 "feedback": workspace.read_feedback(),
                 "integration": response.get("integration", {}),
                 "skills": self._skills_summary(),
@@ -222,7 +220,6 @@ class ChatRuntime:
                 feedback=feedback,
                 memory=memory,
                 retrieved_context=self._retrieved_context(message),
-                auto_step=auto_step,
             )
         if mode == "llm":
             try:
@@ -236,7 +233,14 @@ class ChatRuntime:
                     memory=memory,
                     retrieved_context=self._retrieved_context(message),
                 )
+            except ProviderRefusalError as exc:
+                response = _provider_refusal_payload(exc.refusal)
             except Exception as exc:
+                if isinstance(exc, SafetyGuidanceContextError):
+                    raise
+                if isinstance(exc, StructuredOutputError):
+                    self._persist_nonstream_error(workspace, exc, mode=mode)
+                    raise
                 if (self.planner_name or "").lower() != "auto":
                     raise
                 response = self._respond_with_rules(
@@ -261,43 +265,41 @@ class ChatRuntime:
                 memory=memory,
             )
 
-        draft_actions = _normalize_action_drafts(response.get("actions", []))
-        if draft_actions:
-            response["reply"] = _reply_with_action_draft(
-                response.get("reply", ""),
-                draft_actions,
-            )
-            response["steps"] = [
-                *response.get("steps", []),
-                "Prepared an action draft without writing pending actions.",
-            ]
-        actions: list[Action] = []
+        turn = self._prepare_chat_turn(
+            response,
+            capabilities=capabilities,
+            safety_rules=workspace.read_safety().get("rules", {}),
+        )
+        agent_output = turn.agent_output
         notes = []
-        for note in response.get("memory", []):
+        for note in turn.memory:
             if str(note).strip():
                 notes.append(workspace.append_memory_note(str(note).strip()))
 
-        executed = 0
-
         plan = ChatPlan(
             status="answered",
-            intent=response.get("intent", "chat"),
-            summary=response["reply"],
-            steps=response.get("steps", []),
-            actions=actions,
+            intent=turn.intent,
+            summary=turn.reply,
+            steps=[
+                *turn.steps,
+                *(task_graph_steps(agent_output) if agent_output is not None else []),
+            ],
             needs_watch=False,
+            agent_output=agent_output,
         )
         workspace.write_plan(plan)
         assistant = workspace.append_chat_message(
             "assistant",
-            response["reply"],
+            turn.reply,
             metadata={
                 "intent": plan.intent,
-                "actions": [action.model_dump(mode="json") for action in actions],
-                "draft_actions": draft_actions,
-                "refusal_reason": response.get("refusal_reason"),
+                "agent_output": (
+                    agent_output.model_dump(mode="json", by_alias=True)
+                    if agent_output is not None
+                    else None
+                ),
+                "refusal_reason": turn.refusal_reason,
                 "needs_watch": plan.needs_watch,
-                "executed": executed,
             },
         )
         workspace.append_log("Chat agent replied.", actor="agent")
@@ -306,14 +308,16 @@ class ChatRuntime:
             "ok": True,
             "mode": mode,
             "reply": assistant.content,
-            "actions": [action.model_dump(mode="json") for action in actions],
-            "draft_actions": draft_actions,
+            "agent_output": (
+                agent_output.model_dump(mode="json", by_alias=True)
+                if agent_output is not None
+                else None
+            ),
             "memory": notes,
             "plan": plan.model_dump(mode="json"),
-            "executed": executed,
-            "feedback": feedback if auto_step else workspace.read_feedback(),
+            "feedback": workspace.read_feedback(),
             "code_result": None,
-            "refusal_reason": response.get("refusal_reason"),
+            "refusal_reason": turn.refusal_reason,
             "skills": self._skills_summary(),
         }
 
@@ -321,13 +325,16 @@ class ChatRuntime:
         self,
         message: str,
         *,
-        auto_step: bool = False,
         cancel_check: Callable[[], bool] | None = None,
+        transport_observer: (
+            Callable[[Callable[[], None] | None], None] | None
+        ) = None,
     ) -> Iterator[dict[str, Any]]:
-        """Stream a reply-only chat response.
+        """Stream one proposal-only ChatTurn without starting watch.
 
-        This API-safe path never writes pending actions and never starts watch,
-        even if ``auto_step`` is passed by a caller.
+        LLM mode has one authoritative structured provider stream. Human-facing
+        reply deltas are decoded from that stream as they arrive; the canonical
+        AgentOutput is emitted only after the complete structured decision validates.
         """
 
         self.setup()
@@ -343,45 +350,116 @@ class ChatRuntime:
 
         mode = self._mode()
         reply_parts: list[str] = []
-        response: dict[str, Any] = {
-            "reply": "",
-            "intent": "chat",
-            "steps": [],
-            "actions": [],
-            "memory": [],
-        }
+        reasoning_parts: list[str] = []
+        turn: ChatTurn | None = None
+        intent = "chat"
+        steps: list[Any] = []
+        decision_stream: Iterator[dict[str, Any]] | None = None
+        terminal_persisted = False
         try:
             if mode == "llm":
+                provider_progress = False
                 try:
-                    for delta in self._stream_reply_with_llm(
-                        message=message,
-                        chat_messages=chat["messages"],
-                        running_summary=chat.get("running_summary", ""),
-                        capabilities=capabilities,
-                        world=world,
-                        feedback=feedback,
-                        memory=memory,
-                        retrieved_context=retrieved_context,
-                        cancel_check=cancel_check,
-                    ):
+                    decision_stream = iter(
+                        self._stream_chat_decision_with_llm(
+                            message=message,
+                            chat_messages=chat["messages"],
+                            running_summary=chat.get("running_summary", ""),
+                            capabilities=capabilities,
+                            world=world,
+                            feedback=feedback,
+                            memory=memory,
+                            retrieved_context=retrieved_context,
+                            cancel_check=cancel_check,
+                            transport_observer=transport_observer,
+                        )
+                    )
+                    response: dict[str, Any] | None = None
+                    for event in decision_stream:
+                        if event["type"] == "provider_progress":
+                            provider_progress = True
+                            continue
+                        if event["type"] == "decision":
+                            response = event["response"]
+                            continue
+                        delta = str(event.get("delta") or "")
+                        if not delta:
+                            continue
                         if _stream_cancelled(cancel_check):
-                            result = self._finish_stream_reply(
-                                reply="".join(reply_parts),
-                                mode=mode,
-                                status="cancelled",
-                                intent=response.get("intent", "chat"),
-                                steps=response.get("steps", []),
-                                memory=[],
-                            )
-                            yield {"type": "aborted", **result}
-                            return
+                            raise _ChatStreamAborted()
+                        if event["type"] == "thought":
+                            reasoning_parts.append(delta)
+                            yield {"type": "thought", "delta": delta}
+                            continue
+                        reply_parts.append(delta)
+                        yield {"type": "delta", "delta": delta}
+
+                    if response is None:
+                        raise ValueError("Structured chat stream ended without a decision.")
+                    if _stream_cancelled(cancel_check):
+                        raise _ChatStreamAborted()
+                    intent = response.get("intent", "chat")
+                    steps = response.get("steps", [])
+                    turn = self._prepare_chat_turn(
+                        response,
+                        capabilities=capabilities,
+                        safety_rules=workspace.read_safety().get("rules", {}),
+                    )
+                    if _stream_cancelled(cancel_check):
+                        turn = None
+                        raise _ChatStreamAborted()
+
+                    streamed_reply = "".join(reply_parts)
+                    base_reply = response["reply"]
+                    if streamed_reply != base_reply:
+                        raise ValueError(
+                            "Incremental structured reply did not match the validated decision."
+                        )
+                    if turn.reply != base_reply:
+                        raise ValueError("Compiled ChatTurn changed the provider reply.")
+                except ProviderRefusalError as exc:
+                    if reply_parts:
+                        raise StructuredOutputError(
+                            "The provider refused after emitting partial reply text.",
+                            code="provider_incomplete",
+                            retryable=False,
+                            issues=[
+                                {
+                                    "path": "/reply",
+                                    "code": "partial_then_refusal",
+                                    "message": "refusal followed partial reply text",
+                                }
+                            ],
+                        ) from exc
+                    response = _provider_refusal_payload(exc.refusal)
+                    intent = response["intent"]
+                    steps = response["steps"]
+                    turn = self._prepare_chat_turn(
+                        response,
+                        capabilities=capabilities,
+                        safety_rules=workspace.read_safety().get("rules", {}),
+                    )
+                    for delta in _text_chunks(turn.reply):
+                        if _stream_cancelled(cancel_check):
+                            turn = None
+                            raise _ChatStreamAborted()
                         reply_parts.append(delta)
                         yield {"type": "delta", "delta": delta}
                 except Exception as exc:
-                    if not self._auto_mode_requested() or reply_parts:
+                    if isinstance(exc, _ChatStreamAborted):
+                        raise
+                    if isinstance(exc, SafetyGuidanceContextError):
+                        raise
+                    if isinstance(exc, StructuredOutputError):
+                        raise
+                    if (
+                        not self._auto_mode_requested()
+                        or provider_progress
+                        or reply_parts
+                    ):
                         raise
                     mode = "rule_based"
-                    response = self._reply_only_rule_response(
+                    response = self._respond_with_rules(
                         message=message,
                         capabilities=capabilities,
                         world=world,
@@ -393,85 +471,98 @@ class ChatRuntime:
                         f"LLM chat was unavailable, so I used the rule-based chat fallback. "
                         f"Reason: {exc}"
                     )
-                    for delta in _text_chunks(response["reply"]):
+                    intent = response.get("intent", "chat")
+                    steps = response.get("steps", [])
+                    turn = self._prepare_chat_turn(
+                        response,
+                        capabilities=capabilities,
+                        safety_rules=workspace.read_safety().get("rules", {}),
+                    )
+                    for delta in _text_chunks(turn.reply):
                         if _stream_cancelled(cancel_check):
-                            result = self._finish_stream_reply(
-                                reply="".join(reply_parts),
-                                mode=mode,
-                                status="cancelled",
-                                intent=response.get("intent", "chat"),
-                                steps=response.get("steps", []),
-                                memory=[],
-                            )
-                            yield {"type": "aborted", **result}
-                            return
+                            turn = None
+                            raise _ChatStreamAborted()
                         reply_parts.append(delta)
                         yield {"type": "delta", "delta": delta}
+                finally:
+                    _close_iterator(decision_stream)
             else:
-                response = self._reply_only_rule_response(
+                response = self._respond_with_rules(
                     message=message,
                     capabilities=capabilities,
                     world=world,
                     feedback=feedback,
                     memory=memory,
                 )
-                for delta in _text_chunks(response["reply"]):
+                intent = response.get("intent", "chat")
+                steps = response.get("steps", [])
+                turn = self._prepare_chat_turn(
+                    response,
+                    capabilities=capabilities,
+                    safety_rules=workspace.read_safety().get("rules", {}),
+                )
+                for delta in _text_chunks(turn.reply):
                     if _stream_cancelled(cancel_check):
-                        result = self._finish_stream_reply(
-                            reply="".join(reply_parts),
-                            mode=mode,
-                            status="cancelled",
-                            intent=response.get("intent", "chat"),
-                            steps=response.get("steps", []),
-                            memory=[],
-                        )
-                        yield {"type": "aborted", **result}
-                        return
+                        turn = None
+                        raise _ChatStreamAborted()
                     reply_parts.append(delta)
                     yield {"type": "delta", "delta": delta}
 
+            if turn is None:
+                raise ValueError("Chat stream completed without a typed turn.")
+            if _stream_cancelled(cancel_check):
+                turn = None
+                raise _ChatStreamAborted()
             result = self._finish_stream_reply(
                 reply="".join(reply_parts),
                 mode=mode,
                 status="completed",
-                intent=response.get("intent", "chat"),
-                steps=response.get("steps", []),
-                memory=response.get("memory", []),
+                intent=turn.intent,
+                steps=turn.steps,
+                turn=turn,
+                reasoning_summary="".join(reasoning_parts),
             )
+            terminal_persisted = True
             yield {"type": "done", **result}
         except _ChatStreamAborted:
             result = self._finish_stream_reply(
                 reply="".join(reply_parts),
                 mode=mode,
                 status="cancelled",
-                intent=response.get("intent", "chat"),
-                steps=response.get("steps", []),
-                memory=[],
+                intent=intent,
+                steps=steps,
             )
             yield {"type": "aborted", **result}
         except GeneratorExit:
-            self._finish_stream_reply(
-                reply="".join(reply_parts),
-                mode=mode,
-                status="cancelled",
-                intent=response.get("intent", "chat"),
-                steps=response.get("steps", []),
-                memory=[],
-            )
+            _close_iterator(decision_stream)
+            if not terminal_persisted:
+                self._finish_stream_reply(
+                    reply="".join(reply_parts),
+                    mode=mode,
+                    status="cancelled",
+                    intent=intent,
+                    steps=steps,
+                )
             raise
         except Exception as exc:
+            public_error = _chat_error_message(exc)
             result = self._finish_stream_reply(
                 reply="".join(reply_parts),
                 mode=mode,
                 status="error",
-                intent=response.get("intent", "chat"),
-                steps=response.get("steps", []),
-                memory=[],
-                error=str(exc),
+                intent=intent,
+                steps=steps,
+                error=public_error,
             )
-            yield {"type": "error", "message": str(exc), **result}
+            error_details = _chat_error_details(exc)
+            yield {
+                "type": "error",
+                "message": public_error,
+                **error_details,
+                **result,
+            }
 
-    def _stream_reply_with_llm(
+    def _stream_chat_decision_with_llm(
         self,
         *,
         message: str,
@@ -483,12 +574,15 @@ class ChatRuntime:
         memory: dict[str, Any],
         retrieved_context: dict[str, Any] | None,
         cancel_check: Callable[[], bool] | None = None,
-    ) -> Iterator[str]:
+        transport_observer: (
+            Callable[[Callable[[], None] | None], None] | None
+        ) = None,
+    ) -> Iterator[dict[str, Any]]:
         client = self._llm_client()
         bundle = build_context(
             self._workspace(),
             message,
-            purpose="reply",
+            purpose="proposal",
             retrieved_context=retrieved_context,
             capabilities=capabilities,
             world=world,
@@ -498,55 +592,56 @@ class ChatRuntime:
         )
 
         stream = iter(
-            client.stream_chat_text(
+            client.stream_structured_json(
                 bundle.messages,
+                schema=CHAT_RESPONSE_SCHEMA,
+                schema_name="physical_agent_chat_response",
                 temperature=bundle.temperature,
                 max_tokens=bundle.max_tokens,
                 metadata={"physical_agent_surface": "chat_stream"},
+                transport_observer=transport_observer,
             )
         )
-        while True:
+        parser = _IncrementalJsonReply()
+        raw_parts: list[str] = []
+        try:
+            while True:
+                if _stream_cancelled(cancel_check):
+                    raise _ChatStreamAborted()
+                try:
+                    chunk = next(stream)
+                except StopIteration:
+                    break
+                if not isinstance(chunk, StreamChunk):
+                    raise TypeError("Structured chat stream must yield StreamChunk values.")
+                if not chunk.text:
+                    continue
+                yield {"type": "provider_progress"}
+                if chunk.kind == "thought":
+                    yield {"type": "thought", "delta": chunk.text}
+                    continue
+                raw_parts.append(chunk.text)
+                for reply_delta in parser.feed(chunk.text):
+                    if _stream_cancelled(cancel_check):
+                        raise _ChatStreamAborted()
+                    yield {"type": "reply_delta", "delta": reply_delta}
+
             if _stream_cancelled(cancel_check):
                 raise _ChatStreamAborted()
-            try:
-                yield next(stream)
-            except StopIteration:
-                return
-
-    def _reply_only_rule_response(
-        self,
-        *,
-        message: str,
-        capabilities: dict[str, Any],
-        world: dict[str, Any],
-        feedback: dict[str, Any],
-        memory: dict[str, Any],
-    ) -> dict[str, Any]:
-        response = self._respond_with_rules(
-            message=message,
-            capabilities=capabilities,
-            world=world,
-            feedback=feedback,
-            memory=memory,
-        )
-        if response.get("actions"):
-            drafts = _normalize_action_drafts(response["actions"])
-            return {
-                "reply": (
-                    "Copy this Action Draft into the proposal form; streaming chat "
-                    "did not create a pending action.\n\n"
-                    f"```action-draft\n{_action_draft_json(drafts)}\n```\n\n"
-                    "After you submit it, watch/SafetyGate will validate it before "
-                    "anything touches hardware."
-                ),
-                "intent": "act",
-                "steps": ["Prepared copyable action draft without writing pending actions."],
-                "actions": [],
-                "draft_actions": drafts,
-                "memory": [],
-            }
-        response["actions"] = []
-        return response
+            payload = client.parse_structured_json_text(
+                "".join(raw_parts),
+                schema=CHAT_RESPONSE_SCHEMA,
+                response_model=ChatLLMResponse,
+                metadata={"physical_agent_surface": "chat_stream"},
+            )
+            response = _normalize_chat_payload(payload)
+            if not parser.complete or parser.text != response["reply"]:
+                raise ValueError(
+                    "Validated structured response does not match its streamed reply field."
+                )
+            yield {"type": "decision", "response": response}
+        finally:
+            _close_iterator(stream)
 
     def _finish_stream_reply(
         self,
@@ -556,11 +651,12 @@ class ChatRuntime:
         status: str,
         intent: str,
         steps: list[Any],
-        memory: list[Any],
+        turn: ChatTurn | None = None,
+        reasoning_summary: str = "",
         error: str | None = None,
     ) -> dict[str, Any]:
         workspace = self._workspace()
-        content = reply.strip()
+        content = reply if status == "completed" else reply.strip()
         if not content:
             if status == "cancelled":
                 content = "[stream cancelled before any assistant text]"
@@ -569,7 +665,13 @@ class ChatRuntime:
             else:
                 content = ""
 
+        completed_turn = turn if status == "completed" else None
+        agent_output = completed_turn.agent_output if completed_turn is not None else None
         notes: list[Any] = []
+        if completed_turn is not None:
+            for note in completed_turn.memory:
+                if note.strip():
+                    notes.append(workspace.append_memory_note(note.strip()))
 
         plan = ChatPlan(
             status=(
@@ -579,24 +681,35 @@ class ChatRuntime:
                 if status == "cancelled"
                 else "answered"
             ),
-            intent=intent or "chat",
+            intent=(completed_turn.intent if completed_turn is not None else intent) or "chat",
             summary=content,
-            steps=[str(step) for step in steps],
-            actions=[],
+            steps=[
+                *[str(step) for step in steps],
+                *(task_graph_steps(agent_output) if agent_output is not None else []),
+            ],
             needs_watch=False,
+            agent_output=agent_output,
         )
         workspace.write_plan(plan)
         metadata: dict[str, Any] = {
             "intent": plan.intent,
-            "actions": [],
+            "agent_output": (
+                agent_output.model_dump(mode="json", by_alias=True)
+                if agent_output is not None
+                else None
+            ),
+            "refusal_reason": (
+                completed_turn.refusal_reason if completed_turn is not None else None
+            ),
             "needs_watch": False,
-            "executed": 0,
             "streamed": True,
             "stream_status": status,
             "partial": status != "completed",
         }
         if error:
             metadata["error"] = _truncate(error, 500)
+        if status == "completed" and reasoning_summary:
+            metadata["reasoning_summary"] = reasoning_summary
         assistant = workspace.append_chat_message(
             "assistant",
             content,
@@ -607,10 +720,13 @@ class ChatRuntime:
             "ok": status == "completed",
             "mode": mode,
             "reply": assistant.content,
-            "actions": [],
+            "agent_output": (
+                agent_output.model_dump(mode="json", by_alias=True)
+                if agent_output is not None
+                else None
+            ),
             "memory": notes,
             "plan": plan.model_dump(mode="json"),
-            "executed": 0,
             "feedback": workspace.read_feedback(),
             "code_result": None,
             "skills": [],
@@ -749,14 +865,8 @@ class ChatRuntime:
         feedback: dict[str, Any],
         memory: dict[str, Any],
         retrieved_context: dict[str, Any] | None,
-        auto_step: bool,
     ) -> dict[str, Any]:
         workspace = self._workspace()
-        before = workspace.read_actions()
-        known_ids = {
-            action.id
-            for action in before["pending"] + before["completed"] + before["cancelled"]
-        }
         loop = OpenAIToolLoop(self.config_path)
 
         import asyncio
@@ -782,37 +892,107 @@ class ChatRuntime:
             )
         )
 
+        proposed_actions: list[Action] = []
+        proposed_ids: set[str] = set()
+        for step in result.steps:
+            raw_output = step.result.get("agent_output")
+            if not isinstance(raw_output, dict):
+                continue
+            for action in AgentOutput.model_validate(raw_output).actions:
+                if action.id not in proposed_ids:
+                    proposed_actions.append(action)
+                    proposed_ids.add(action.id)
         after = workspace.read_actions()
-        proposed_actions = [
-            action for action in after["pending"] if action.id not in known_ids
-        ]
-        executed = 0
-        if auto_step and proposed_actions:
-            watch = WatchRuntime(self.config_path)
-            asyncio.run(watch.setup())
-            executed = asyncio.run(watch.step(setup=False))
-            asyncio.run(watch.shutdown())
-            feedback = workspace.read_feedback()
 
         step_summaries = [f"Called {step.name}." for step in result.steps]
         reply = result.content.strip() or (
             f"Tool loop completed with {len(result.steps)} tool call(s)."
         )
+        agent_output = None
+        if proposed_actions:
+            metadata_items = [
+                parse_action_metadata(action.metadata) for action in proposed_actions
+            ]
+            waiting_approval = any(
+                metadata.approval is not None
+                and metadata.approval.status == "pending"
+                for metadata in metadata_items
+            )
+            proposal_ids = {
+                metadata.correlation.proposal_id
+                for metadata in metadata_items
+                if metadata.correlation is not None
+            }
+            agent_output = compile_agent_output(
+                proposed_actions,
+                status=(
+                    "waiting_approval"
+                    if waiting_approval
+                    else "waiting_execution"
+                ),
+                decision="propose",
+                lifecycle="submitted",
+                message=reply,
+                proposal_id=(
+                    next(iter(proposal_ids)) if len(proposal_ids) == 1 else None
+                ),
+                capabilities=capabilities,
+                safety_rules=workspace.read_safety().get("rules", {}),
+            )
+            agent_output = materialize_agent_output(
+                agent_output,
+                actions=after,
+                feedback=workspace.read_feedback(),
+                claim_owners=workspace.read_action_claim_owners(),
+            )
+        active_action_ids = {
+            action.id
+            for action in after["pending"] + after.get("in_progress", [])
+        }
+        needs_watch = any(
+            action.id in active_action_ids for action in proposed_actions
+        )
+        plan_status = (
+            "error"
+            if agent_output is not None and agent_output.status == "failed"
+            else "answered"
+            if agent_output is not None and agent_output.status == "completed"
+            else "proposed_actions"
+            if proposed_actions
+            else "answered"
+        )
+        turn: ChatReplyTurn | ChatSubmittedTurn
+        if agent_output is not None:
+            turn = ChatSubmittedTurn(
+                reply=reply,
+                intent="act",
+                steps=step_summaries,
+                agent_output=agent_output,
+            )
+        else:
+            turn = ChatReplyTurn(
+                reply=reply,
+                intent="inspect",
+                steps=step_summaries,
+                memory=[],
+            )
         plan = ChatPlan(
-            status="proposed_actions" if proposed_actions else "answered",
-            intent="act" if proposed_actions else "inspect",
-            summary=reply,
-            steps=step_summaries,
-            actions=proposed_actions,
-            needs_watch=bool(proposed_actions and not auto_step),
+            status=plan_status,
+            intent=turn.intent,
+            summary=turn.reply,
+            steps=[
+                *turn.steps,
+                *(task_graph_steps(agent_output) if agent_output is not None else []),
+            ],
+            needs_watch=needs_watch,
+            agent_output=turn.agent_output,
         )
         workspace.write_plan(plan)
         assistant = workspace.append_chat_message(
             "assistant",
-            reply,
+            turn.reply,
             metadata={
                 "intent": plan.intent,
-                "actions": [action.model_dump(mode="json") for action in proposed_actions],
                 "tool_steps": [
                     {
                         "name": step.name,
@@ -823,7 +1003,11 @@ class ChatRuntime:
                     for step in result.steps
                 ],
                 "needs_watch": plan.needs_watch,
-                "executed": executed,
+                "agent_output": (
+                    turn.agent_output.model_dump(mode="json", by_alias=True)
+                    if turn.agent_output is not None
+                    else None
+                ),
             },
         )
         workspace.append_log("Chat tool loop replied.", actor="agent")
@@ -832,11 +1016,14 @@ class ChatRuntime:
             "ok": True,
             "mode": "tool_loop",
             "reply": assistant.content,
-            "actions": [action.model_dump(mode="json") for action in proposed_actions],
-            "memory": [],
+            "memory": turn.memory,
+            "agent_output": (
+                turn.agent_output.model_dump(mode="json", by_alias=True)
+                if turn.agent_output is not None
+                else None
+            ),
             "plan": plan.model_dump(mode="json"),
-            "executed": executed,
-            "feedback": feedback if auto_step else workspace.read_feedback(),
+            "feedback": workspace.read_feedback(),
             "code_result": None,
             "skills": self._skills_summary(),
             "tool_steps": [
@@ -878,11 +1065,91 @@ class ChatRuntime:
             bundle.messages,
             schema=CHAT_RESPONSE_SCHEMA,
             schema_name="physical_agent_chat_response",
+            response_model=ChatLLMResponse,
             temperature=bundle.temperature,
             max_tokens=bundle.max_tokens,
             metadata={"physical_agent_surface": "chat"},
+            max_validation_retries=1,
         )
         return _normalize_chat_payload(payload)
+
+    def _persist_nonstream_error(
+        self,
+        workspace: StateStore,
+        error: StructuredOutputError,
+        *,
+        mode: str,
+    ) -> None:
+        """Close the already-persisted user turn without storing raw LLM output."""
+
+        message = _chat_error_message(error)
+        plan = ChatPlan(
+            status="error",
+            intent="chat",
+            summary=message,
+            steps=[],
+            needs_watch=False,
+            agent_output=None,
+        )
+        workspace.write_plan(plan)
+        workspace.append_chat_message(
+            "assistant",
+            message,
+            metadata={
+                "intent": "chat",
+                "agent_output": None,
+                "needs_watch": False,
+                "streamed": False,
+                "status": "error",
+                **_chat_error_details(error),
+            },
+        )
+        workspace.append_log(f"Chat {mode} structured output failed closed.", actor="agent")
+
+    def _prepare_chat_turn(
+        self,
+        response: dict[str, Any],
+        *,
+        capabilities: dict[str, Any],
+        safety_rules: dict[str, Any],
+    ) -> ChatTurn:
+        """Turn one raw decision into the sole public reply/proposal result."""
+
+        normalized = _normalize_chat_payload(response)
+        draft_payloads = _assign_unique_draft_ids(
+            _normalize_action_intents(normalized["actions"])
+        )
+        actions = _draft_action_models(draft_payloads)
+        if not actions:
+            return ChatReplyTurn(
+                reply=normalized["reply"],
+                intent=normalized["intent"],
+                steps=normalized["steps"],
+                memory=normalized["memory"],
+                refusal_reason=normalized["refusal_reason"],
+            )
+
+        steps = [
+            *normalized["steps"],
+            "Prepared an action draft without writing pending actions.",
+        ]
+        agent_output = compile_agent_output(
+            actions,
+            status="draft",
+            decision="propose",
+            lifecycle="draft",
+            message=normalized["reply"],
+            capabilities=capabilities,
+            safety_rules=safety_rules,
+        )
+        return ChatDraftTurn(
+            reply=normalized["reply"],
+            intent=normalized["intent"],
+            steps=steps,
+            memory=normalized["memory"],
+            refusal_reason=normalized["refusal_reason"],
+            agent_output=agent_output,
+        )
 
     def _respond_with_rules(
         self,
@@ -956,37 +1223,6 @@ class ChatRuntime:
             "refusal_reason": "No matching robot capability was found for this chat message.",
         }
 
-    def _append_actions(self, actions_data: list[dict[str, Any]]) -> list[Action]:
-        if not actions_data:
-            return []
-        workspace = self._workspace()
-        board = workspace.read_actions()
-        existing = board["pending"] + board["completed"] + board["cancelled"]
-        used_ids = {action.id for action in existing}
-        for item in workspace.read_feedback().get("history", []):
-            action_id = item.get("action_id")
-            if action_id:
-                used_ids.add(str(action_id))
-        start = _max_action_number(used_ids) + 1
-        normalized: list[dict[str, Any]] = []
-        for offset, item in enumerate(actions_data):
-            action_item = dict(item)
-            action_item["id"] = f"act_{start + offset:03d}"
-            action_item.setdefault("params", {})
-            normalized.append(action_item)
-        action_ids = [item["id"] for item in normalized]
-        actions = []
-        for index, item in enumerate(normalized):
-            item["depends_on"] = _normalize_depends_on(
-                item.get("depends_on", []),
-                action_ids,
-                current_index=index,
-            )
-            actions.append(Action.model_validate(item))
-        for action in actions:
-            workspace.append_pending_action(action)
-        return actions
-
     def _mode(self) -> str:
         config = self._config()
         mode = (self.planner_name or config.agent.planner or "rule_based").lower()
@@ -1006,72 +1242,6 @@ class ChatRuntime:
         config = self._config()
         mode = (self.planner_name or config.agent.planner or "rule_based").lower()
         return mode == "auto"
-
-    def _looks_like_integration_request(self, message: str) -> bool:
-        text = message.lower()
-        has_source = bool(self._extract_integration_source(message))
-        direct_phrases = (
-            "integrate",
-            "onboard",
-            "connect this hardware",
-            "hardware repo",
-            "github",
-            "sdk",
-            "接入",
-            "适配",
-            "仓库",
-            "驱动",
-            "硬件",
-        )
-        if has_source and any(phrase in text for phrase in direct_phrases):
-            return True
-        return any(
-            phrase in text
-            for phrase in (
-                "generate a driver",
-                "create a driver",
-                "new hardware driver",
-                "帮我接入",
-                "帮我适配",
-                "生成驱动",
-                "接入硬件",
-            )
-        )
-
-    def _integration_request_wants_llm(self, message: str) -> bool:
-        text = message.lower()
-        return any(
-            phrase in text
-            for phrase in (
-                "--llm",
-                "llm",
-                "write the driver",
-                "implement the driver",
-                "real sdk",
-                "complete driver",
-                "自动实现",
-                "真实sdk",
-                "真实 sdk",
-                "实现driver",
-                "实现 driver",
-                "写完整",
-                "生成完整",
-                "接入sdk",
-                "接入 sdk",
-            )
-        )
-
-    def _extract_integration_source(self, message: str) -> str | None:
-        url_match = re.search(r"(https?://[^\s]+github\.com/[^\s]+|git@github\.com:[^\s]+)", message, re.IGNORECASE)
-        if url_match:
-            return url_match.group(1).rstrip(".,)")
-        path_match = re.search(r"(?:(?:[A-Za-z]:[\\/])|(?:\./)|(?:\.\\/)|(?:~/)|(?:/))[^\s]+", message)
-        if path_match:
-            return path_match.group(0).rstrip(".,)")
-        package_match = re.search(r"(?:package|sdk|repo|仓库|项目|路径)\s*[:：]?\s*([A-Za-z0-9_.-]+)", message, re.IGNORECASE)
-        if package_match:
-            return package_match.group(1).strip()
-        return None
 
     def _retrieved_context(self, message: str) -> dict[str, Any] | None:
         config = self._config()
@@ -1130,67 +1300,6 @@ class ChatRuntime:
         if not self.enable_code_skills:
             return []
         return [skill.as_dict() for skill in self._skill_router().list_skills()]
-
-    def _format_code_result(self, result: Any, *, user_message: str = "") -> str:
-        zh = _looks_like_chinese(user_message)
-        changed = ", ".join(result.changed_files) or "none"
-        tests = ", ".join(result.tests_run) or "none"
-        artifacts = ", ".join(getattr(result, "run_artifacts", []) or []) or "none"
-        summary = result.summary or "Updated the repository."
-        if getattr(result, "intent_kind", "") == "sdk_integration":
-            status = "finished" if result.ok else "could not finish"
-            integration = getattr(result, "integration", {}) or {}
-            output_path = integration.get("output_path")
-            if zh:
-                head = "我把这条请求识别成硬件接入任务，已经完成。" if result.ok else "我把这条请求识别成硬件接入任务，但还没有完成。"
-                lines = [head]
-            else:
-                lines = [f"I treated that as a hardware integration task and {status}: {summary}"]
-            if output_path:
-                lines.append(f"生成位置: {output_path}" if zh else f"Generated scaffold: {output_path}")
-            if changed != "none":
-                lines.append(f"改动文件: {changed}." if zh else f"Files touched: {changed}.")
-            if tests != "none":
-                lines.append(f"验证: {tests}." if zh else f"Validation: {tests}.")
-            if not output_path and changed == "none" and tests == "none":
-                lines.append(summary)
-            return "\n".join(lines)
-        if getattr(result, "intent_kind", "") == "code_run":
-            status = "succeeded" if result.ok else "failed"
-            if zh:
-                lines = [
-                    "可以。我把这条请求识别成代码执行任务，已经运行了，结果成功。"
-                    if result.ok
-                    else "可以。我把这条请求识别成代码执行任务并尝试运行了，但这次失败了。"
-                ]
-            else:
-                lines = [f"Yes. I treated that as a code execution task, ran it, and it {status}."]
-            if artifacts != "none":
-                lines.append(f"产物: {artifacts}." if zh else f"Artifact: {artifacts}.")
-            elif tests != "none":
-                lines.append(f"命令: {tests}." if zh else f"Command: {tests}.")
-            if not result.ok and summary:
-                lines.append(summary)
-            return "\n".join(lines)
-        status = "succeeded" if result.ok else "needs another round"
-        if zh:
-            lines = [
-                "可以。我把这条请求识别成代码任务，已经处理完成。"
-                if result.ok
-                else "可以。我把这条请求识别成代码任务，但还需要再处理一轮。"
-            ]
-        else:
-            lines = [f"Yes. I treated that as a code task and it {status}."]
-        if summary:
-            lines.append(summary)
-        if changed != "none":
-            lines.append(f"改动文件: {changed}." if zh else f"Changed files: {changed}.")
-        if tests != "none":
-            lines.append(f"检查: {tests}." if zh else f"Checks run: {tests}.")
-        if not result.ok and result.test_output.strip():
-            label = "关键输出" if zh else "Most relevant output"
-            lines.append(f"{label}: {_summarize_text(result.test_output)}")
-        return "\n".join(lines)
 
     def _looks_like_integration_request(self, message: str) -> bool:
         text = message.lower()
@@ -1341,6 +1450,153 @@ class _ChatStreamAborted(Exception):
     """Internal control-flow signal for stopped streaming replies."""
 
 
+class _IncrementalJsonReply:
+    """Decode the top-level JSON ``reply`` string without buffering its tail."""
+
+    _simple_escapes = {
+        '"': '"',
+        "\\": "\\",
+        "/": "/",
+        "b": "\b",
+        "f": "\f",
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+    }
+
+    def __init__(self) -> None:
+        self._raw = ""
+        self._cursor: int | None = None
+        self._parts: list[str] = []
+        self.complete = False
+
+    @property
+    def text(self) -> str:
+        return "".join(self._parts)
+
+    def feed(self, delta: str) -> list[str]:
+        if self.complete or not delta:
+            return []
+        self._raw += str(delta)
+        if self._cursor is None:
+            self._cursor = self._find_top_level_reply_start()
+            if self._cursor is None:
+                return []
+
+        emitted: list[str] = []
+        while self._cursor < len(self._raw):
+            cursor = self._cursor
+            char = self._raw[cursor]
+            if char == '"':
+                self.complete = True
+                self._cursor += 1
+                break
+            if char != "\\":
+                if ord(char) < 0x20:
+                    raise ValueError("Structured reply contains an unescaped control character.")
+                emitted.append(char)
+                self._cursor += 1
+                continue
+
+            if cursor + 1 >= len(self._raw):
+                break
+            escape = self._raw[cursor + 1]
+            if escape in self._simple_escapes:
+                emitted.append(self._simple_escapes[escape])
+                self._cursor += 2
+                continue
+            if escape != "u":
+                raise ValueError(f"Structured reply contains invalid escape \\{escape}.")
+            if cursor + 6 > len(self._raw):
+                break
+            try:
+                codepoint = int(self._raw[cursor + 2 : cursor + 6], 16)
+            except ValueError as exc:
+                raise ValueError("Structured reply contains an invalid unicode escape.") from exc
+            if 0xD800 <= codepoint <= 0xDBFF:
+                if cursor + 12 > len(self._raw):
+                    break
+                if self._raw[cursor + 6 : cursor + 8] != "\\u":
+                    raise ValueError("Structured reply contains an unpaired high surrogate.")
+                try:
+                    low = int(self._raw[cursor + 8 : cursor + 12], 16)
+                except ValueError as exc:
+                    raise ValueError("Structured reply contains an invalid low surrogate.") from exc
+                if not 0xDC00 <= low <= 0xDFFF:
+                    raise ValueError("Structured reply contains an unpaired high surrogate.")
+                codepoint = 0x10000 + ((codepoint - 0xD800) << 10) + (low - 0xDC00)
+                self._cursor += 12
+            else:
+                if 0xDC00 <= codepoint <= 0xDFFF:
+                    raise ValueError("Structured reply contains an unpaired low surrogate.")
+                self._cursor += 6
+            emitted.append(chr(codepoint))
+
+        if not emitted:
+            return []
+        text = "".join(emitted)
+        self._parts.append(text)
+        return [text]
+
+    def _find_top_level_reply_start(self) -> int | None:
+        depth = 0
+        cursor = 0
+        while cursor < len(self._raw):
+            char = self._raw[cursor]
+            if char in "{[":
+                depth += 1
+                cursor += 1
+                continue
+            if char in "}]":
+                depth -= 1
+                cursor += 1
+                continue
+            if char != '"':
+                cursor += 1
+                continue
+
+            end = _json_string_end(self._raw, cursor)
+            if end is None:
+                return None
+            if depth == 1:
+                token = json.loads(self._raw[cursor : end + 1])
+                separator = end + 1
+                while separator < len(self._raw) and self._raw[separator].isspace():
+                    separator += 1
+                if separator >= len(self._raw):
+                    return None
+                if token == "reply" and self._raw[separator] == ":":
+                    value_start = separator + 1
+                    while (
+                        value_start < len(self._raw)
+                        and self._raw[value_start].isspace()
+                    ):
+                        value_start += 1
+                    if value_start >= len(self._raw):
+                        return None
+                    if self._raw[value_start] != '"':
+                        raise ValueError("Structured reply must be a JSON string.")
+                    return value_start + 1
+            cursor = end + 1
+
+        return None
+
+
+def _json_string_end(text: str, start: int) -> int | None:
+    escaped = False
+    for cursor in range(start + 1, len(text)):
+        char = text[cursor]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            return cursor
+    return None
+
+
 def _stream_cancelled(cancel_check: Callable[[], bool] | None) -> bool:
     if cancel_check is None:
         return False
@@ -1348,6 +1604,18 @@ def _stream_cancelled(cancel_check: Callable[[], bool] | None) -> bool:
         return bool(cancel_check())
     except Exception:
         return True
+
+
+def _close_iterator(iterator: Iterator[Any] | None) -> None:
+    if iterator is None:
+        return
+    close = getattr(iterator, "close", None)
+    if not callable(close):
+        return
+    try:
+        close()
+    except Exception:
+        pass
 
 
 def _text_chunks(text: str, *, size: int = 48) -> Iterator[str]:
@@ -1375,32 +1643,7 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     return value
 
 
-def _action_draft_json(actions: list[Any]) -> str:
-    drafts: list[dict[str, Any]] = []
-    for action in actions:
-        if hasattr(action, "model_dump"):
-            item = action.model_dump(mode="json")
-        elif isinstance(action, dict):
-            item = dict(action)
-        else:
-            continue
-        draft: dict[str, Any] = {}
-        if item.get("id"):
-            draft["id"] = item["id"]
-        draft["robot"] = item.get("robot", "")
-        draft["capability"] = item.get("capability", "")
-        draft["params"] = item.get("params") or {}
-        if item.get("reason"):
-            draft["reason"] = item["reason"]
-        draft["depends_on"] = item.get("depends_on") or []
-        if isinstance(item.get("metadata"), dict) and item["metadata"]:
-            draft["metadata"] = item["metadata"]
-        drafts.append(draft)
-    payload: Any = drafts[0] if len(drafts) == 1 else drafts
-    return json.dumps(payload, ensure_ascii=False, indent=2)
-
-
-def _normalize_action_drafts(actions: list[Any]) -> list[dict[str, Any]]:
+def _normalize_action_intents(actions: list[Any]) -> list[dict[str, Any]]:
     drafts: list[dict[str, Any]] = []
     for action in actions:
         if hasattr(action, "model_dump"):
@@ -1426,15 +1669,85 @@ def _normalize_action_drafts(actions: list[Any]) -> list[dict[str, Any]]:
     return drafts
 
 
-def _reply_with_action_draft(reply: str, drafts: list[dict[str, Any]]) -> str:
-    intro = (reply or "I prepared an action draft for review.").strip()
-    return (
-        f"{intro}\n\n"
-        "Review this draft, then add it to the action board if it matches your intent.\n\n"
-        f"```action-draft\n{_action_draft_json(drafts)}\n```\n\n"
-        "Adding it to the action board is separate from execution approval; "
-        "watch/SafetyGate will still validate before hardware can move."
-    )
+def _draft_action_models(drafts: list[dict[str, Any]]) -> list[Action]:
+    ids = [
+        str(draft.get("id") or f"draft_{index:03d}")
+        for index, draft in enumerate(drafts, start=1)
+    ]
+    old_to_new = {
+        str(draft["id"]): ids[index]
+        for index, draft in enumerate(drafts)
+        if draft.get("id")
+    }
+    actions: list[Action] = []
+    for index, draft in enumerate(drafts):
+        item = dict(draft)
+        item["id"] = ids[index]
+        item["depends_on"] = [
+            old_to_new.get(str(dependency), str(dependency))
+            for dependency in item.get("depends_on", [])
+        ]
+        actions.append(Action.model_validate(item))
+    return actions
+
+
+def _assign_unique_draft_ids(
+    drafts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not drafts:
+        return []
+    prefix = f"draft_{uuid4().hex[:12]}"
+    assigned_ids = [f"{prefix}_{index:03d}" for index in range(1, len(drafts) + 1)]
+    old_to_new = {
+        str(draft["id"]): assigned_ids[index]
+        for index, draft in enumerate(drafts)
+        if draft.get("id")
+    }
+    result: list[dict[str, Any]] = []
+    for index, draft in enumerate(drafts):
+        item = dict(draft)
+        item["id"] = assigned_ids[index]
+        remapped_dependencies = [
+            old_to_new.get(str(dependency), str(dependency))
+            for dependency in item.get("depends_on", [])
+        ]
+        item["depends_on"] = _normalize_draft_dependencies(
+            remapped_dependencies,
+            assigned_ids,
+            current_index=index,
+        )
+        result.append(item)
+    return result
+
+
+def _normalize_draft_dependencies(
+    dependencies: list[Any],
+    action_ids: list[str],
+    *,
+    current_index: int,
+) -> list[str]:
+    normalized: list[str] = []
+    for dependency in dependencies:
+        if dependency is False or dependency is None:
+            continue
+        text = str(dependency)
+        if text.lower() in {"none", "null", "false", "no", "n/a"}:
+            continue
+        if text.isdigit():
+            number = int(text)
+            if number == 0 and action_ids:
+                normalized.append(action_ids[0])
+                continue
+            if 1 <= number <= len(action_ids):
+                normalized.append(action_ids[number - 1])
+                continue
+        if text in action_ids or text.startswith("act_"):
+            normalized.append(text)
+        elif current_index > 0:
+            normalized.append(action_ids[current_index - 1])
+        elif action_ids:
+            normalized.append(action_ids[0])
+    return normalized
 
 
 def _normalize_chat_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1462,6 +1775,41 @@ def _normalize_chat_payload(payload: dict[str, Any]) -> dict[str, Any]:
             if payload.get("refusal_reason") is not None
             else None
         ),
+    }
+
+
+def _provider_refusal_payload(refusal: str) -> dict[str, Any]:
+    reason = refusal.strip() or "The model refused this request."
+    return {
+        "reply": reason,
+        "intent": "chat",
+        "steps": [],
+        "actions": [],
+        "memory": [],
+        "refusal_reason": reason,
+    }
+
+
+def _chat_error_message(error: Exception) -> str:
+    if isinstance(error, SafetyGuidanceContextError):
+        return str(error)
+    if isinstance(error, StructuredOutputError):
+        return "The model returned an invalid structured response; no action was created."
+    return str(error)
+
+
+def _chat_error_details(error: Exception) -> dict[str, Any]:
+    if isinstance(error, SafetyGuidanceContextError):
+        return {
+            "code": error.code,
+            "reason": error.code,
+        }
+    if not isinstance(error, StructuredOutputError):
+        return {}
+    return {
+        "code": "llm_output_invalid",
+        "reason": error.code,
+        "attempts": error.attempts,
     }
 
 
@@ -1498,56 +1846,6 @@ def _looks_like_code_followup(text: str) -> bool:
         "好的",
         "帮我实现",
         "实现一下",
-        "继续",
-        "写吧",
-        "做吧",
-        "yes",
-        "ok",
-        "sure",
-        "go ahead",
-    )
-    return any(item in lowered for item in followups)
-
-
-def _mentions_code_capability(text: str) -> bool:
-    lowered = text.lower()
-    markers = (
-        "代码",
-        "脚本",
-        "运行",
-        "执行",
-        "编写",
-        "实现",
-        "test",
-        "tests",
-        "code",
-        "script",
-        "run",
-        "execute",
-    )
-    return any(marker in lowered for marker in markers)
-
-
-def _max_action_number(action_ids: set[str]) -> int:
-    maximum = 0
-    for action_id in action_ids:
-        if action_id.startswith("act_"):
-            try:
-                maximum = max(maximum, int(action_id.removeprefix("act_")))
-            except ValueError:
-                continue
-    return maximum
-
-
-def _looks_like_code_followup(text: str) -> bool:
-    lowered = text.lower().strip()
-    if not lowered:
-        return False
-    followups = (
-        "可以",
-        "好",
-        "好的",
-        "帮我实现",
         "实现一个",
         "继续",
         "写吧",

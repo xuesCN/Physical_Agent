@@ -11,10 +11,14 @@ from typer.testing import CliRunner
 
 import physical_agent.cli as cli_module
 from physical_agent.agent.chat_runtime import ChatRuntime
-from physical_agent.config import RETIRED_MARKDOWN_BACKEND_GUIDANCE, load_config, write_default_config
+from physical_agent.config import (
+    LEGACY_MARKDOWN_WORKSPACE_FILES,
+    RETIRED_MARKDOWN_BACKEND_GUIDANCE,
+    load_config,
+    write_default_config,
+)
 from physical_agent.mcp.server import PhysicalAgentMCP
-from physical_agent.protocol.schemas import Action, Observation
-from physical_agent.protocol.workspace import Workspace
+from physical_agent.protocol.schemas import Action
 from physical_agent.state import SqliteStateStore, open_state_store
 from physical_agent.watch.runtime import WatchRuntime
 
@@ -46,6 +50,12 @@ def _read_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _write_legacy_workspace_file_set(path: Path) -> None:
+    path.mkdir(parents=True)
+    for filename in LEGACY_MARKDOWN_WORKSPACE_FILES:
+        (path / filename).write_text("legacy workspace fixture\n", encoding="utf-8")
+
+
 def test_default_init_setup_and_state_check_use_sqlite_with_safety_file(tmp_path):
     runner = CliRunner()
     for command in ("init", "setup"):
@@ -74,8 +84,59 @@ def test_default_init_setup_and_state_check_use_sqlite_with_safety_file(tmp_path
         assert "Backend role: recommended" in check.output
         assert "Source of truth:" in check.output
         assert "Workspace initialized: yes" in check.output
+        assert "SAFETY policy valid: yes" in check.output
         assert "SQLite schema complete: yes" in check.output
         assert "Audit export writable: yes" in check.output
+
+
+@pytest.mark.parametrize("failure", ["missing", "malformed"])
+def test_state_check_fails_closed_for_unavailable_safety_policy(tmp_path, failure):
+    config_path = write_default_config(
+        tmp_path / "physical-agent.yaml",
+        overwrite=True,
+    )
+    store = open_state_store(config_path=config_path)
+    store.initialize()
+    if failure == "missing":
+        store.file("safety").unlink()
+    else:
+        store.file("safety").write_text("not a safety policy\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli_module.app,
+        ["state-check", "--config", str(config_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "SAFETY policy valid: no" in result.output
+    assert "safety.policy." in result.output
+
+
+def test_cli_force_initialize_restores_hard_rules_but_preserves_guidance(tmp_path):
+    config_path = tmp_path / "physical-agent.yaml"
+    runner = CliRunner()
+    initial = runner.invoke(cli_module.app, ["init", "--config", str(config_path)])
+    assert initial.exit_code == 0, initial.output
+    store = open_state_store(config_path=config_path)
+    guidance = "Preserve this operator-authored safety guidance across CLI reset."
+    store.file("safety").write_text(
+        store.file("safety").read_text(encoding="utf-8").rstrip()
+        + f"\n\n## Agent Guidance\n\n{guidance}\n",
+        encoding="utf-8",
+    )
+    store.write_safety({"allow_autonomous_execution": False})
+    before = store.read_safety_snapshot()
+
+    reset = runner.invoke(
+        cli_module.app,
+        ["init", "--force", "--config", str(config_path)],
+    )
+
+    assert reset.exit_code == 0, reset.output
+    after = open_state_store(config_path=config_path).read_safety_snapshot()
+    assert after.hard.revision == before.hard.revision + 1
+    assert after.hard.rules["allow_autonomous_execution"] is True
+    assert after.agent_guidance == guidance
 
 
 def test_load_config_rejects_legacy_markdown_workspace_when_backend_omitted(tmp_path):
@@ -83,17 +144,32 @@ def test_load_config_rejects_legacy_markdown_workspace_when_backend_omitted(tmp_
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     del data["workspace"]["backend"]
     config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-    Workspace(tmp_path / "workspace").initialize()
+    _write_legacy_workspace_file_set(tmp_path / "workspace")
 
     with pytest.raises(ValueError) as exc_info:
         load_config(config_path)
     message = str(exc_info.value)
     assert "migrate-md-to-sqlite" in message
     assert "workspace.backend: sqlite" in message
+    assert "9072b4e9fb600e505668aeb6076eb6cb85e5ff82" in message
+    assert "without `--force`" in message
     assert message == RETIRED_MARKDOWN_BACKEND_GUIDANCE
 
     with pytest.raises(ValueError, match="migrate-md-to-sqlite"):
         open_state_store(config_path=config_path)
+
+
+def test_load_config_does_not_misclassify_incomplete_legacy_file_set(tmp_path):
+    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    del data["workspace"]["backend"]
+    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    _write_legacy_workspace_file_set(tmp_path / "workspace")
+    (tmp_path / "workspace" / "MEMORY.md").unlink()
+
+    config = load_config(config_path)
+
+    assert config.workspace.backend == "sqlite"
 
 
 def test_load_config_keeps_sqlite_default_without_legacy_markdown_workspace(tmp_path):
@@ -171,9 +247,12 @@ def test_backend_matrix_chat_runtime_drafts_actions_only(tmp_path, monkeypatch, 
     actions = store.read_actions()
 
     assert result["ok"] is True
-    assert result["executed"] == 0
-    assert result["actions"] == []
-    assert [action["capability"] for action in result["draft_actions"]] == ["observe"]
+    assert "executed" not in result
+    assert "actions" not in result
+    assert "draft_actions" not in result
+    assert [
+        action["capability"] for action in result["agent_output"]["actions"]
+    ] == ["observe"]
     assert _ids(actions["pending"]) == []
     assert actions["completed"] == []
     assert actions["cancelled"] == []
@@ -230,134 +309,6 @@ def test_backend_matrix_watch_success_rejection_and_driver_exception(
     by_id = {item["action_id"]: item for item in feedback["history"]}
     assert "does not expose capability" in by_id["act_reject"]["message"]
     assert by_id["act_success"]["status"] == "completed"
-
-
-def test_markdown_to_sqlite_migration_preserves_readiness_state_and_audit(tmp_path):
-    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    data["workspace"]["backend"] = "markdown"
-    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
-    workspace.write_task("Inspect readiness", ["preserve state"])
-    workspace.write_capabilities(
-        {
-            "arm_1": {
-                "kind": "arm",
-                "driver": "mock_arm",
-                "status": "connected",
-                "capabilities": [{"name": "observe", "params_schema": {"type": "object"}}],
-            }
-        }
-    )
-    workspace.write_world(
-        Observation(
-            summary="readiness world",
-            robots={"arm_1": {"status": "idle"}},
-            objects={"red_block": {"location": "table"}},
-        )
-    )
-    workspace.write_actions(
-        [Action(id="act_pending", robot="arm_1", capability="observe")],
-        [Action(id="act_completed", robot="arm_1", capability="pick")],
-        [Action(id="act_cancelled", robot="arm_1", capability="place")],
-    )
-    workspace.write_feedback(
-        {"action_id": "act_completed", "status": "completed"},
-        [{"action_id": "act_completed", "status": "completed"}],
-    )
-    workspace.write_chat(
-        [{"role": "user", "content": "hello readiness"}],
-        running_summary="readiness summary",
-        compact=False,
-    )
-    workspace.write_memory(
-        [
-            {
-                "content": "readiness memory",
-                "source": "test",
-                "kind": "lesson",
-                "tags": ["readiness"],
-                "importance": 7,
-            }
-        ]
-    )
-    workspace.append_log("readiness log", actor="test")
-
-    migrate_result = CliRunner().invoke(
-        cli_module.app,
-        ["migrate-md-to-sqlite", "--config", str(config_path)],
-    )
-
-    assert migrate_result.exit_code == 0, migrate_result.output
-    assert "workspace.backend: sqlite" in migrate_result.output
-    assert yaml.safe_load(config_path.read_text(encoding="utf-8"))["workspace"]["backend"] == "markdown"
-
-    sqlite_store = SqliteStateStore(tmp_path / "workspace")
-    assert sqlite_store.exists()
-    assert sqlite_store.read_task()["task"] == "Inspect readiness"
-    assert sqlite_store.read_capabilities()["robots"]["arm_1"]["driver"] == "mock_arm"
-    assert sqlite_store.read_world()["state"]["objects"]["red_block"]["location"] == "table"
-    assert _ids(sqlite_store.read_actions()["pending"]) == ["act_pending"]
-    assert _ids(sqlite_store.read_actions()["completed"]) == ["act_completed"]
-    assert _ids(sqlite_store.read_actions()["cancelled"]) == ["act_cancelled"]
-    assert sqlite_store.read_feedback()["latest"]["action_id"] == "act_completed"
-    assert sqlite_store.read_chat()["running_summary"] == "readiness summary"
-    assert sqlite_store.read_chat()["messages"][0].content == "hello readiness"
-    memory = sqlite_store.read_memory()["notes"][0]
-    assert memory["content"] == "readiness memory"
-    assert memory["kind"] == "lesson"
-    assert memory["tags"] == ["readiness"]
-    assert memory["importance"] == 7
-
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    data["workspace"]["backend"] = "sqlite"
-    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-    audit_dir = tmp_path / "sqlite-audit"
-    export_result = CliRunner().invoke(
-        cli_module.app,
-        ["export-audit", "--config", str(config_path), "--out", str(audit_dir)],
-    )
-
-    assert export_result.exit_code == 0, export_result.output
-    assert _read_json(audit_dir / "task.json")["task"] == "Inspect readiness"
-    assert _read_json(audit_dir / "world.json")["state"]["objects"]["red_block"]["location"] == "table"
-    assert _read_json(audit_dir / "actions.json")["pending"][0]["id"] == "act_pending"
-    assert _read_json(audit_dir / "feedback.json")["latest"]["action_id"] == "act_completed"
-    assert _read_json(audit_dir / "chat.json")["running_summary"] == "readiness summary"
-    audit_memory = _read_json(audit_dir / "memory.json")["notes"][0]
-    assert audit_memory["content"] == "readiness memory"
-    assert audit_memory["kind"] == "lesson"
-    assert audit_memory["tags"] == ["readiness"]
-    assert audit_memory["importance"] == 7
-    assert _read_json(audit_dir / "log.json")["entries"][0]["message"] == "readiness log"
-
-
-def test_markdown_to_sqlite_migration_reads_legacy_workspace_when_backend_omitted(
-    tmp_path,
-):
-    config_path = write_default_config(tmp_path / "physical-agent.yaml", overwrite=True)
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    del data["workspace"]["backend"]
-    config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-    workspace = Workspace(tmp_path / "workspace")
-    workspace.initialize()
-    workspace.write_task("Migrate omitted backend", ["legacy reader only"])
-    workspace.write_actions([Action(id="act_omitted", robot="arm_1", capability="observe")])
-
-    migrate_result = CliRunner().invoke(
-        cli_module.app,
-        ["migrate-md-to-sqlite", "--config", str(config_path)],
-    )
-
-    assert migrate_result.exit_code == 0, migrate_result.output
-    assert "workspace.backend: sqlite" in migrate_result.output
-    assert "backend" not in yaml.safe_load(config_path.read_text(encoding="utf-8"))[
-        "workspace"
-    ]
-    sqlite_store = SqliteStateStore(tmp_path / "workspace")
-    assert sqlite_store.read_task()["task"] == "Migrate omitted backend"
-    assert _ids(sqlite_store.read_actions()["pending"]) == ["act_omitted"]
 
 
 @pytest.mark.parametrize("backend", BACKENDS)

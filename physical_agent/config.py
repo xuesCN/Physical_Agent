@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
-from typing import Any
+import tempfile
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -10,9 +12,17 @@ from pydantic import BaseModel, Field
 DEFAULT_CONFIG_NAME = "physical-agent.yaml"
 RETIRED_MARKDOWN_BACKEND_GUIDANCE = (
     "Runtime Markdown backend has been retired. This workspace cannot be "
-    "opened as an active backend. To convert a legacy Markdown workspace, run "
-    "`physical-agent migrate-md-to-sqlite --config physical-agent.yaml`, then "
-    "set `workspace.backend: sqlite` in physical-agent.yaml."
+    "opened as an active backend. To rescue it, create an independent git "
+    "worktree at historical commit "
+    "`9072b4e9fb600e505668aeb6076eb6cb85e5ff82`, install and invoke that "
+    "checkout's `physical-agent migrate-md-to-sqlite --config "
+    "physical-agent.yaml`, then set `workspace.backend: sqlite` manually. "
+    "Do not use the upgraded current executable as the historical migrator. "
+    "If workspace/state.db already exists, back it up and do not use the "
+    "historical `--overwrite` option unless replacement is intentional. "
+    "Return to the current version and run `physical-agent init --config "
+    "physical-agent.yaml` without `--force`, followed by `physical-agent "
+    "state-check --config physical-agent.yaml`."
 )
 LEGACY_MARKDOWN_WORKSPACE_FILES = (
     "TASK.md",
@@ -46,6 +56,7 @@ class WatchConfig(BaseModel):
     heartbeat_failure_threshold: int = Field(default=3, ge=1)
     halt_on_heartbeat_failure: bool = True
     action_timeout_s: float = Field(default=30.0, gt=0)
+    connect_timeout_s: float = Field(default=10.0, gt=0)
     observe_timeout_s: float = Field(default=10.0, gt=0)
     heartbeat_timeout_s: float = Field(default=5.0, gt=0)
     halt_timeout_s: float = Field(default=5.0, gt=0)
@@ -70,6 +81,9 @@ class MemoryConfig(BaseModel):
 
 class RobotConfig(BaseModel):
     driver: str
+    # Fail-safe default for legacy or third-party configs. Simulation must be
+    # selected explicitly; driver manifests no longer imply the active mode.
+    execution_mode: Literal["simulation", "hardware"] = "hardware"
     config: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -101,6 +115,7 @@ def default_config_dict() -> dict[str, Any]:
             "heartbeat_failure_threshold": 3,
             "halt_on_heartbeat_failure": True,
             "action_timeout_s": 30.0,
+            "connect_timeout_s": 10.0,
             "observe_timeout_s": 10.0,
             "heartbeat_timeout_s": 5.0,
             "halt_timeout_s": 5.0,
@@ -121,6 +136,7 @@ def default_config_dict() -> dict[str, Any]:
         "robots": {
             "arm_1": {
                 "driver": "mock_arm",
+                "execution_mode": "simulation",
                 "config": {
                     "bounds": {
                         "x": [-1.0, 1.0],
@@ -146,11 +162,7 @@ def default_config_dict() -> dict[str, Any]:
     }
 
 
-def load_config(
-    path: str | Path = DEFAULT_CONFIG_NAME,
-    *,
-    allow_retired_markdown: bool = False,
-) -> PhysicalAgentConfig:
+def load_config(path: str | Path = DEFAULT_CONFIG_NAME) -> PhysicalAgentConfig:
     config_path = Path(path)
     if not config_path.exists():
         raise FileNotFoundError(
@@ -158,18 +170,42 @@ def load_config(
         )
     with config_path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
-    if not allow_retired_markdown:
-        _reject_retired_markdown_backend(data, config_path)
+    _reject_retired_markdown_backend(data, config_path)
     return PhysicalAgentConfig.model_validate(data)
 
 
 def write_default_config(path: str | Path = DEFAULT_CONFIG_NAME, *, overwrite: bool = False) -> Path:
     config_path = Path(path)
-    if config_path.exists() and not overwrite:
-        return config_path.resolve()
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    with config_path.open("w", encoding="utf-8") as handle:
-        yaml.safe_dump(default_config_dict(), handle, sort_keys=False)
+    rendered = yaml.safe_dump(default_config_dict(), sort_keys=False)
+    if overwrite:
+        with config_path.open("w", encoding="utf-8") as handle:
+            handle.write(rendered)
+        return config_path.resolve()
+
+    # Publish the complete file with an exclusive hard link. An ``exists``
+    # check followed by ``open('w')`` has a TOCTOU window that can truncate a
+    # valid config created by another initializer. The temporary file is fully
+    # flushed before the target name becomes visible, and ``os.link`` never
+    # replaces an existing path.
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=config_path.parent,
+        prefix=f".{config_path.name}.",
+        suffix=".tmp",
+        text=True,
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(rendered)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary_path, config_path)
+        except FileExistsError:
+            pass
+    finally:
+        temporary_path.unlink(missing_ok=True)
     return config_path.resolve()
 
 

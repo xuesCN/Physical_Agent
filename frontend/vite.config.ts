@@ -4,6 +4,8 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   build: {
+    outDir: "../physical_agent/dashboard/dist",
+    emptyOutDir: true,
     chunkSizeWarningLimit: 1100,
     rollupOptions: {
       output: {

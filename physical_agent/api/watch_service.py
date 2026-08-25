@@ -10,11 +10,13 @@ import threading
 from typing import Any, Callable
 
 from physical_agent.config import DEFAULT_CONFIG_NAME, load_config
+from physical_agent.state import open_state_store
 
 
 DEFAULT_EVENT_QUEUE_SIZE = 100
 DEFAULT_EVENT_BACKLOG_SIZE = 100
 MIN_WATCH_INTERVAL_S = 0.001
+DEFAULT_WATCH_RETRY_INTERVAL_S = 0.5
 
 
 class ApiEventBroker:
@@ -113,14 +115,32 @@ class ApiWatchService:
         self.state_provider = state_provider
         self._task: asyncio.Task[None] | None = None
         self._runtime: Any | None = None
+        self._phase = "stopped"
+        self._last_error: dict[str, Any] | None = None
 
     @property
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
+    def status(self) -> dict[str, Any]:
+        runtime = self._runtime
+        owner = (
+            str(getattr(runtime, "_watch_lease_owner"))
+            if runtime is not None
+            and getattr(runtime, "_watch_lease_owner", None) is not None
+            else None
+        )
+        return {
+            "phase": self._phase,
+            "task_running": self.running,
+            "owner": owner,
+            "last_error": dict(self._last_error) if self._last_error else None,
+        }
+
     async def start(self) -> None:
         if self.running:
             return
+        self._set_phase("starting", clear_error=True)
         self._task = asyncio.create_task(self._run(), name="physical-agent-api-watch")
 
     async def stop(self) -> None:
@@ -131,40 +151,136 @@ class ApiWatchService:
         with suppress(asyncio.CancelledError):
             await task
         self._task = None
+        self._runtime = None
+        self._set_phase("stopped")
 
     async def _run(self) -> None:
-        runtime = None
+        while True:
+            preflight_phase, readiness_error = self._preflight()
+            if preflight_phase != "ready":
+                self._set_phase(
+                    preflight_phase,
+                    error=readiness_error,
+                    clear_error=readiness_error is None,
+                )
+                await asyncio.sleep(self._retry_interval())
+                continue
+
+            runtime = None
+            try:
+                self._set_phase("starting", clear_error=True)
+                WatchRuntime = _load_watch_runtime_class()
+                runtime = WatchRuntime(self.config_path)
+                self._runtime = runtime
+                await runtime.setup()
+                self._set_phase("active", clear_error=True)
+                while True:
+                    try:
+                        executed = await _run_watch_tick(runtime)
+                        runtime_stats = getattr(runtime, "last_step_stats", None)
+                        stats = (
+                            dict(runtime_stats)
+                            if isinstance(runtime_stats, dict)
+                            else {
+                                "executed": int(executed),
+                                "processed": int(executed),
+                                "gate_decisions": int(executed),
+                                "state_changed": bool(executed),
+                            }
+                        )
+                        self._set_phase("active", clear_error=True)
+                        self.events.publish(
+                            "watch_step",
+                            {
+                                "executed": int(executed),
+                                "processed": int(stats.get("processed", executed)),
+                                "gate_decisions": int(
+                                    stats.get("gate_decisions", executed)
+                                ),
+                                "state_changed": bool(
+                                    stats.get("state_changed", bool(executed))
+                                ),
+                                "stats": stats,
+                                "state": self._state_summary(),
+                            },
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        payload = error_payload(exc, phase="watch_step")
+                        self.events.publish("error", payload)
+                        if bool(getattr(exc, "fatal_watch_error", False)):
+                            # Lease/claim fencing failures are terminal for this
+                            # runtime. Retrying would let a stale owner keep
+                            # touching hardware after a successor has taken over.
+                            self._set_phase("fatal", error=payload)
+                            return
+                        self._set_phase("degraded", error=payload)
+                    await asyncio.sleep(self._interval_for(runtime))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                payload = error_payload(exc, phase="setup")
+                self.events.publish("error", payload)
+                if bool(getattr(exc, "fatal_watch_error", False)):
+                    self._set_phase("fatal", error=payload)
+                    return
+                self._set_phase("degraded", error=payload)
+                # Driver connection/setup failures require operator attention.
+                # Reconstructing the whole runtime every retry interval can
+                # repeatedly touch hardware and flood the event stream. A
+                # process restart or explicit service start retries it.
+                return
+            finally:
+                if runtime is not None:
+                    try:
+                        await runtime.shutdown()
+                    except Exception as exc:
+                        payload = error_payload(exc, phase="shutdown")
+                        self.events.publish("error", payload)
+                        if self._phase != "fatal":
+                            self._set_phase("degraded", error=payload)
+                self._runtime = None
+            await asyncio.sleep(self._retry_interval())
+
+    def _preflight(self) -> tuple[str, dict[str, Any] | None]:
+        if not self.config_path.exists():
+            return "waiting_for_init", None
         try:
-            WatchRuntime = _load_watch_runtime_class()
-            runtime = WatchRuntime(self.config_path)
-            self._runtime = runtime
-            await runtime.setup()
-            while True:
-                try:
-                    executed = await _run_watch_tick(runtime)
-                    self.events.publish(
-                        "watch_step",
-                        {
-                            "executed": int(executed),
-                            "state": self._state_summary(),
-                        },
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    self.events.publish("error", error_payload(exc, phase="watch_step"))
-                await asyncio.sleep(self._interval_for(runtime))
-        except asyncio.CancelledError:
-            raise
+            config = load_config(self.config_path)
         except Exception as exc:
-            self.events.publish("error", error_payload(exc, phase="setup"))
-        finally:
-            if runtime is not None:
-                try:
-                    await runtime.shutdown()
-                except Exception as exc:
-                    self.events.publish("error", error_payload(exc, phase="shutdown"))
-            self._runtime = None
+            return "invalid_config", error_payload(exc, phase="configuration")
+        try:
+            store = open_state_store(config, base_dir=self.config_path.parent)
+            if not store.exists():
+                return "waiting_for_init", None
+            lease = store.read_runtime_lease("watch-executor")
+            if lease is not None and bool(lease.get("active")):
+                # A separate watch process is the current executor. Remain a
+                # quiet standby rather than repeatedly constructing runtimes
+                # that are guaranteed to lose the lease race.
+                return "standby", None
+            return "ready", None
+        except Exception as exc:
+            return "degraded", error_payload(exc, phase="executor_preflight")
+
+    def _retry_interval(self) -> float:
+        if self.interval_s is not None:
+            return max(MIN_WATCH_INTERVAL_S, float(self.interval_s))
+        return DEFAULT_WATCH_RETRY_INTERVAL_S
+
+    def _set_phase(
+        self,
+        phase: str,
+        *,
+        error: dict[str, Any] | None = None,
+        clear_error: bool = False,
+    ) -> None:
+        self._phase = phase
+        if error is not None:
+            self._last_error = dict(error)
+        elif clear_error:
+            self._last_error = None
 
     def _interval_for(self, runtime: Any) -> float:
         if self.interval_s is not None:
@@ -196,6 +312,7 @@ def format_sse_event(event: dict[str, Any]) -> str:
 def summarize_state(state: dict[str, Any]) -> dict[str, Any]:
     actions = state.get("actions") or {}
     pending = _action_ids(actions.get("pending") or [])
+    in_progress = _action_ids(actions.get("in_progress") or [])
     completed = _action_ids(actions.get("completed") or [])
     cancelled = _action_ids(actions.get("cancelled") or [])
     return {
@@ -204,12 +321,36 @@ def summarize_state(state: dict[str, Any]) -> dict[str, Any]:
         "message": state.get("message"),
         "backend": state.get("backend"),
         "workspace_path": state.get("workspace_path"),
+        "watch_enabled": bool(state.get("watch_enabled")),
+        "executor": summarize_executor(state.get("executor")),
         "pending_actions": pending,
+        "in_progress_actions": in_progress,
         "completed_count": len(completed),
         "cancelled_count": len(cancelled),
         "chat_messages": len((state.get("chat") or {}).get("messages") or []),
         "memory_notes": len((state.get("memory") or {}).get("notes") or []),
         "uploads": len((state.get("uploads") or {}).get("uploads") or []),
+    }
+
+
+def summarize_executor(executor: Any) -> dict[str, Any] | None:
+    """Project executor state without lease-renewal timestamps."""
+
+    if not isinstance(executor, dict):
+        return None
+    lease = executor.get("lease")
+    stable_lease = None
+    if isinstance(lease, dict):
+        stable_lease = {
+            "active": bool(lease.get("active")),
+            "owner": lease.get("owner"),
+        }
+    return {
+        "mode": executor.get("mode"),
+        "status": executor.get("status"),
+        "embedded_enabled": bool(executor.get("embedded_enabled")),
+        "lease": stable_lease,
+        "last_error": executor.get("last_error"),
     }
 
 

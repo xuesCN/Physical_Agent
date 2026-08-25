@@ -1,6 +1,7 @@
 import type {
   ActionItem,
   ActionMutationResponse,
+  AgentOutput,
   AgentState,
   ApiEvent,
   ConfigResponse,
@@ -10,6 +11,7 @@ import type {
   IntegrateResponse,
   LLMSettingsPayload,
   LLMSettingsResponse,
+  ProjectInitializeResponse,
   RegisterRobotPayload,
   RegisterRobotResponse,
   SearchResponse,
@@ -49,6 +51,13 @@ export function fetchState(): Promise<AgentState> {
   return apiJson<AgentState>("/api/state", {}, { allowNotReadyBody: true });
 }
 
+export function initializeProject(): Promise<ProjectInitializeResponse> {
+  return apiJson<ProjectInitializeResponse>("/api/project/initialize", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export function fetchStateCheck(): Promise<StateCheckResult> {
   return apiJson<StateCheckResult>(
     "/api/state-check",
@@ -68,7 +77,6 @@ export function sendChat(message: string): Promise<{
   ok: boolean;
   mode?: string;
   reply: string;
-  executed: number;
   state: AgentState;
 }> {
   return apiJson("/api/chat", {
@@ -211,7 +219,7 @@ export function testLLMSettings(): Promise<LLMSettingsResponse> {
 export function submitTask(task: string): Promise<{
   ok: boolean;
   message: string;
-  actions: ActionItem[];
+  agent_output: AgentOutput;
   state: AgentState;
 }> {
   return apiJson("/api/tasks/submit", {
@@ -223,7 +231,7 @@ export function submitTask(task: string): Promise<{
 export function proposeAction(action: ActionItem): Promise<{
   ok: boolean;
   message: string;
-  action: ActionItem;
+  agent_output: AgentOutput;
   state: AgentState;
 }> {
   return apiJson("/api/actions/propose", {

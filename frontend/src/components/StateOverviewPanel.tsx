@@ -15,7 +15,9 @@ import type { CapabilityOverview } from "../viewmodels/capability";
 import type { EnvironmentOverview } from "../viewmodels/environment";
 import type { RobotOverview } from "../viewmodels/robot";
 import type { WorldObjectOverview } from "../viewmodels/world";
+import { AgentTaskGraphCard } from "./AgentTaskGraphCard";
 import { RawDebug } from "./RawDebug";
+import { useMessages } from "../locales/context";
 
 interface StateOverviewPanelProps {
   state: AgentState | null;
@@ -28,6 +30,7 @@ export function StateOverviewPanel({ state, health }: StateOverviewPanelProps) {
   return (
     <section className="state-overview-panel" data-testid="state-overview-panel">
       <SystemStatusCard system={viewModel.system} />
+      <AgentTaskGraphCard output={viewModel.agentOutput} />
       <RobotsTable robots={viewModel.robots} />
       <CapabilityCards capabilities={viewModel.capabilities} />
       <EnvironmentDescriptions environment={viewModel.environment} />
@@ -38,6 +41,7 @@ export function StateOverviewPanel({ state, health }: StateOverviewPanelProps) {
 }
 
 function SystemStatusCard({ system }: { system: SystemStatusOverview }) {
+  const labels = useMessages();
   return (
     <Card
       className="panel system-status-card"
@@ -45,28 +49,28 @@ function SystemStatusCard({ system }: { system: SystemStatusOverview }) {
       title={
         <Space>
           <CheckCircleOutlined />
-          <Typography.Text strong>System status</Typography.Text>
+          <Typography.Text strong>{labels.overview.systemStatus}</Typography.Text>
         </Space>
       }
     >
       <div className="system-status-grid">
         <Statistic
-          title="Ready"
+          title={labels.status.ready}
           value={system.readyLabel}
           valueStyle={{ color: system.ready ? "#15803d" : "#b91c1c", fontSize: 24 }}
         />
         <Space direction="vertical" size={4}>
-          <Typography.Text type="secondary">Backend</Typography.Text>
+          <Typography.Text type="secondary">{labels.overview.backend}</Typography.Text>
           <Tag color="blue">{system.backend}</Tag>
         </Space>
         <Space direction="vertical" size={4}>
-          <Typography.Text type="secondary">Workspace</Typography.Text>
+          <Typography.Text type="secondary">{labels.overview.workspace}</Typography.Text>
           <Typography.Text className="overview-path" code>
             {system.workspace}
           </Typography.Text>
         </Space>
         <Space direction="vertical" size={4}>
-          <Typography.Text type="secondary">Message</Typography.Text>
+          <Typography.Text type="secondary">{labels.overview.message}</Typography.Text>
           <Space size={6} wrap>
             <Tag color={system.readyTag.color}>{system.readyTag.label}</Tag>
             <Typography.Text>{system.message}</Typography.Text>
@@ -78,13 +82,14 @@ function SystemStatusCard({ system }: { system: SystemStatusOverview }) {
 }
 
 function RobotsTable({ robots }: { robots: RobotOverview[] }) {
+  const labels = useMessages();
   return (
     <Card
       className="panel"
       title={
         <Space>
           <RobotOutlined />
-          <Typography.Text strong>Robots</Typography.Text>
+          <Typography.Text strong>{labels.overview.robots}</Typography.Text>
         </Space>
       }
     >
@@ -99,7 +104,7 @@ function RobotsTable({ robots }: { robots: RobotOverview[] }) {
             scroll={{ x: 720 }}
           />
         ) : (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No robots" />
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={labels.overview.noRobots} />
         )}
       </div>
     </Card>
@@ -130,11 +135,12 @@ const robotColumns: ColumnsType<RobotOverview> = [
 ];
 
 function CapabilityCards({ capabilities }: { capabilities: CapabilityOverview[] }) {
+  const labels = useMessages();
   return (
     <section className="overview-section" data-testid="capability-cards">
       <Space className="overview-section-title" size={6}>
         <ToolOutlined />
-        <Typography.Text strong>Capabilities</Typography.Text>
+        <Typography.Text strong>{labels.overview.capabilities}</Typography.Text>
       </Space>
       {capabilities.length ? (
         <List<CapabilityOverview>
@@ -151,11 +157,11 @@ function CapabilityCards({ capabilities }: { capabilities: CapabilityOverview[] 
                   </Space>
                   <Typography.Text type="secondary">{capability.description}</Typography.Text>
                   <Typography.Text className="schema-summary">
-                    Params: {capability.paramsSummary}
+                    {labels.capability.params}: {capability.paramsSummary}
                   </Typography.Text>
                   {capability.constraintsSummary && (
                     <Typography.Text className="schema-summary">
-                      Constraints: {capability.constraintsSummary}
+                      {labels.capability.constraints}: {capability.constraintsSummary}
                     </Typography.Text>
                   )}
                 </Space>
@@ -165,7 +171,7 @@ function CapabilityCards({ capabilities }: { capabilities: CapabilityOverview[] 
         />
       ) : (
         <Card className="panel">
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No capabilities" />
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={labels.overview.noCapabilities} />
         </Card>
       )}
     </section>
@@ -173,6 +179,7 @@ function CapabilityCards({ capabilities }: { capabilities: CapabilityOverview[] 
 }
 
 function EnvironmentDescriptions({ environment }: { environment: EnvironmentOverview }) {
+  const labels = useMessages();
   return (
     <Card
       className="panel"
@@ -180,7 +187,7 @@ function EnvironmentDescriptions({ environment }: { environment: EnvironmentOver
       title={
         <Space>
           <CompassOutlined />
-          <Typography.Text strong>Workspace bounds</Typography.Text>
+          <Typography.Text strong>{labels.overview.workspaceBounds}</Typography.Text>
         </Space>
       }
     >
@@ -194,13 +201,14 @@ function EnvironmentDescriptions({ environment }: { environment: EnvironmentOver
 }
 
 function WorldObjectsTable({ objects }: { objects: WorldObjectOverview[] }) {
+  const labels = useMessages();
   return (
     <Card
       className="panel"
       title={
         <Space>
           <DatabaseOutlined />
-          <Typography.Text strong>World objects</Typography.Text>
+          <Typography.Text strong>{labels.overview.worldObjects}</Typography.Text>
         </Space>
       }
     >
@@ -215,7 +223,7 @@ function WorldObjectsTable({ objects }: { objects: WorldObjectOverview[] }) {
             scroll={{ x: 780 }}
           />
         ) : (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No world objects" />
+          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={labels.overview.noWorldObjects} />
         )}
       </div>
     </Card>

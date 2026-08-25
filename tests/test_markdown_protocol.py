@@ -1,22 +1,8 @@
 from physical_agent.protocol.markdown import (
-    extract_yaml_blocks,
-    fenced_yaml,
+    extract_markdown_sections,
     parse_front_matter,
     render_front_matter,
 )
-from physical_agent.protocol.parsers import (
-    parse_actions,
-    parse_capabilities,
-    parse_feedback,
-    parse_task,
-)
-from physical_agent.protocol.renderers import (
-    render_actions,
-    render_capabilities,
-    render_feedback,
-    render_task,
-)
-from physical_agent.protocol.schemas import Action
 
 
 def test_front_matter_parse_render_roundtrip():
@@ -31,64 +17,35 @@ def test_front_matter_parse_render_roundtrip():
     assert "Hello" in doc.body
 
 
-def test_fenced_yaml_parse_render():
-    block = fenced_yaml({"items": ["a", "b"]})
-    assert extract_yaml_blocks(block) == [{"items": ["a", "b"]}]
-
-
-def test_task_render_parse():
-    text = render_task("Pick the red block.", ["Stay inside bounds."], revision=3)
-    parsed = parse_task(text)
-    assert parsed["metadata"]["revision"] == 3
-    assert "Pick the red block" in parsed["task"]
-    assert parsed["constraints"] == ["Stay inside bounds."]
-
-
-def test_actions_render_parse():
-    action = Action(
-        id="act_001",
-        robot="arm_1",
-        capability="pick",
-        params={"object_id": "red_block"},
+def test_extract_markdown_sections_is_bounded_and_ignores_fenced_headings():
+    body = (
+        "# Policy\n\n"
+        "## Rules\n\n"
+        "first section\n\n"
+        "```markdown\n## Rules\nfenced impostor\n```\n\n"
+        "## Agent Guidance\n\n"
+        "second section\n"
     )
-    text = render_actions([action], [], [], revision=2)
-    parsed = parse_actions(text)
-    assert parsed["metadata"]["schema"] == "physical-agent/actions/v1"
-    assert parsed["pending"][0].id == "act_001"
-    assert parsed["pending"][0].params["object_id"] == "red_block"
+
+    assert extract_markdown_sections(body, "Rules", level=2) == [
+        "first section\n\n```markdown\n## Rules\nfenced impostor\n```"
+    ]
+    assert extract_markdown_sections(body, "Agent Guidance", level=2) == [
+        "second section"
+    ]
 
 
-def test_capabilities_render_parse():
-    text = render_capabilities(
-        {
-            "arm_1": {
-                "kind": "arm",
-                "driver": "mock_arm",
-                "status": "connected",
-                "capabilities": [
-                    {
-                        "name": "observe",
-                        "description": "Observe.",
-                        "params_schema": {"type": "object"},
-                    }
-                ],
-            }
-        }
+def test_extract_markdown_sections_does_not_treat_info_fence_as_closer():
+    body = (
+        "# Policy\n\n"
+        "```markdown\n"
+        "```yaml\n"
+        "## Rules\n"
+        "```\n"
+        "still fenced\n"
+        "```\n\n"
+        "## Rules\n\n"
+        "real section\n"
     )
-    parsed = parse_capabilities(text)
-    assert parsed["robots"]["arm_1"]["capabilities"][0]["name"] == "observe"
 
-
-def test_feedback_render_parse():
-    latest = {
-        "action_id": "act_001",
-        "status": "completed",
-        "robot": "arm_1",
-        "capability": "observe",
-        "message": "ok",
-    }
-    text = render_feedback(latest, [latest])
-    parsed = parse_feedback(text)
-    assert parsed["latest"]["action_id"] == "act_001"
-    assert parsed["history"][0]["status"] == "completed"
-
+    assert extract_markdown_sections(body, "Rules", level=2) == ["real section"]

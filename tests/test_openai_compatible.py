@@ -7,12 +7,19 @@ from types import SimpleNamespace
 import pytest
 
 import physical_agent.llm.openai_compatible as openai_compatible
+from physical_agent.agent.context_builder import (
+    ContextBudget,
+    SafetyGuidanceContextError,
+)
 from physical_agent.agent.llm_planner import LLMPlanner
 from physical_agent.env import load_dotenv
 from physical_agent.llm import (
     OpenAICompatibleClient,
     OpenAICompatibleError,
     OpenAICompatibleSettings,
+    ProviderRefusalError,
+    StreamChunk,
+    StructuredOutputError,
     llm_settings_path,
     public_llm_settings_summary,
     read_llm_settings_file,
@@ -116,6 +123,34 @@ def _responses_text(text: str) -> dict:
 
 def _responses_delta(text: str) -> dict:
     return {"type": "response.output_text.delta", "delta": text}
+
+
+def _responses_reasoning_delta(text: str) -> dict:
+    return {"type": "response.reasoning_summary_text.delta", "delta": text}
+
+
+def _chunk_pairs(chunks: list[StreamChunk]) -> list[tuple[str, str]]:
+    return [(chunk.kind, chunk.text) for chunk in chunks]
+
+
+def test_responses_reasoning_summary_is_extracted_separately_from_message_text():
+    parsed = _responses_text("final answer")
+    parsed["output"].insert(
+        0,
+        {
+            "type": "reasoning",
+            "summary": [
+                {"type": "summary_text", "text": "Checked the constraints. "},
+                {"type": "summary_text", "text": "Selected the safe option."},
+            ],
+        },
+    )
+
+    assert openai_compatible._extract_responses_text(parsed) == "final answer"
+    assert openai_compatible._extract_responses_reasoning(parsed) == (
+        "Checked the constraints. Selected the safe option."
+    )
+    assert openai_compatible._extract_responses_reasoning(_responses_text("plain")) == ""
 
 
 def test_load_dotenv_sets_gpt_env_names(tmp_path, monkeypatch):
@@ -414,12 +449,14 @@ def test_llm_trace_records_structured_json_and_stream(fake_openai, tmp_path, mon
         schema_name="ping_response",
         metadata={"physical_agent_surface": "structured_trace"},
     ) == {"answer": "pong"}
-    assert list(
-        client.stream_chat_text(
-            [{"role": "user", "content": "hello"}],
-            metadata={"physical_agent_surface": "stream_trace"},
+    assert _chunk_pairs(
+        list(
+            client.stream_chat_text(
+                [{"role": "user", "content": "hello"}],
+                metadata={"physical_agent_surface": "stream_trace"},
+            )
         )
-    ) == ["hel", "lo"]
+    ) == [("message", "hel"), ("message", "lo")]
 
     records = []
     for path in (tmp_path / "workspace" / "llm-trace").glob("*.jsonl"):
@@ -490,12 +527,97 @@ def test_stream_chat_text_aggregates_chat_completion_deltas(fake_openai):
         )
     )
 
-    assert chunks == ["hel", "lo"]
+    assert _chunk_pairs(chunks) == [("message", "hel"), ("message", "lo")]
+    assert "".join(chunk.text for chunk in chunks) == "hello"
     call = fake_openai.instances[0].calls[0]
     assert call["method"] == "chat.completions.create"
     assert call["payload"]["stream"] is True
     assert call["payload"]["metadata"]["physical_agent_surface"] == "test_stream"
     assert "extra_body" not in call["payload"]
+
+
+def test_stream_structured_json_uses_chat_completion_json_mode(fake_openai):
+    fake_openai.chat_outputs = [[_chat_delta('{"reply":"hello"}')]]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+    schema = {
+        "type": "object",
+        "required": ["reply"],
+        "properties": {"reply": {"type": "string"}},
+    }
+
+    chunks = list(
+        OpenAICompatibleClient(settings).stream_structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema=schema,
+            schema_name="chat_turn",
+        )
+    )
+
+    assert _chunk_pairs(chunks) == [("message", '{"reply":"hello"}')]
+    payload = fake_openai.instances[0].calls[0]["payload"]
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["messages"][0]["role"] == "system"
+    assert "JSON Schema named `chat_turn`" in payload["messages"][0]["content"]
+    assert json.dumps(schema) in payload["messages"][0]["content"]
+
+
+def test_stream_structured_json_falls_back_only_before_provider_bytes(fake_openai):
+    fake_openai.chat_outputs = [
+        FakeBadRequestError("response_format json_object unsupported"),
+        [_chat_delta('{"reply":"fallback"}')],
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+    schema = {
+        "type": "object",
+        "required": ["reply"],
+        "properties": {"reply": {"type": "string"}},
+    }
+
+    chunks = list(
+        OpenAICompatibleClient(settings).stream_structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema=schema,
+            schema_name="chat_turn",
+        )
+    )
+
+    assert _chunk_pairs(chunks) == [("message", '{"reply":"fallback"}')]
+    calls = fake_openai.instances[0].calls
+    assert len(calls) == 2
+    assert calls[0]["payload"]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in calls[1]["payload"]
+
+
+def test_stream_structured_json_never_retries_after_provider_bytes(fake_openai):
+    def broken_stream():
+        yield _chat_delta('{"reply":"partial')
+        raise FakeBadRequestError("response_format json_object unsupported")
+
+    fake_openai.chat_outputs = [broken_stream()]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+    client = OpenAICompatibleClient(settings)
+    stream = client.stream_structured_json(
+        [{"role": "user", "content": "ping"}],
+        schema={"type": "object"},
+        schema_name="chat_turn",
+    )
+
+    assert next(stream) == StreamChunk(kind="message", text='{"reply":"partial')
+    with pytest.raises(OpenAICompatibleError):
+        next(stream)
+    assert len(fake_openai.instances[0].calls) == 1
 
 
 def test_stream_chat_text_passes_chat_reasoning_extra_body_when_configured(fake_openai):
@@ -513,7 +635,7 @@ def test_stream_chat_text_passes_chat_reasoning_extra_body_when_configured(fake_
         )
     )
 
-    assert chunks == ["pong"]
+    assert _chunk_pairs(chunks) == [("message", "pong")]
     payload = fake_openai.instances[0].calls[0]["payload"]
     assert payload["stream"] is True
     assert payload["extra_body"] == {"thinking": {"type": "enabled"}}
@@ -545,13 +667,140 @@ def test_stream_chat_text_aggregates_responses_deltas(fake_openai):
         )
     )
 
-    assert chunks == ["hel", "lo"]
+    assert _chunk_pairs(chunks) == [("message", "hel"), ("message", "lo")]
     call = fake_openai.instances[0].calls[0]
     assert call["method"] == "responses.create"
     assert call["payload"]["stream"] is True
     assert call["payload"]["instructions"] == "Return text."
     assert call["payload"]["metadata"]["physical_agent_surface"] == "test_stream"
     assert call["payload"]["reasoning"] == {"effort": "medium", "summary": "auto"}
+
+
+def test_stream_chat_text_types_responses_message_and_reasoning_summary_deltas(fake_openai):
+    fake_openai.responses_outputs = [
+        [
+            _responses_reasoning_delta("Checked constraints. "),
+            _responses_delta("safe "),
+            _responses_reasoning_delta("No action executed."),
+            _responses_delta("answer"),
+            {"type": "response.completed"},
+        ]
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+
+    chunks = list(
+        OpenAICompatibleClient(settings).stream_chat_text(
+            [{"role": "user", "content": "ping"}]
+        )
+    )
+
+    assert [(chunk.kind, chunk.text) for chunk in chunks] == [
+        ("thought", "Checked constraints. "),
+        ("message", "safe "),
+        ("thought", "No action executed."),
+        ("message", "answer"),
+    ]
+
+
+def test_stream_structured_json_preserves_thought_chunks_without_parsing_them(fake_openai):
+    fake_openai.responses_outputs = [
+        [
+            _responses_reasoning_delta("Checked JSON constraints."),
+            _responses_delta('{"reply":"hello"}'),
+            {"type": "response.completed"},
+        ]
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+
+    chunks = list(
+        OpenAICompatibleClient(settings).stream_structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={
+                "type": "object",
+                "required": ["reply"],
+                "properties": {"reply": {"type": "string"}},
+            },
+            schema_name="chat_turn",
+        )
+    )
+
+    assert _chunk_pairs(chunks) == [
+        ("thought", "Checked JSON constraints."),
+        ("message", '{"reply":"hello"}'),
+    ]
+
+
+def test_stream_structured_json_uses_responses_json_mode(fake_openai):
+    fake_openai.responses_outputs = [
+        [_responses_delta('{"reply":"hello"}'), {"type": "response.completed"}]
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+    schema = {
+        "type": "object",
+        "required": ["reply"],
+        "properties": {"reply": {"type": "string"}},
+    }
+
+    chunks = list(
+        OpenAICompatibleClient(settings).stream_structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema=schema,
+            schema_name="chat_turn",
+        )
+    )
+
+    assert _chunk_pairs(chunks) == [("message", '{"reply":"hello"}')]
+    payload = fake_openai.instances[0].calls[0]["payload"]
+    assert payload["text"]["format"] == {"type": "json_object"}
+    assert "JSON Schema named `chat_turn`" in payload["instructions"]
+    assert json.dumps(schema) in payload["instructions"]
+
+
+def test_stream_chat_text_exposes_and_clears_transport_closer(fake_openai):
+    closed = {"count": 0}
+
+    class CloseAwareStream:
+        def __iter__(self):
+            yield _chat_delta("hello")
+
+        def close(self):
+            closed["count"] += 1
+
+    fake_openai.chat_outputs = [CloseAwareStream()]
+    observed = []
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    stream = OpenAICompatibleClient(settings).stream_chat_text(
+        [{"role": "user", "content": "ping"}],
+        transport_observer=observed.append,
+    )
+
+    assert next(stream) == StreamChunk(kind="message", text="hello")
+    assert callable(observed[0])
+    observed[0]()
+    assert closed["count"] == 1
+    stream.close()
+    assert observed[-1] is None
+    assert closed["count"] >= 1
 
 
 def test_stream_chat_text_error_redacts_api_key(fake_openai):
@@ -574,7 +823,7 @@ def test_stream_chat_text_error_redacts_api_key(fake_openai):
         [{"role": "user", "content": "ping"}]
     )
 
-    assert next(stream) == "partial"
+    assert next(stream) == StreamChunk(kind="message", text="partial")
     with pytest.raises(OpenAICompatibleError) as info:
         next(stream)
 
@@ -713,7 +962,7 @@ def test_stream_chat_reasoning_400_falls_back_without_extra_body(fake_openai):
         )
     )
 
-    assert chunks == ["pong"]
+    assert _chunk_pairs(chunks) == [("message", "pong")]
     calls = fake_openai.instances[0].calls
     assert calls[0]["payload"]["extra_body"] == {"thinking": {"type": "enabled"}}
     assert "extra_body" not in calls[1]["payload"]
@@ -738,7 +987,7 @@ def test_stream_responses_reasoning_400_falls_back_without_reasoning(fake_openai
         )
     )
 
-    assert chunks == ["pong"]
+    assert _chunk_pairs(chunks) == [("message", "pong")]
     calls = fake_openai.instances[0].calls
     assert calls[0]["payload"]["reasoning"] == {"effort": "medium", "summary": "auto"}
     assert "reasoning" not in calls[1]["payload"]
@@ -854,6 +1103,351 @@ def test_structured_json_fallback_still_validates_schema(fake_openai):
             },
             schema_name="ping_response",
         )
+
+
+def test_structured_json_repairs_one_invalid_response_with_bounded_candidate_context(
+    fake_openai,
+):
+    fake_openai.chat_outputs = [
+        _chat_text("not-json RAW_PROVIDER_SECRET"),
+        _chat_text(json.dumps({"answer": "pong"})),
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["answer"],
+        "properties": {"answer": {"type": "string"}},
+    }
+
+    result = OpenAICompatibleClient(settings).structured_json(
+        [{"role": "user", "content": "ping"}],
+        schema=schema,
+        schema_name="ping_response",
+        max_validation_retries=1,
+    )
+
+    assert result == {"answer": "pong"}
+    calls = fake_openai.instances[0].calls
+    assert len(calls) == 2
+    assert all(call["payload"]["response_format"]["type"] == "json_schema" for call in calls)
+    repair_messages = calls[1]["payload"]["messages"]
+    assert "json_decode" in repair_messages[-1]["content"]
+    assert repair_messages[-2] == {
+        "role": "assistant",
+        "content": "not-json RAW_PROVIDER_SECRET",
+    }
+    assert "RAW_PROVIDER_SECRET" not in repair_messages[-1]["content"]
+
+
+def test_structured_json_exhausts_after_one_repair(fake_openai):
+    fake_openai.chat_outputs = [
+        _chat_text("not-json first"),
+        _chat_text("not-json second"),
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(StructuredOutputError) as info:
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+            },
+            schema_name="ping_response",
+            max_validation_retries=1,
+        )
+
+    assert info.value.code == "retries_exhausted"
+    assert info.value.attempts == 2
+    assert len(fake_openai.instances[0].calls) == 2
+
+
+def test_structured_json_does_not_fallback_for_unrelated_bad_request(fake_openai):
+    fake_openai.chat_outputs = [FakeBadRequestError("context length exceeded")]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(OpenAICompatibleError, match="context length exceeded"):
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+            },
+            schema_name="ping_response",
+            max_validation_retries=1,
+        )
+
+    assert len(fake_openai.instances[0].calls) == 1
+
+
+@pytest.mark.parametrize(
+    "provider_error",
+    [
+        FakeRateLimitError("rate limited"),
+        FakeTimeoutError("timed out"),
+    ],
+)
+def test_structured_json_transport_errors_are_not_content_repaired(
+    fake_openai, provider_error
+):
+    fake_openai.chat_outputs = [provider_error]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(OpenAICompatibleError):
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+            },
+            schema_name="ping_response",
+            max_validation_retries=1,
+        )
+
+    assert len(fake_openai.instances[0].calls) == 1
+
+
+def test_structured_json_refusal_is_not_repaired(fake_openai):
+    fake_openai.chat_outputs = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "refusal": "Policy refusal.",
+                    }
+                }
+            ]
+        }
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(ProviderRefusalError, match="Policy refusal"):
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+            },
+            schema_name="ping_response",
+            max_validation_retries=1,
+        )
+
+    assert len(fake_openai.instances[0].calls) == 1
+
+
+def test_responses_refusal_wins_over_direct_output_text(fake_openai):
+    fake_openai.responses_outputs = [
+        {
+            "output_text": json.dumps({"answer": "must-not-be-accepted"}),
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {"type": "refusal", "refusal": "Policy refusal."}
+                    ],
+                }
+            ],
+        }
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+
+    with pytest.raises(ProviderRefusalError, match="Policy refusal"):
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+            },
+            schema_name="ping_response",
+            max_validation_retries=1,
+        )
+
+    assert len(fake_openai.instances[0].calls) == 1
+
+
+def test_structured_json_rejects_invalid_schema_before_provider_call(fake_openai):
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(StructuredOutputError) as info:
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={"type": "not-a-json-schema-type"},
+            schema_name="broken_response",
+        )
+
+    assert info.value.code == "schema_invalid"
+    assert fake_openai.instances[0].calls == []
+
+
+def test_structured_json_rejects_more_than_one_validation_retry(fake_openai):
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(ValueError, match="must be 0 or 1"):
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={"type": "object"},
+            schema_name="bounded_response",
+            max_validation_retries=2,
+        )
+
+    assert fake_openai.instances[0].calls == []
+
+
+def test_validation_failure_writes_attempt_and_code_trace(
+    fake_openai, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PA_LLM_TRACE", raising=False)
+    fake_openai.chat_outputs = [_chat_text("not-json")]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(StructuredOutputError):
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+            },
+            schema_name="ping_response",
+            metadata={"physical_agent_surface": "validation_test"},
+        )
+
+    records = []
+    for path in (tmp_path / "workspace" / "llm-trace").glob("*.jsonl"):
+        records.extend(
+            json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+        )
+    validation = [record for record in records if record["stage"] == "validation"]
+    assert len(validation) == 1
+    assert validation[0]["surface"] == "validation_test"
+    assert validation[0]["attempt"] == 1
+    assert validation[0]["error_code"] == "invalid_json"
+    assert validation[0]["issues"][0]["code"] == "json_decode"
+
+
+def test_validation_failure_trace_can_be_disabled(fake_openai, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PA_LLM_TRACE", "0")
+    fake_openai.chat_outputs = [_chat_text("not-json")]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(StructuredOutputError):
+        OpenAICompatibleClient(settings).structured_json(
+            [{"role": "user", "content": "ping"}],
+            schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["answer"],
+                "properties": {"answer": {"type": "string"}},
+            },
+            schema_name="ping_response",
+        )
+
+    assert not (tmp_path / "workspace" / "llm-trace").exists()
+
+
+def test_stream_chat_refusal_deltas_are_accumulated(fake_openai):
+    fake_openai.chat_outputs = [
+        [
+            {"choices": [{"delta": {"refusal": "Policy "}}]},
+            {"choices": [{"delta": {"refusal": "refusal."}}]},
+        ]
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    with pytest.raises(ProviderRefusalError) as info:
+        list(
+            OpenAICompatibleClient(settings).stream_chat_text(
+                [{"role": "user", "content": "ping"}]
+            )
+        )
+
+    assert info.value.refusal == "Policy refusal."
+
+
+def test_stream_responses_refusal_deltas_use_done_reason(fake_openai):
+    fake_openai.responses_outputs = [
+        [
+            {"type": "response.refusal.delta", "delta": "Policy "},
+            {"type": "response.refusal.delta", "delta": "refusal."},
+            {"type": "response.refusal.done", "refusal": "Policy refusal."},
+        ]
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+        api_mode="responses",
+    )
+
+    with pytest.raises(ProviderRefusalError) as info:
+        list(
+            OpenAICompatibleClient(settings).stream_chat_text(
+                [{"role": "user", "content": "ping"}]
+            )
+        )
+
+    assert info.value.refusal == "Policy refusal."
 
 
 def test_responses_structured_json_uses_responses_text_format(fake_openai):
@@ -1015,6 +1609,7 @@ def test_llm_planner_parses_actions_from_chat_completion(fake_openai):
         capabilities={
             "robots": {
                 "arm_1": {
+                    "execution_mode": "simulation",
                     "capabilities": [
                         {"name": "pick"},
                         {"name": "place"},
@@ -1033,7 +1628,7 @@ def test_llm_planner_parses_actions_from_chat_completion(fake_openai):
     assert actions[1].depends_on == ["act_001"]
     assert actions[1].metadata["expected"][0]["value"] == "tray"
     payload = fake_openai.instances[0].calls[0]["payload"]
-    assert payload["response_format"]["type"] == "json_schema"
+    assert payload["response_format"] == {"type": "json_object"}
 
 
 def test_llm_planner_parses_actions_from_responses_api(fake_openai):
@@ -1064,12 +1659,220 @@ def test_llm_planner_parses_actions_from_responses_api(fake_openai):
     planner = LLMPlanner(settings=settings)
     actions = planner.plan(
         task="look around",
-        capabilities={"robots": {"arm_1": {"capabilities": [{"name": "observe"}]}}},
+        capabilities={
+            "robots": {
+                "arm_1": {
+                    "execution_mode": "simulation",
+                    "capabilities": [{"name": "observe"}],
+                }
+            }
+        },
         world={"state": {}, "observation": Observation(summary="")},
     )
 
     assert [action.capability for action in actions] == ["observe"]
     payload = fake_openai.instances[0].calls[0]["payload"]
     assert "JSON action intents" in payload["instructions"]
-    assert payload["text"]["format"]["type"] == "json_schema"
+    assert payload["text"]["format"] == {"type": "json_object"}
     assert payload["metadata"]["physical_agent_surface"] == "planner"
+
+
+def test_llm_planner_repairs_unknown_action_field_once(fake_openai):
+    fake_openai.chat_outputs = [
+        _chat_text(
+            json.dumps(
+                {
+                    "actions": [
+                        {
+                            "robot": "arm_1",
+                            "capability": "observe",
+                            "params": {},
+                            "reason": "Inspect world state.",
+                            "depends_on": [],
+                            "unexpected": "must be removed",
+                        }
+                    ]
+                }
+            )
+        ),
+        _chat_text(
+            json.dumps(
+                {
+                    "actions": [
+                        {
+                            "robot": "arm_1",
+                            "capability": "observe",
+                            "params": {},
+                            "reason": "Inspect world state.",
+                            "depends_on": [],
+                        }
+                    ]
+                }
+            )
+        ),
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    actions = LLMPlanner(settings=settings).plan(
+        task="look around",
+        capabilities={
+            "robots": {
+                "arm_1": {
+                    "execution_mode": "simulation",
+                    "capabilities": [{"name": "observe"}],
+                }
+            }
+        },
+        world={"state": {}, "observation": Observation(summary="")},
+    )
+
+    assert [action.capability for action in actions] == ["observe"]
+    calls = fake_openai.instances[0].calls
+    assert len(calls) == 2
+    assert all(
+        call["payload"]["response_format"] == {"type": "json_object"}
+        for call in calls
+    )
+    assert "schema_additionalProperties" in calls[1]["payload"]["messages"][-1]["content"]
+
+
+def test_llm_planner_provider_refusal_returns_no_actions_without_repair(fake_openai):
+    fake_openai.chat_outputs = [
+        {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "refusal": "Cannot safely help with that request.",
+                    }
+                }
+            ]
+        }
+    ]
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+    planner = LLMPlanner(settings=settings)
+
+    actions = planner.plan(
+        task="unsafe request",
+        capabilities={
+            "robots": {
+                "arm_1": {
+                    "execution_mode": "simulation",
+                    "capabilities": [{"name": "observe"}],
+                }
+            }
+        },
+        world={"state": {}, "observation": Observation(summary="")},
+    )
+
+    assert actions == []
+    assert planner.last_refusal_reason == "Cannot safely help with that request."
+    assert len(fake_openai.instances[0].calls) == 1
+
+
+def test_llm_planner_live_context_injects_isolated_agent_guidance():
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+    captured: dict[str, object] = {}
+
+    class CapturingClient:
+        def structured_json(self, messages, **kwargs):
+            captured["messages"] = messages
+            return {"actions": []}
+
+    planner = LLMPlanner(settings=settings)
+    planner.client = CapturingClient()
+    actions = planner.plan_with_context(
+        task="inspect the car",
+        capabilities={
+            "robots": {
+                "car_1": {
+                    "execution_mode": "hardware",
+                    "capabilities": [{"name": "observe"}],
+                }
+            }
+        },
+        world={},
+        safety=_safety_projection("Keep the wheels suspended over the bench."),
+    )
+
+    assert actions == []
+    messages = captured["messages"]
+    payload = json.loads(messages[1]["content"])
+    assert payload["safety"]["hard"]["rules"]["forbid_duplicate_action_ids"] is True
+    assert payload["safety"]["guidance"]["text"] == (
+        "Keep the wheels suspended over the bench."
+    )
+    assert payload["safety"]["guidance"]["may_authorize_execution"] is False
+
+
+def test_llm_planner_rejects_hardware_guidance_over_budget_before_provider_call():
+    settings = OpenAICompatibleSettings(
+        api_key="test-key",
+        base_url="http://project.test/v1",
+        model="test-model",
+    )
+
+    class ExplodingClient:
+        calls = 0
+
+        def structured_json(self, messages, **kwargs):
+            self.calls += 1
+            raise AssertionError("provider must not be called")
+
+    planner = LLMPlanner(
+        settings=settings,
+        context_budget=ContextBudget(safety_guidance_max_chars=48),
+    )
+    client = ExplodingClient()
+    planner.client = client
+
+    with pytest.raises(SafetyGuidanceContextError) as caught:
+        planner.plan_with_context(
+            task="move",
+            capabilities={
+                "robots": {
+                    "car_1": {
+                        "execution_mode": "hardware",
+                        "capabilities": [{"name": "drive_for"}],
+                    }
+                }
+            },
+            world={},
+            safety=_safety_projection("bench only " * 20),
+        )
+
+    assert caught.value.code == "safety.guidance.budget_exceeded"
+    assert client.calls == 0
+
+
+def _safety_projection(agent_guidance: str | None) -> dict[str, object]:
+    return {
+        "metadata": {
+            "schema": "physical-agent/safety/v1",
+            "owner": "human",
+            "revision": 1,
+        },
+        "rules": {
+            "allow_autonomous_execution": True,
+            "forbid_duplicate_action_ids": True,
+            "max_action_timeout_s": 30,
+            "require_human_approval_for_real_hardware": True,
+        },
+        "agent_guidance": agent_guidance,
+        "hard_policy_digest": "hard-digest",
+        "guidance_digest": "guidance-digest",
+        "policy_identity_digest": "identity-digest",
+    }

@@ -7,6 +7,7 @@ from typing import Any
 
 from physical_agent.config import PhysicalAgentConfig
 from physical_agent.state.factory import open_state_store
+from physical_agent.state.safety_policy import SafetyPolicyError
 from physical_agent.state.sqlite import (
     ACTION_CLAIM_COLUMNS,
     MEMORY_CHUNK_COLUMNS,
@@ -28,6 +29,14 @@ def run_state_check(
     backend = (config.workspace.backend or "sqlite").strip().lower()
     workspace = open_state_store(config, base_dir=root)
     initialized = workspace.exists()
+    safety_policy_valid = False
+    safety_policy_error: str | None = None
+    try:
+        workspace.read_safety_snapshot()
+    except SafetyPolicyError as exc:
+        safety_policy_error = f"{exc.code}: {exc}"
+    else:
+        safety_policy_valid = True
     audit_dir = workspace.path / "audit"
     audit_parent = audit_dir if audit_dir.exists() else audit_dir.parent
     result: dict[str, Any] = {
@@ -35,6 +44,8 @@ def run_state_check(
         **_backend_guidance(backend, workspace),
         "workspace_path": str(workspace.path),
         "workspace_initialized": initialized,
+        "safety_policy_valid": safety_policy_valid,
+        "safety_policy_error": safety_policy_error,
         "retrieval_enabled": bool(config.memory.retrieval.enabled),
         "retrieval_max_chunks": config.memory.retrieval.max_chunks,
         "retrieval_max_chars_per_chunk": config.memory.retrieval.max_chars_per_chunk,
@@ -55,6 +66,8 @@ def run_state_check(
 
 def state_check_ok(result: dict[str, Any]) -> bool:
     if not result.get("workspace_initialized"):
+        return False
+    if result.get("safety_policy_valid") is not True:
         return False
     if not result.get("audit_export_writable"):
         return False

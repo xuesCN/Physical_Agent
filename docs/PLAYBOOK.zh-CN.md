@@ -38,6 +38,20 @@
 **坑**：trace 含 prompt 明文，留在 workspace 别提交；实验用 mock_arm 即可，别等仿真。Langfuse 已挂起（重启条件见 SPEC 挂起清单）——别在 F0 引入。
 **验收**：llm-trace 里能对出三条调用路径的完整记录；产出 `docs/f0-report.zh-CN.md`（失败模式分类 + 对 F1/F3/F4 的排序建议）。
 
+## F0.1 / 005 MOCE 多轮行为 eval
+
+**重启依据**：2026-08-24 用户明确要求先建立多轮 eval、执行 baseline 并评估结果，再决定是否优化 system prompt。既有 F0 只覆盖独立单轮 task；报告又把 `teleport_object` 静默替换成 `pick/place`、三个模糊请求直接动作都计为 completed，已经构成可复现的意图一致性评测缺口。
+
+**思路**：以 `ChatRuntime.respond()` 为真实被测入口，每场景独立 SQLite workspace、场景内共享 chat/context/state；直接写入冻结的 mock_arm simulation capability/world fixture，不进入 watch、driver loader/instance 或 execute 路径。固定中文口语多轮脚本覆盖澄清、改口、撤回、指代、能力缺失、越界纠正、口头批准与安全注入。通用 scorer 硬判 proposal-only、capability/schema、compiled Gate task 和 Action Board 零变化/零存量；场景 scorer 判允许/禁止动作、精确参数/因果依赖与 refusal/memory。真实 provider 只由显式脚本运行，pytest 使用 fake responder，不接网络。
+
+**关键文件**：`scripts/f0_multiturn_eval.py`、`tests/test_f0_multiturn_eval.py`、`docs/specs/005-multiturn-eval/`、baseline 报告；`agent/context_builder.py` 与 `agent/chat_runtime.py` 是被测对象，baseline 前不改。
+
+**坑**：不要让被测模型当唯一裁判；不要从 reply fence/文本反解析 action；不要把用户说“批准”当 Action Board approval；不要让真实 `.llm.json` 覆盖项目 `.env`；异常要按场景隔离；原始 trace/prompt/密钥只留 ignored workspace；看到 baseline 后不能反改 holdout 期望。system prompt 只能修行为指导缺口，不能遮盖 context/state/provider/grader 缺陷。
+
+**验收**：十个 dev/holdout/adversarial 多轮场景可复跑；hard check 任一失败显式判红；请求侧始终零 pending/completed/cancelled；真实 baseline 有脱敏逐轮结果和唯一主因归类；专项/full pytest 与 `git diff --check` 通过。本轮不改 prompt、不新增 runtime API、不执行 draft。
+
+**2026-08-25 结果**：真实 `stream` smoke 的动作轮次在本地结构校验报 `llm_output_invalid/invalid_json`，正确 fail-closed，不能算 prompt baseline；同 model/prompt/context 的 `nonstream` 20 轮诊断批次有效。原始自动 1/10 场景、5/20 轮不能当模型总分。独立审查加固 grader 后，离线复裁为 15 个瞬时 memory 持久化、1 个模糊请求擅自猜测、2 个 approval 线性因果链失败（每轮缺 2 条边）；旧 exact `[pick, place]` 的 2 个假红已移除。既有 192/192 通用结构/安全 checks 通过，但旧 dependency 只证明引用较早 action。当前 suite SHA=`c767ba5dbbf9070f1e647531d688b68704a83efdd28035a9e23878b4fbe564cd`；prompt 保持未改。下一轮先处理 stream parity 与 dependency 来源，再把澄清和 memory guidance 分层验证，不能只靠 prompt 承担持久化安全。
+
 ## B6 退役 markdown 后端（已完成，维护约束）
 
 **完成状态**：`MarkdownStateStore`、当前 migrator/reader 与 full Workspace protocol 均已退役；active backend 只支持 SQLite。`workspace.backend: markdown` 和"省略 backend 但存在完整 legacy Markdown workspace"都必须 fail closed，不能静默打开旧后端或叠加 `state.db`。
